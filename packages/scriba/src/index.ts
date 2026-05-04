@@ -1,5 +1,7 @@
 export { CLI_COMMANDS, createRootCommand } from './cli/command.ts'
 export * from './config/index.ts'
+export * from './local/index.ts'
+export * from './reports/index.ts'
 export * from './schema/index.ts'
 export { VERSION } from './version.ts'
 
