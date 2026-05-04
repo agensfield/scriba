@@ -3,7 +3,7 @@ import { CLI_COMMANDS, createRootCommand } from './command.ts'
 
 describe('CLI command surface', () => {
 	it('declares the alpha command groups', () => {
-		expect(CLI_COMMANDS.root).toEqual(['status', 'claude', 'codex', 'schema', 'cache'])
+		expect(CLI_COMMANDS.root).toEqual(['status', 'claude', 'codex', 'schema', 'cache', 'bench'])
 		expect(CLI_COMMANDS.claude).toEqual([
 			'summary',
 			'daily',
@@ -14,6 +14,7 @@ describe('CLI command surface', () => {
 		])
 		expect(CLI_COMMANDS.codex).toEqual(['summary', 'daily', 'monthly', 'sessions'])
 		expect(CLI_COMMANDS.cache).toEqual(['status', 'reset'])
+		expect(CLI_COMMANDS.bench).toEqual(['ccusage'])
 	})
 
 	it('creates the citty root command', () => {

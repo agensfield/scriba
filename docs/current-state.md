@@ -14,6 +14,10 @@ class of usage answers while staying resource-sane.
 
 ## Alpha Decisions
 
+- The repo is a Bun monorepo from day one.
+- Alpha code lives in `packages/scriba`; desktop/Tauri stays as a placeholder
+  consumer until the core stabilizes.
+- Library and CLI stay together until there is real package-boundary pain.
 - Source of truth remains external: Claude/Codex logs and provider APIs.
 - Scriba stores only read-only derived state.
 - Use a hybrid-lite cache: SQLite for scan/index/aggregate state, JSON
@@ -29,6 +33,18 @@ class of usage answers while staying resource-sane.
   later.
 
 ## Required Alpha Surfaces
+
+Implemented alpha foundation:
+
+- Bun workspace with Biome, TypeScript, Vitest, and Bun SQLite tests.
+- `@agensfield/scriba` package and `scriba` CLI.
+- Config discovery and schema metadata.
+- Claude/Codex local JSONL scanners.
+- Daily, weekly, monthly, session, and Claude block report builders.
+- SQLite derived cache plus JSON status snapshot writer.
+- Remote provider probes for Claude/Codex usage windows.
+- Telegram alert evaluator and sender.
+- Light `ccusage` benchmark harness.
 
 Local token/cost reports:
 
@@ -46,8 +62,11 @@ Remote/window metrics borrowed from OpenUsage references:
 
 ## Invariants
 
-- Bounded-memory cold scan.
-- Fast incremental refresh after first scan.
+- Bounded-memory cold scan. The scanner reads JSONL line-by-line; follow-up work
+  should move CLI report aggregation fully onto async iterators so raw events do
+  not need to stay resident for large histories.
+- Fast incremental refresh after first scan. SQLite cache primitives exist;
+  incremental file checkpoints still need implementation.
 - No `ccusage` subprocess dependency in the normal core path.
 - CLI output is agent-grade: JSON, predictable schema, source provenance,
   freshness, auth/cache/error state.
@@ -83,9 +102,8 @@ Remote/window metrics borrowed from OpenUsage references:
 
 ## Open Questions
 
-- Repo organization: single package first, Bun workspace, or monorepo from day
-  one?
-- Exact package split if monorepo: core, CLI, desktop, Telegram, adapters.
 - SQLite library choice and native packaging implications for Tauri.
-- Public command names and JSON schema versioning.
-- Light `ccusage` benchmark command set and measurement tooling.
+- Whether to split CLI/Telegram/desktop into separate packages before first npm
+  publish or keep the single package longer.
+- Public command names once table output exists.
+- Exact incremental checkpoint format for per-file resumable scans.

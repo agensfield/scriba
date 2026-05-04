@@ -1,4 +1,5 @@
 import { defineCommand } from 'citty'
+import { buildCcusageBenchmark } from '../bench/ccusage.ts'
 import { resetCache, ScribaCache } from '../cache/sqlite.ts'
 import { loadConfig } from '../config/loader.ts'
 import type { ScribaConfig } from '../config/schema.ts'
@@ -63,6 +64,25 @@ const reportArgs = {
 	},
 } as const
 
+const benchArgs = {
+	...globalArgs,
+	provider: {
+		type: 'string',
+		description: 'Provider to benchmark: all, claude, or codex.',
+		default: 'all',
+	},
+	execute: {
+		type: 'boolean',
+		description: 'Execute ccusage commands. Without this, only print the plan and dataset summary.',
+		default: false,
+	},
+	'timeout-ms': {
+		type: 'string',
+		description: 'Per-command timeout when --execute is enabled.',
+		default: '30000',
+	},
+} as const
+
 type CliArgs = {
 	config?: string | undefined
 	'cache-dir'?: string | undefined
@@ -104,6 +124,18 @@ function reportOptions(config: ScribaConfig) {
 	return config.timezone == null
 		? { order: 'desc' as const }
 		: { timezone: config.timezone, order: 'desc' as const }
+}
+
+function normalizeProvider(value: unknown): 'all' | 'claude' | 'codex' {
+	return value === 'claude' || value === 'codex' ? value : 'all'
+}
+
+function normalizeTimeoutMs(value: unknown): number {
+	if (typeof value !== 'string') {
+		return 30_000
+	}
+	const parsed = Number.parseInt(value, 10)
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000
 }
 
 async function loadCliConfig(args: CliArgs) {
@@ -316,6 +348,25 @@ const cacheSubCommands = {
 	}),
 }
 
+const benchSubCommands = {
+	ccusage: defineCommand({
+		meta: {
+			name: 'ccusage',
+			description: 'Build or run a bounded ccusage/openusage baseline benchmark.',
+		},
+		args: benchArgs,
+		async run({ args }) {
+			printJson(
+				await buildCcusageBenchmark({
+					provider: normalizeProvider(args.provider),
+					execute: args.execute === true,
+					timeoutMs: normalizeTimeoutMs(args['timeout-ms']),
+				}),
+			)
+		},
+	}),
+}
+
 export function createRootCommand() {
 	return defineCommand({
 		meta: {
@@ -384,6 +435,13 @@ export function createRootCommand() {
 				},
 				subCommands: cacheSubCommands,
 			}),
+			bench: defineCommand({
+				meta: {
+					name: 'bench',
+					description: 'Benchmark reference tools against local usage history.',
+				},
+				subCommands: benchSubCommands,
+			}),
 		},
 		run({ rawArgs }) {
 			if (rawArgs.length === 0) {
@@ -395,8 +453,9 @@ export function createRootCommand() {
 
 export const CLI_COMMANDS = {
 	packageName: SCRIBA_PACKAGE_NAME,
-	root: ['status', 'claude', 'codex', 'schema', 'cache'],
+	root: ['status', 'claude', 'codex', 'schema', 'cache', 'bench'],
 	claude: Object.keys(claudeSubCommands),
 	codex: Object.keys(codexSubCommands),
 	cache: Object.keys(cacheSubCommands),
+	bench: Object.keys(benchSubCommands),
 } as const

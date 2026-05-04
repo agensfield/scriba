@@ -1,3 +1,4 @@
+export * from './bench/index.ts'
 export * from './cache/index.ts'
 export { CLI_COMMANDS, createRootCommand } from './cli/command.ts'
 export * from './config/index.ts'
