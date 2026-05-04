@@ -21,7 +21,7 @@ This does not run `ccusage`. It reports:
 Current local safe-mode observation on 2026-05-05:
 
 - Claude: 1,665 JSONL files, 834,608,688 bytes.
-- Codex: 776 JSONL files, 4,711,324,647 bytes.
+- Codex: 776 JSONL files, 4,711,615,993 bytes.
 
 ## Executing the Baseline
 
