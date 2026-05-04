@@ -1,5 +1,6 @@
 import { defineCommand } from 'citty'
 import { SCRIBA_PACKAGE_NAME } from '../index.ts'
+import { buildJsonSchemaRegistry } from '../schema/json-schema.ts'
 import { VERSION } from '../version.ts'
 
 function notImplemented(command: string): never {
@@ -98,7 +99,9 @@ export function createRootCommand() {
 					name: 'schema',
 					description: 'Print Scriba JSON schema metadata.',
 				},
-				run: () => notImplemented('schema'),
+				run: () => {
+					console.log(JSON.stringify(buildJsonSchemaRegistry(), null, 2))
+				},
 			}),
 			cache: defineCommand({
 				meta: {
