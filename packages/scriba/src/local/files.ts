@@ -17,6 +17,11 @@ export async function fileSize(path: string): Promise<number> {
 	return (await stat(path)).size
 }
 
+export async function fileFingerprint(path: string): Promise<{ size: number; mtimeMs: number }> {
+	const result = await stat(path)
+	return { size: result.size, mtimeMs: result.mtimeMs }
+}
+
 export async function isDirectory(path: string): Promise<boolean> {
 	try {
 		return (await stat(path)).isDirectory()

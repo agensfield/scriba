@@ -3,7 +3,13 @@ import { basename, dirname, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import { fileSize, isDirectory, walkJsonlFiles } from './files.ts'
 import { readJsonlLines } from './jsonl.ts'
-import { emptyScannerStats, type LocalUsageEvent, type ScanResult } from './types.ts'
+import {
+	addScannerStats,
+	emptyScannerStats,
+	type LocalUsageEvent,
+	type ScannerStats,
+	type ScanResult,
+} from './types.ts'
 
 const recordSchema = z.record(z.string(), z.unknown())
 const codexEntrySchema = z.object({
@@ -114,80 +120,95 @@ export async function* iterateCodexEvents(
 		}
 
 		for await (const filePath of walkJsonlFiles(dir)) {
-			stats.files += 1
-			stats.bytes += await fileSize(filePath)
-			let previousTotals: RawUsage | null = null
-			let currentModel: string | undefined
-
-			for await (const { line } of readJsonlLines(filePath)) {
-				stats.lines += 1
-				if (!line.includes('token_count') && !line.includes('turn_context')) {
-					continue
-				}
-				let parsed: unknown
-				try {
-					parsed = JSON.parse(line)
-				} catch {
-					stats.invalidLines += 1
-					continue
-				}
-
-				const entry = codexEntrySchema.safeParse(parsed)
-				if (!entry.success) {
-					continue
-				}
-
-				if (entry.data.type === 'turn_context') {
-					currentModel = extractModel(entry.data.payload) ?? currentModel
-					continue
-				}
-
-				if (entry.data.type !== 'event_msg' || entry.data.timestamp == null) {
-					continue
-				}
-
-				const payload = recordSchema.safeParse(entry.data.payload)
-				if (!payload.success || payload.data.type !== 'token_count') {
-					continue
-				}
-				const info = recordSchema.safeParse(payload.data.info)
-				const infoRecord = info.success ? info.data : undefined
-				const lastUsage = rawUsage(infoRecord?.last_token_usage)
-				const totalUsage = rawUsage(infoRecord?.total_token_usage)
-				const usage =
-					lastUsage ?? (totalUsage == null ? null : subtractUsage(totalUsage, previousTotals))
-				if (totalUsage != null) {
-					previousTotals = totalUsage
-				}
-				if (usage == null || usage.totalTokens === 0) {
-					continue
-				}
-
-				const extractedModel = extractModel({ ...payload.data, info: infoRecord })
-				const model = extractedModel ?? currentModel ?? 'gpt-5'
-				currentModel = model
-				const relativePath = relative(dir, filePath).split(/[\\/]/).join('/')
-
-				yield {
-					providerId: 'codex',
-					sessionId: relativePath.replace(/\.jsonl$/i, ''),
-					timestamp: entry.data.timestamp,
-					model,
-					inputTokens: usage.inputTokens,
-					outputTokens: usage.outputTokens,
-					cacheCreationTokens: 0,
-					cacheReadTokens: usage.cachedInputTokens,
-					cachedInputTokens: usage.cachedInputTokens,
-					reasoningOutputTokens: usage.reasoningOutputTokens,
-					totalTokens: usage.totalTokens,
-					costUSD: null,
-					sourcePath: filePath,
-					directory: dirname(relativePath),
-					sessionFile: basename(relativePath),
-					isFallbackModel: extractedModel == null && currentModel == null,
-				}
-				stats.events += 1
+			const parsed = await parseCodexFile(dir, filePath)
+			addScannerStats(stats, parsed.stats)
+			for (const event of parsed.events) {
+				yield event
 			}
 		}
 	}
+}
+
+export async function parseCodexFile(
+	baseDir: string,
+	filePath: string,
+): Promise<{ events: LocalUsageEvent[]; stats: ScannerStats }> {
+	const stats = emptyScannerStats()
+	const events: LocalUsageEvent[] = []
+	stats.files += 1
+	stats.bytes += await fileSize(filePath)
+	let previousTotals: RawUsage | null = null
+	let currentModel: string | undefined
+
+	for await (const { line } of readJsonlLines(filePath)) {
+		stats.lines += 1
+		if (!line.includes('token_count') && !line.includes('turn_context')) {
+			continue
+		}
+		let parsed: unknown
+		try {
+			parsed = JSON.parse(line)
+		} catch {
+			stats.invalidLines += 1
+			continue
+		}
+
+		const entry = codexEntrySchema.safeParse(parsed)
+		if (!entry.success) {
+			continue
+		}
+
+		if (entry.data.type === 'turn_context') {
+			currentModel = extractModel(entry.data.payload) ?? currentModel
+			continue
+		}
+
+		if (entry.data.type !== 'event_msg' || entry.data.timestamp == null) {
+			continue
+		}
+
+		const payload = recordSchema.safeParse(entry.data.payload)
+		if (!payload.success || payload.data.type !== 'token_count') {
+			continue
+		}
+		const info = recordSchema.safeParse(payload.data.info)
+		const infoRecord = info.success ? info.data : undefined
+		const lastUsage = rawUsage(infoRecord?.last_token_usage)
+		const totalUsage = rawUsage(infoRecord?.total_token_usage)
+		const usage =
+			lastUsage ?? (totalUsage == null ? null : subtractUsage(totalUsage, previousTotals))
+		if (totalUsage != null) {
+			previousTotals = totalUsage
+		}
+		if (usage == null || usage.totalTokens === 0) {
+			continue
+		}
+
+		const extractedModel = extractModel({ ...payload.data, info: infoRecord })
+		const model = extractedModel ?? currentModel ?? 'gpt-5'
+		currentModel = model
+		const relativePath = relative(baseDir, filePath).split(/[\\/]/).join('/')
+
+		events.push({
+			providerId: 'codex',
+			sessionId: relativePath.replace(/\.jsonl$/i, ''),
+			timestamp: entry.data.timestamp,
+			model,
+			inputTokens: usage.inputTokens,
+			outputTokens: usage.outputTokens,
+			cacheCreationTokens: 0,
+			cacheReadTokens: usage.cachedInputTokens,
+			cachedInputTokens: usage.cachedInputTokens,
+			reasoningOutputTokens: usage.reasoningOutputTokens,
+			totalTokens: usage.totalTokens,
+			costUSD: null,
+			sourcePath: filePath,
+			directory: dirname(relativePath),
+			sessionFile: basename(relativePath),
+			isFallbackModel: extractedModel == null && currentModel == null,
+		})
+		stats.events += 1
+	}
+
+	return { events, stats }
 }

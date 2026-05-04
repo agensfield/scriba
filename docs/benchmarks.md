@@ -25,7 +25,10 @@ Current local safe-mode observation on 2026-05-05:
 
 Current Codex baseline on the same local history:
 
-- `bun run scriba codex daily --json`: 8.77s real, 614,727,680 bytes max RSS.
+- `bun run scriba codex daily --json` cold after `scriba cache reset`: 6.98s
+  real, 626,802,688 bytes max RSS.
+- `bun run scriba codex daily --json` warm with file-event cache: 0.24s real,
+  156,205,056 bytes max RSS.
 - `bunx -p @ccusage/codex@18.0.11 ccusage-codex daily --json`: 24.73s real,
   6,893,535,232 bytes max RSS.
 - `scriba bench ccusage --provider codex --execute --timeout-ms 30000`: daily

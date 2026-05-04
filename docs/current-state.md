@@ -43,6 +43,8 @@ Implemented alpha foundation:
 - Daily, weekly, monthly, session, and Claude block report builders.
 - Human-friendly CLI output by default, with `--json` for agents.
 - SQLite derived cache plus JSON status snapshot writer.
+- Codex file-event cache keyed by source path, size, and mtime for fast warm
+  report refreshes.
 - Remote provider probes for Claude/Codex usage windows.
 - Telegram alert evaluator and sender.
 - Light `ccusage` benchmark harness.
@@ -67,7 +69,8 @@ Remote/window metrics borrowed from OpenUsage references:
   report/status paths aggregate from async iterators. Claude blocks still sorts
   raw events because the block algorithm is chronological.
 - Fast incremental refresh after first scan. SQLite cache primitives exist;
-  incremental file checkpoints still need implementation.
+  Codex report paths now reuse cached parsed file events for unchanged files.
+  Claude report paths still need the same treatment.
 - No `ccusage` subprocess dependency in the normal core path.
 - CLI output is agent-grade: JSON, predictable schema, source provenance,
   freshness, auth/cache/error state.
@@ -88,8 +91,10 @@ Remote/window metrics borrowed from OpenUsage references:
 
 Current benchmark evidence:
 
-- Scriba `codex daily --json`: 8.77s real, 614,727,680 bytes max RSS on the
-  local 4.7 GB Codex history.
+- Scriba `codex daily --json` cold after `scriba cache reset`: 6.98s real,
+  626,802,688 bytes max RSS on the local 4.7 GB Codex history.
+- Scriba `codex daily --json` warm with file-event cache: 0.24s real,
+  156,205,056 bytes max RSS.
 - `ccusage-codex daily --json` via `bunx -p @ccusage/codex@18.0.11`: 24.73s
   real, 6,893,535,232 bytes max RSS on the same history.
 
@@ -114,4 +119,5 @@ Current benchmark evidence:
 - Whether to split CLI/Telegram/desktop into separate packages before first npm
   publish or keep the single package longer.
 - Public command names once table output settles.
-- Exact incremental checkpoint format for per-file resumable scans.
+- Port file-event cache to Claude report paths if Claude histories become a
+  bottleneck.

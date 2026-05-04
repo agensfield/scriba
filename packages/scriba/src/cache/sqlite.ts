@@ -16,6 +16,19 @@ export type CacheStatus = {
 		updatedAt: string
 		stats: ScannerStats
 	}>
+	fileEvents: Array<{
+		providerId: ProviderId
+		files: number
+		updatedAt: string
+	}>
+}
+
+export type CachedFileEvents<T> = {
+	path: string
+	size: number
+	mtimeMs: number
+	stats: ScannerStats
+	events: T[]
 }
 
 export type ScribaCacheOptions = {
@@ -42,6 +55,16 @@ export class ScribaCache {
 				provider_id text primary key,
 				json text not null,
 				updated_at text not null
+			);
+			create table if not exists file_events (
+				provider_id text not null,
+				path text not null,
+				size integer not null,
+				mtime_ms real not null,
+				events_json text not null,
+				stats_json text not null,
+				updated_at text not null,
+				primary key (provider_id, path)
 			);
 		`)
 	}
@@ -79,6 +102,53 @@ export class ScribaCache {
 			.run(providerId, JSON.stringify(stats), updatedAt)
 	}
 
+	loadFileEvents<T>(
+		providerId: ProviderId,
+		path: string,
+		fingerprint: { size: number; mtimeMs: number },
+	): CachedFileEvents<T> | null {
+		const row = this.db
+			.query(
+				'select size, mtime_ms as mtimeMs, events_json as eventsJson, stats_json as statsJson from file_events where provider_id = ? and path = ?',
+			)
+			.get(providerId, path) as
+			| { size: number; mtimeMs: number; eventsJson: string; statsJson: string }
+			| undefined
+		if (row == null || row.size !== fingerprint.size || row.mtimeMs !== fingerprint.mtimeMs) {
+			return null
+		}
+		return {
+			path,
+			size: row.size,
+			mtimeMs: row.mtimeMs,
+			stats: JSON.parse(row.statsJson) as ScannerStats,
+			events: JSON.parse(row.eventsJson) as T[],
+		}
+	}
+
+	saveFileEvents<T>(
+		providerId: ProviderId,
+		path: string,
+		fingerprint: { size: number; mtimeMs: number },
+		events: T[],
+		stats: ScannerStats,
+		updatedAt = new Date().toISOString(),
+	): void {
+		this.db
+			.query(
+				'insert or replace into file_events (provider_id, path, size, mtime_ms, events_json, stats_json, updated_at) values (?, ?, ?, ?, ?, ?, ?)',
+			)
+			.run(
+				providerId,
+				path,
+				fingerprint.size,
+				fingerprint.mtimeMs,
+				JSON.stringify(events),
+				JSON.stringify(stats),
+				updatedAt,
+			)
+	}
+
 	status(): CacheStatus {
 		const snapshots = this.db
 			.query('select name, updated_at as updatedAt from snapshots order by name')
@@ -88,6 +158,11 @@ export class ScribaCache {
 				'select provider_id as providerId, json, updated_at as updatedAt from scan_stats order by provider_id',
 			)
 			.all() as Array<{ providerId: ProviderId; json: string; updatedAt: string }>
+		const fileEvents = this.db
+			.query(
+				'select provider_id as providerId, count(*) as files, max(updated_at) as updatedAt from file_events group by provider_id order by provider_id',
+			)
+			.all() as CacheStatus['fileEvents']
 		return {
 			cacheDir: this.cacheDir,
 			databasePath: this.databasePath,
@@ -97,6 +172,7 @@ export class ScribaCache {
 				updatedAt: row.updatedAt,
 				stats: JSON.parse(row.json) as ScannerStats,
 			})),
+			fileEvents,
 		}
 	}
 

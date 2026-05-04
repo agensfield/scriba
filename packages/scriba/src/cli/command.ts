@@ -4,6 +4,7 @@ import { resetCache, ScribaCache } from '../cache/sqlite.ts'
 import { loadConfig } from '../config/loader.ts'
 import type { ScribaConfig } from '../config/schema.ts'
 import { SCRIBA_PACKAGE_NAME } from '../constants.ts'
+import { iterateCachedCodexEvents } from '../local/cached.ts'
 import { iterateClaudeEvents, scanClaudeLogs } from '../local/claude.ts'
 import { iterateCodexEvents } from '../local/codex.ts'
 import { emptyScannerStats, type LocalUsageEvent, type ScanResult } from '../local/types.ts'
@@ -205,13 +206,36 @@ async function loadClaudeStream(args: CliArgs) {
 async function loadCodexStream(args: CliArgs) {
 	const loaded = await loadCliConfig(args)
 	const stats = emptyScannerStats()
-	const events = loaded.config.providers.codex.enabled
-		? filterAsyncEvents(
+	if (!loaded.config.providers.codex.enabled) {
+		return { config: loaded.config, stats, events: emptyEvents(), close: () => {} }
+	}
+	if (args['no-cache'] === true) {
+		return {
+			config: loaded.config,
+			stats,
+			events: filterAsyncEvents(
 				iterateCodexEvents({ paths: explicitPaths(loaded.config.providers.codex.paths), stats }),
 				args,
-			)
-		: emptyEvents()
-	return { config: loaded.config, stats, events }
+			),
+			close: () => {},
+		}
+	}
+	const cache = await ScribaCache.open({
+		cacheDir: typeof args['cache-dir'] === 'string' ? args['cache-dir'] : loaded.config.cacheDir,
+	})
+	return {
+		config: loaded.config,
+		stats,
+		events: filterAsyncEvents(
+			iterateCachedCodexEvents({
+				cache,
+				paths: explicitPaths(loaded.config.providers.codex.paths),
+				stats,
+			}),
+			args,
+		),
+		close: () => cache.close(),
+	}
 }
 
 async function* emptyEvents(): AsyncGenerator<LocalUsageEvent> {
@@ -297,43 +321,59 @@ async function runClaudeBlocks(args: CliArgs) {
 }
 
 async function runCodexDaily(args: CliArgs) {
-	const { config, stats, events } = await loadCodexStream(args)
-	const payload = {
-		providerId: 'codex',
-		stats,
-		rows: await buildDailyReportFromAsync(events, reportOptions(config)),
+	const loaded = await loadCodexStream(args)
+	try {
+		const payload = {
+			providerId: 'codex',
+			stats: loaded.stats,
+			rows: await buildDailyReportFromAsync(loaded.events, reportOptions(loaded.config)),
+		}
+		printOutput(args, payload, () => renderReport('Codex Daily', payload))
+	} finally {
+		loaded.close()
 	}
-	printOutput(args, payload, () => renderReport('Codex Daily', payload))
 }
 
 async function runCodexWeekly(args: CliArgs) {
-	const { config, stats, events } = await loadCodexStream(args)
-	const payload = {
-		providerId: 'codex',
-		stats,
-		rows: await buildWeeklyReportFromAsync(events, reportOptions(config)),
+	const loaded = await loadCodexStream(args)
+	try {
+		const payload = {
+			providerId: 'codex',
+			stats: loaded.stats,
+			rows: await buildWeeklyReportFromAsync(loaded.events, reportOptions(loaded.config)),
+		}
+		printOutput(args, payload, () => renderReport('Codex Weekly', payload))
+	} finally {
+		loaded.close()
 	}
-	printOutput(args, payload, () => renderReport('Codex Weekly', payload))
 }
 
 async function runCodexMonthly(args: CliArgs) {
-	const { config, stats, events } = await loadCodexStream(args)
-	const payload = {
-		providerId: 'codex',
-		stats,
-		rows: await buildMonthlyReportFromAsync(events, reportOptions(config)),
+	const loaded = await loadCodexStream(args)
+	try {
+		const payload = {
+			providerId: 'codex',
+			stats: loaded.stats,
+			rows: await buildMonthlyReportFromAsync(loaded.events, reportOptions(loaded.config)),
+		}
+		printOutput(args, payload, () => renderReport('Codex Monthly', payload))
+	} finally {
+		loaded.close()
 	}
-	printOutput(args, payload, () => renderReport('Codex Monthly', payload))
 }
 
 async function runCodexSessions(args: CliArgs) {
-	const { config, stats, events } = await loadCodexStream(args)
-	const payload = {
-		providerId: 'codex',
-		stats,
-		rows: await buildSessionReportFromAsync(events, reportOptions(config)),
+	const loaded = await loadCodexStream(args)
+	try {
+		const payload = {
+			providerId: 'codex',
+			stats: loaded.stats,
+			rows: await buildSessionReportFromAsync(loaded.events, reportOptions(loaded.config)),
+		}
+		printOutput(args, payload, () => renderReport('Codex Sessions', payload))
+	} finally {
+		loaded.close()
 	}
-	printOutput(args, payload, () => renderReport('Codex Sessions', payload))
 }
 
 const claudeSubCommands = {

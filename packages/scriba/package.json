@@ -17,7 +17,7 @@
 	"scripts": {
 		"lint": "biome check .",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
-		"test": "vitest run --exclude 'src/cache/*.bun.test.ts' && bun test src/cache/*.bun.test.ts",
+		"test": "vitest run --exclude 'src/**/*.bun.test.ts' && bun test ./src/cache/sqlite.bun.test.ts ./src/local/cached.bun.test.ts",
 		"gate": "bun run lint && bun run typecheck && bun run test"
 	},
 	"dependencies": {

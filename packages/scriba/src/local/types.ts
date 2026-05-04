@@ -52,6 +52,16 @@ export function emptyScannerStats(): ScannerStats {
 	}
 }
 
+export function addScannerStats(target: ScannerStats, source: ScannerStats): void {
+	target.files += source.files
+	target.bytes += source.bytes
+	target.lines += source.lines
+	target.events += source.events
+	target.invalidLines += source.invalidLines
+	target.duplicates += source.duplicates
+	target.missingDirectories.push(...source.missingDirectories)
+}
+
 export function addTokenUsage(target: TokenUsage, event: TokenUsage): void {
 	target.inputTokens += event.inputTokens
 	target.outputTokens += event.outputTokens

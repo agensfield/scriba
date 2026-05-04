@@ -26,9 +26,32 @@ describe('ScribaCache', () => {
 			},
 			snapshot.generatedAt,
 		)
+		cache.saveFileEvents(
+			'codex',
+			'/tmp/session.jsonl',
+			{ size: 10, mtimeMs: 20 },
+			[{ id: 'event-1' }],
+			{
+				files: 1,
+				bytes: 10,
+				lines: 2,
+				events: 1,
+				invalidLines: 0,
+				duplicates: 0,
+				missingDirectories: [],
+			},
+			snapshot.generatedAt,
+		)
 
 		expect(cache.loadSnapshot<StatusSnapshot>('status')?.schemaVersion).toBe(SCHEMA_VERSION)
 		expect(cache.status().scanStats[0]?.stats.events).toBe(4)
+		expect(
+			cache.loadFileEvents<{ id: string }>('codex', '/tmp/session.jsonl', {
+				size: 10,
+				mtimeMs: 20,
+			})?.events[0]?.id,
+		).toBe('event-1')
+		expect(cache.status().fileEvents[0]?.files).toBe(1)
 		cache.close()
 		await resetCache({ cacheDir })
 	})
