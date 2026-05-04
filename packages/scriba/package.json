@@ -1,0 +1,31 @@
+{
+	"name": "@agensfield/scriba",
+	"version": "0.0.0-alpha.0",
+	"description": "Fast local usage tracking for Claude Code and Codex.",
+	"type": "module",
+	"bin": {
+		"scriba": "./src/cli.ts"
+	},
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"files": [
+		"src",
+		"docs",
+		"README.md"
+	],
+	"scripts": {
+		"lint": "biome check .",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run",
+		"gate": "bun run lint && bun run typecheck && bun run test"
+	},
+	"dependencies": {
+		"ansis": "^4.2.0",
+		"citty": "^0.2.2",
+		"zod": "^4.2.1"
+	},
+	"engines": {
+		"bun": ">=1.2.0"
+	}
+}

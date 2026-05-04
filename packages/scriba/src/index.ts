@@ -1,0 +1,55 @@
+export { CLI_COMMANDS, createRootCommand } from './cli/command.ts'
+export { VERSION } from './version.ts'
+
+export const SCRIBA_PACKAGE_NAME = '@agensfield/scriba'
+
+export type ProviderId = 'claude' | 'codex' | (string & {})
+
+export type SourceKind = 'local-log' | 'provider-api' | 'cache'
+
+export type SourceProvenance = {
+	kind: SourceKind
+	providerId: ProviderId
+	fetchedAt?: string
+	cacheAgeMs?: number
+	stale?: boolean
+	error?: string
+}
+
+export type MetricFormat =
+	| { kind: 'percent' }
+	| { kind: 'dollars' }
+	| { kind: 'count'; suffix: string }
+
+export type MetricLine =
+	| { type: 'text'; label: string; value: string; provenance?: SourceProvenance[] }
+	| {
+			type: 'progress'
+			label: string
+			used: number
+			limit: number
+			format: MetricFormat
+			resetsAt?: string
+			periodDurationMs?: number
+			provenance?: SourceProvenance[]
+	  }
+	| { type: 'badge'; label: string; text: string; provenance?: SourceProvenance[] }
+
+export type ProviderSnapshot = {
+	providerId: ProviderId
+	displayName: string
+	plan?: string
+	lines: MetricLine[]
+	provenance: SourceProvenance[]
+}
+
+export type StatusSnapshot = {
+	generatedAt: string
+	providers: ProviderSnapshot[]
+}
+
+export type ProviderAdapter = {
+	id: ProviderId
+	displayName: string
+	buildStatusSnapshot(): Promise<ProviderSnapshot>
+}

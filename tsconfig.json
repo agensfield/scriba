@@ -1,0 +1,14 @@
+{
+	"compilerOptions": {
+		"allowImportingTsExtensions": true,
+		"exactOptionalPropertyTypes": true,
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"noUncheckedIndexedAccess": true,
+		"noEmit": true,
+		"strict": true,
+		"target": "ES2023",
+		"types": ["bun"]
+	},
+	"include": ["packages/**/*.ts", "apps/**/*.ts"]
+}
