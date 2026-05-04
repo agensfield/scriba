@@ -28,6 +28,7 @@ const claudeUsageSchema = z.object({
 export type ClaudeScanOptions = {
 	paths?: string[] | undefined
 	env?: Record<string, string | undefined> | undefined
+	stats?: ReturnType<typeof emptyScannerStats> | undefined
 }
 
 export function defaultClaudeProjectDirs(env: Record<string, string | undefined> = process.env) {
@@ -57,8 +58,18 @@ function sessionFromPath(projectsDir: string, filePath: string): string {
 }
 
 export async function scanClaudeLogs(options: ClaudeScanOptions = {}): Promise<ScanResult> {
-	const stats = emptyScannerStats()
 	const events: LocalUsageEvent[] = []
+	const stats = options.stats ?? emptyScannerStats()
+	for await (const event of iterateClaudeEvents({ ...options, stats })) {
+		events.push(event)
+	}
+	return { events, stats }
+}
+
+export async function* iterateClaudeEvents(
+	options: ClaudeScanOptions = {},
+): AsyncGenerator<LocalUsageEvent> {
+	const stats = options.stats ?? emptyScannerStats()
 	const seen = new Set<string>()
 	const dirs = options.paths?.map((path) => resolve(path)) ?? defaultClaudeProjectDirs(options.env)
 
@@ -105,7 +116,7 @@ export async function scanClaudeLogs(options: ClaudeScanOptions = {}): Promise<S
 				const cacheCreationTokens = usage.cache_creation_input_tokens
 				const cacheReadTokens = usage.cache_read_input_tokens
 
-				events.push({
+				yield {
 					providerId: 'claude',
 					sessionId: data.sessionId ?? sessionFromPath(dir, filePath),
 					timestamp: data.timestamp,
@@ -122,11 +133,9 @@ export async function scanClaudeLogs(options: ClaudeScanOptions = {}): Promise<S
 					costUSD: data.costUSD ?? null,
 					uniqueKey,
 					sourcePath: filePath,
-				})
+				}
 				stats.events += 1
 			}
 		}
 	}
-
-	return { events, stats }
 }

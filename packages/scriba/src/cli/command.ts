@@ -4,16 +4,16 @@ import { resetCache, ScribaCache } from '../cache/sqlite.ts'
 import { loadConfig } from '../config/loader.ts'
 import type { ScribaConfig } from '../config/schema.ts'
 import { SCRIBA_PACKAGE_NAME } from '../constants.ts'
-import { scanClaudeLogs } from '../local/claude.ts'
-import { scanCodexLogs } from '../local/codex.ts'
+import { iterateClaudeEvents, scanClaudeLogs } from '../local/claude.ts'
+import { iterateCodexEvents } from '../local/codex.ts'
 import { emptyScannerStats, type LocalUsageEvent, type ScanResult } from '../local/types.ts'
 import { buildClaudeBlocks } from '../reports/blocks.ts'
 import {
-	buildDailyReport,
-	buildMonthlyReport,
-	buildSessionReport,
-	buildWeeklyReport,
-} from '../reports/local.ts'
+	buildDailyReportFromAsync,
+	buildMonthlyReportFromAsync,
+	buildSessionReportFromAsync,
+	buildWeeklyReportFromAsync,
+} from '../reports/stream.ts'
 import { buildJsonSchemaRegistry } from '../schema/json-schema.ts'
 import { buildStatusSnapshot } from '../status/build.ts'
 import { evaluateTelegramAlerts } from '../telegram/alerts.ts'
@@ -131,6 +131,23 @@ function filterEvents(events: LocalUsageEvent[], args: CliArgs): LocalUsageEvent
 	})
 }
 
+async function* filterAsyncEvents(
+	events: AsyncIterable<LocalUsageEvent>,
+	args: CliArgs,
+): AsyncGenerator<LocalUsageEvent> {
+	const since = normalizeDateBoundary(args.since)
+	const until = normalizeDateBoundary(args.until, true)
+	for await (const event of events) {
+		if (since != null && event.timestamp < since) {
+			continue
+		}
+		if (until != null && event.timestamp > until) {
+			continue
+		}
+		yield event
+	}
+}
+
 function reportOptions(config: ScribaConfig) {
 	return config.timezone == null
 		? { order: 'desc' as const }
@@ -163,12 +180,32 @@ async function loadClaude(args: CliArgs): Promise<{ config: ScribaConfig; scan: 
 	return { config: loaded.config, scan }
 }
 
-async function loadCodex(args: CliArgs): Promise<{ config: ScribaConfig; scan: ScanResult }> {
+async function loadClaudeStream(args: CliArgs) {
 	const loaded = await loadCliConfig(args)
-	const scan = loaded.config.providers.codex.enabled
-		? await scanCodexLogs({ paths: explicitPaths(loaded.config.providers.codex.paths) })
-		: { events: [], stats: emptyScannerStats() }
-	return { config: loaded.config, scan }
+	const stats = emptyScannerStats()
+	const events = loaded.config.providers.claude.enabled
+		? filterAsyncEvents(
+				iterateClaudeEvents({ paths: explicitPaths(loaded.config.providers.claude.paths), stats }),
+				args,
+			)
+		: emptyEvents()
+	return { config: loaded.config, stats, events }
+}
+
+async function loadCodexStream(args: CliArgs) {
+	const loaded = await loadCliConfig(args)
+	const stats = emptyScannerStats()
+	const events = loaded.config.providers.codex.enabled
+		? filterAsyncEvents(
+				iterateCodexEvents({ paths: explicitPaths(loaded.config.providers.codex.paths), stats }),
+				args,
+			)
+		: emptyEvents()
+	return { config: loaded.config, stats, events }
+}
+
+async function* emptyEvents(): AsyncGenerator<LocalUsageEvent> {
+	// Typed empty async iterable for disabled providers.
 }
 
 async function runClaudeSummary(args: CliArgs) {
@@ -200,38 +237,38 @@ async function runCodexSummary(args: CliArgs) {
 }
 
 async function runClaudeDaily(args: CliArgs) {
-	const { config, scan } = await loadClaude(args)
+	const { config, stats, events } = await loadClaudeStream(args)
 	printJson({
 		providerId: 'claude',
-		stats: scan.stats,
-		rows: buildDailyReport(filterEvents(scan.events, args), reportOptions(config)),
+		stats,
+		rows: await buildDailyReportFromAsync(events, reportOptions(config)),
 	})
 }
 
 async function runClaudeWeekly(args: CliArgs) {
-	const { config, scan } = await loadClaude(args)
+	const { config, stats, events } = await loadClaudeStream(args)
 	printJson({
 		providerId: 'claude',
-		stats: scan.stats,
-		rows: buildWeeklyReport(filterEvents(scan.events, args), reportOptions(config)),
+		stats,
+		rows: await buildWeeklyReportFromAsync(events, reportOptions(config)),
 	})
 }
 
 async function runClaudeMonthly(args: CliArgs) {
-	const { config, scan } = await loadClaude(args)
+	const { config, stats, events } = await loadClaudeStream(args)
 	printJson({
 		providerId: 'claude',
-		stats: scan.stats,
-		rows: buildMonthlyReport(filterEvents(scan.events, args), reportOptions(config)),
+		stats,
+		rows: await buildMonthlyReportFromAsync(events, reportOptions(config)),
 	})
 }
 
 async function runClaudeSessions(args: CliArgs) {
-	const { config, scan } = await loadClaude(args)
+	const { config, stats, events } = await loadClaudeStream(args)
 	printJson({
 		providerId: 'claude',
-		stats: scan.stats,
-		rows: buildSessionReport(filterEvents(scan.events, args), reportOptions(config)),
+		stats,
+		rows: await buildSessionReportFromAsync(events, reportOptions(config)),
 	})
 }
 
@@ -245,29 +282,29 @@ async function runClaudeBlocks(args: CliArgs) {
 }
 
 async function runCodexDaily(args: CliArgs) {
-	const { config, scan } = await loadCodex(args)
+	const { config, stats, events } = await loadCodexStream(args)
 	printJson({
 		providerId: 'codex',
-		stats: scan.stats,
-		rows: buildDailyReport(filterEvents(scan.events, args), reportOptions(config)),
+		stats,
+		rows: await buildDailyReportFromAsync(events, reportOptions(config)),
 	})
 }
 
 async function runCodexMonthly(args: CliArgs) {
-	const { config, scan } = await loadCodex(args)
+	const { config, stats, events } = await loadCodexStream(args)
 	printJson({
 		providerId: 'codex',
-		stats: scan.stats,
-		rows: buildMonthlyReport(filterEvents(scan.events, args), reportOptions(config)),
+		stats,
+		rows: await buildMonthlyReportFromAsync(events, reportOptions(config)),
 	})
 }
 
 async function runCodexSessions(args: CliArgs) {
-	const { config, scan } = await loadCodex(args)
+	const { config, stats, events } = await loadCodexStream(args)
 	printJson({
 		providerId: 'codex',
-		stats: scan.stats,
-		rows: buildSessionReport(filterEvents(scan.events, args), reportOptions(config)),
+		stats,
+		rows: await buildSessionReportFromAsync(events, reportOptions(config)),
 	})
 }
 

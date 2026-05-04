@@ -23,6 +23,7 @@ type RawUsage = {
 export type CodexScanOptions = {
 	paths?: string[] | undefined
 	env?: Record<string, string | undefined> | undefined
+	stats?: ReturnType<typeof emptyScannerStats> | undefined
 }
 
 export function defaultCodexSessionDirs(env: Record<string, string | undefined> = process.env) {
@@ -92,8 +93,18 @@ function extractModel(value: unknown): string | undefined {
 }
 
 export async function scanCodexLogs(options: CodexScanOptions = {}): Promise<ScanResult> {
-	const stats = emptyScannerStats()
 	const events: LocalUsageEvent[] = []
+	const stats = options.stats ?? emptyScannerStats()
+	for await (const event of iterateCodexEvents({ ...options, stats })) {
+		events.push(event)
+	}
+	return { events, stats }
+}
+
+export async function* iterateCodexEvents(
+	options: CodexScanOptions = {},
+): AsyncGenerator<LocalUsageEvent> {
+	const stats = options.stats ?? emptyScannerStats()
 	const dirs = options.paths?.map((path) => resolve(path)) ?? defaultCodexSessionDirs(options.env)
 
 	for (const dir of dirs) {
@@ -154,7 +165,7 @@ export async function scanCodexLogs(options: CodexScanOptions = {}): Promise<Sca
 				currentModel = model
 				const relativePath = relative(dir, filePath).split(/[\\/]/).join('/')
 
-				events.push({
+				yield {
 					providerId: 'codex',
 					sessionId: relativePath.replace(/\.jsonl$/i, ''),
 					timestamp: entry.data.timestamp,
@@ -171,11 +182,9 @@ export async function scanCodexLogs(options: CodexScanOptions = {}): Promise<Sca
 					directory: dirname(relativePath),
 					sessionFile: basename(relativePath),
 					isFallbackModel: extractedModel == null && currentModel == null,
-				})
+				}
 				stats.events += 1
 			}
 		}
 	}
-
-	return { events, stats }
 }
