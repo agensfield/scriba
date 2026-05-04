@@ -1,7 +1,7 @@
 # Scriba CLI
 
-The CLI is the alpha contract for both humans and agents. It emits predictable
-JSON today; terminal tables can come later without replacing the JSON surface.
+The CLI is the alpha contract for both humans and agents. Human-friendly output
+is the default; pass `--json` for the machine-readable agent contract.
 
 ## Root
 
@@ -36,8 +36,10 @@ timestamps or `YYYY-MM-DD` dates.
 ```sh
 bun run scriba codex summary
 bun run scriba codex daily
+bun run scriba codex weekly
 bun run scriba codex monthly
 bun run scriba codex sessions
+bun run scriba codex session
 ```
 
 Codex local scanning reads `${CODEX_HOME:-~/.codex}/sessions/**/*.jsonl`.

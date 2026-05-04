@@ -41,6 +41,7 @@ Implemented alpha foundation:
 - Config discovery and schema metadata.
 - Claude/Codex local JSONL scanners.
 - Daily, weekly, monthly, session, and Claude block report builders.
+- Human-friendly CLI output by default, with `--json` for agents.
 - SQLite derived cache plus JSON status snapshot writer.
 - Remote provider probes for Claude/Codex usage windows.
 - Telegram alert evaluator and sender.
@@ -50,7 +51,7 @@ Local token/cost reports:
 
 - Claude: daily, weekly, monthly, sessions, blocks, compact statusline-style
   view.
-- Codex: daily, monthly, sessions.
+- Codex: daily, weekly, monthly, sessions.
 - Common rollups: today, yesterday, last 30 days, models, cache tokens, costs,
   sessions/projects where available.
 
@@ -62,9 +63,9 @@ Remote/window metrics borrowed from OpenUsage references:
 
 ## Invariants
 
-- Bounded-memory cold scan. The scanner reads JSONL line-by-line; follow-up work
-  should move CLI report aggregation fully onto async iterators so raw events do
-  not need to stay resident for large histories.
+- Bounded-memory cold scan. The scanner reads JSONL line-by-line and the main
+  report/status paths aggregate from async iterators. Claude blocks still sorts
+  raw events because the block algorithm is chronological.
 - Fast incremental refresh after first scan. SQLite cache primitives exist;
   incremental file checkpoints still need implementation.
 - No `ccusage` subprocess dependency in the normal core path.
@@ -84,6 +85,13 @@ Remote/window metrics borrowed from OpenUsage references:
 - Codex loader reads each JSONL file fully, splits into lines, accumulates all
   events, then sorts.
 - Codex local reports are daily, monthly, and sessions.
+
+Current benchmark evidence:
+
+- Scriba `codex daily --json`: 8.77s real, 614,727,680 bytes max RSS on the
+  local 4.7 GB Codex history.
+- `ccusage-codex daily --json` via `bunx -p @ccusage/codex@18.0.11`: 24.73s
+  real, 6,893,535,232 bytes max RSS on the same history.
 
 `openusage`:
 
@@ -105,5 +113,5 @@ Remote/window metrics borrowed from OpenUsage references:
 - SQLite library choice and native packaging implications for Tauri.
 - Whether to split CLI/Telegram/desktop into separate packages before first npm
   publish or keep the single package longer.
-- Public command names once table output exists.
+- Public command names once table output settles.
 - Exact incremental checkpoint format for per-file resumable scans.

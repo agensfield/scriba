@@ -23,10 +23,14 @@ bun install
 bun run gate
 bun run scriba status
 bun run scriba claude daily
+bun run scriba claude daily --json
+bun run scriba codex weekly
 bun run scriba codex sessions
 bun run scriba telegram alerts
 bun run scriba bench ccusage --provider codex
 ```
+
+Human output is the default. Use `--json` for agents and automation.
 
 `scriba bench ccusage` is non-executing by default. Pass `--execute` only when
 you intentionally want to run the bounded reference baseline.

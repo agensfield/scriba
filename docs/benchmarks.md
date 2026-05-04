@@ -23,6 +23,15 @@ Current local safe-mode observation on 2026-05-05:
 - Claude: 1,665 JSONL files, 834,608,688 bytes.
 - Codex: 776 JSONL files, 4,711,615,993 bytes.
 
+Current Codex baseline on the same local history:
+
+- `bun run scriba codex daily --json`: 8.77s real, 614,727,680 bytes max RSS.
+- `bunx -p @ccusage/codex@18.0.11 ccusage-codex daily --json`: 24.73s real,
+  6,893,535,232 bytes max RSS.
+- `scriba bench ccusage --provider codex --execute --timeout-ms 30000`: daily
+  completed in 19,822ms, monthly timed out at 30,151ms, session completed in
+  19,232ms.
+
 ## Executing the Baseline
 
 ```sh

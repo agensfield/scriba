@@ -19,6 +19,7 @@ import { buildStatusSnapshot } from '../status/build.ts'
 import { evaluateTelegramAlerts } from '../telegram/alerts.ts'
 import { sendTelegramAlerts } from '../telegram/send.ts'
 import { VERSION } from '../version.ts'
+import { renderBenchmark, renderReport, renderStatus, renderTelegram } from './render.ts'
 
 function notImplemented(command: string): never {
 	throw new Error(`${command} is not implemented yet`)
@@ -26,6 +27,14 @@ function notImplemented(command: string): never {
 
 function printJson(value: unknown) {
 	console.log(JSON.stringify(value, null, 2))
+}
+
+function printOutput(args: CliArgs, value: unknown, human: () => string) {
+	if (args.json === true) {
+		printJson(value)
+		return
+	}
+	console.log(human())
 }
 
 const globalArgs = {
@@ -95,6 +104,7 @@ const telegramArgs = {
 } as const
 
 type CliArgs = {
+	json?: boolean | undefined
 	config?: string | undefined
 	'cache-dir'?: string | undefined
 	'no-cache'?: boolean | undefined
@@ -219,7 +229,7 @@ async function runClaudeSummary(args: CliArgs) {
 			},
 		},
 	})
-	printJson(built.snapshot)
+	printOutput(args, built.snapshot, () => renderStatus(built.snapshot))
 }
 
 async function runCodexSummary(args: CliArgs) {
@@ -233,79 +243,97 @@ async function runCodexSummary(args: CliArgs) {
 			},
 		},
 	})
-	printJson(built.snapshot)
+	printOutput(args, built.snapshot, () => renderStatus(built.snapshot))
 }
 
 async function runClaudeDaily(args: CliArgs) {
 	const { config, stats, events } = await loadClaudeStream(args)
-	printJson({
+	const payload = {
 		providerId: 'claude',
 		stats,
 		rows: await buildDailyReportFromAsync(events, reportOptions(config)),
-	})
+	}
+	printOutput(args, payload, () => renderReport('Claude Daily', payload))
 }
 
 async function runClaudeWeekly(args: CliArgs) {
 	const { config, stats, events } = await loadClaudeStream(args)
-	printJson({
+	const payload = {
 		providerId: 'claude',
 		stats,
 		rows: await buildWeeklyReportFromAsync(events, reportOptions(config)),
-	})
+	}
+	printOutput(args, payload, () => renderReport('Claude Weekly', payload))
 }
 
 async function runClaudeMonthly(args: CliArgs) {
 	const { config, stats, events } = await loadClaudeStream(args)
-	printJson({
+	const payload = {
 		providerId: 'claude',
 		stats,
 		rows: await buildMonthlyReportFromAsync(events, reportOptions(config)),
-	})
+	}
+	printOutput(args, payload, () => renderReport('Claude Monthly', payload))
 }
 
 async function runClaudeSessions(args: CliArgs) {
 	const { config, stats, events } = await loadClaudeStream(args)
-	printJson({
+	const payload = {
 		providerId: 'claude',
 		stats,
 		rows: await buildSessionReportFromAsync(events, reportOptions(config)),
-	})
+	}
+	printOutput(args, payload, () => renderReport('Claude Sessions', payload))
 }
 
 async function runClaudeBlocks(args: CliArgs) {
 	const { scan } = await loadClaude(args)
-	printJson({
+	const payload = {
 		providerId: 'claude',
 		stats: scan.stats,
 		rows: buildClaudeBlocks(filterEvents(scan.events, args)),
-	})
+	}
+	printOutput(args, payload, () => renderReport('Claude Blocks', payload))
 }
 
 async function runCodexDaily(args: CliArgs) {
 	const { config, stats, events } = await loadCodexStream(args)
-	printJson({
+	const payload = {
 		providerId: 'codex',
 		stats,
 		rows: await buildDailyReportFromAsync(events, reportOptions(config)),
-	})
+	}
+	printOutput(args, payload, () => renderReport('Codex Daily', payload))
+}
+
+async function runCodexWeekly(args: CliArgs) {
+	const { config, stats, events } = await loadCodexStream(args)
+	const payload = {
+		providerId: 'codex',
+		stats,
+		rows: await buildWeeklyReportFromAsync(events, reportOptions(config)),
+	}
+	printOutput(args, payload, () => renderReport('Codex Weekly', payload))
 }
 
 async function runCodexMonthly(args: CliArgs) {
 	const { config, stats, events } = await loadCodexStream(args)
-	printJson({
+	const payload = {
 		providerId: 'codex',
 		stats,
 		rows: await buildMonthlyReportFromAsync(events, reportOptions(config)),
-	})
+	}
+	printOutput(args, payload, () => renderReport('Codex Monthly', payload))
 }
 
 async function runCodexSessions(args: CliArgs) {
 	const { config, stats, events } = await loadCodexStream(args)
-	printJson({
+	const payload = {
 		providerId: 'codex',
 		stats,
 		rows: await buildSessionReportFromAsync(events, reportOptions(config)),
-	})
+	}
+	printOutput(args, payload, () => renderReport('Codex Sessions', payload))
 }
 
 const claudeSubCommands = {
@@ -334,6 +362,11 @@ const claudeSubCommands = {
 		args: reportArgs,
 		run: ({ args }) => runClaudeSessions(args),
 	}),
+	session: defineCommand({
+		meta: { name: 'session' },
+		args: reportArgs,
+		run: ({ args }) => runClaudeSessions(args),
+	}),
 	blocks: defineCommand({
 		meta: { name: 'blocks' },
 		args: reportArgs,
@@ -352,6 +385,11 @@ const codexSubCommands = {
 		args: reportArgs,
 		run: ({ args }) => runCodexDaily(args),
 	}),
+	weekly: defineCommand({
+		meta: { name: 'weekly' },
+		args: reportArgs,
+		run: ({ args }) => runCodexWeekly(args),
+	}),
 	monthly: defineCommand({
 		meta: { name: 'monthly' },
 		args: reportArgs,
@@ -359,6 +397,11 @@ const codexSubCommands = {
 	}),
 	sessions: defineCommand({
 		meta: { name: 'sessions' },
+		args: reportArgs,
+		run: ({ args }) => runCodexSessions(args),
+	}),
+	session: defineCommand({
+		meta: { name: 'session' },
 		args: reportArgs,
 		run: ({ args }) => runCodexSessions(args),
 	}),
@@ -404,13 +447,12 @@ const benchSubCommands = {
 		},
 		args: benchArgs,
 		async run({ args }) {
-			printJson(
-				await buildCcusageBenchmark({
-					provider: normalizeProvider(args.provider),
-					execute: args.execute === true,
-					timeoutMs: normalizeTimeoutMs(args['timeout-ms']),
-				}),
-			)
+			const payload = await buildCcusageBenchmark({
+				provider: normalizeProvider(args.provider),
+				execute: args.execute === true,
+				timeoutMs: normalizeTimeoutMs(args['timeout-ms']),
+			})
+			printOutput(args, payload, () => renderBenchmark(payload))
 		},
 	}),
 }
@@ -438,12 +480,13 @@ const telegramSubCommands = {
 				}
 				sent = await sendTelegramAlerts({ botToken, chatId, alerts })
 			}
-			printJson({
+			const payload = {
 				generatedAt: built.snapshot.generatedAt,
 				enabled: loaded.config.telegram.enabled,
 				alerts,
 				sent,
-			})
+			}
+			printOutput(args, payload, () => renderTelegram(payload))
 		},
 	}),
 }
@@ -483,7 +526,7 @@ export function createRootCommand() {
 						await cache.writeJsonSnapshot('status', built.snapshot)
 						cache.close()
 					}
-					printJson(built.snapshot)
+					printOutput(args, built.snapshot, () => renderStatus(built.snapshot))
 				},
 			}),
 			claude: defineCommand({

@@ -18,9 +18,17 @@ describe('CLI command surface', () => {
 			'weekly',
 			'monthly',
 			'sessions',
+			'session',
 			'blocks',
 		])
-		expect(CLI_COMMANDS.codex).toEqual(['summary', 'daily', 'monthly', 'sessions'])
+		expect(CLI_COMMANDS.codex).toEqual([
+			'summary',
+			'daily',
+			'weekly',
+			'monthly',
+			'sessions',
+			'session',
+		])
 		expect(CLI_COMMANDS.cache).toEqual(['status', 'reset'])
 		expect(CLI_COMMANDS.bench).toEqual(['ccusage'])
 		expect(CLI_COMMANDS.telegram).toEqual(['alerts'])

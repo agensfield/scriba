@@ -121,6 +121,9 @@ export async function* iterateCodexEvents(
 
 			for await (const { line } of readJsonlLines(filePath)) {
 				stats.lines += 1
+				if (!line.includes('token_count') && !line.includes('turn_context')) {
+					continue
+				}
 				let parsed: unknown
 				try {
 					parsed = JSON.parse(line)

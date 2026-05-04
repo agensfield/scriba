@@ -7,7 +7,7 @@ export type JsonlLine = {
 }
 
 export async function* readJsonlLines(filePath: string): AsyncGenerator<JsonlLine> {
-	const stream = createReadStream(filePath, { encoding: 'utf8' })
+	const stream = createReadStream(filePath, { encoding: 'utf8', highWaterMark: 1024 * 1024 })
 	const rl = createInterface({
 		input: stream,
 		crlfDelay: Number.POSITIVE_INFINITY,

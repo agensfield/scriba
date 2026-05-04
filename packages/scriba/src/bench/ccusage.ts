@@ -48,38 +48,53 @@ export function ccusageBenchmarkCommands(
 	provider: ProviderId | 'all' = 'all',
 ): BenchmarkCommandSpec[] {
 	const commands: BenchmarkCommandSpec[] = [
-		{ id: 'ccusage-daily', providerId: 'claude', command: 'ccusage', args: ['daily', '--json'] },
-		{ id: 'ccusage-weekly', providerId: 'claude', command: 'ccusage', args: ['weekly', '--json'] },
+		{
+			id: 'ccusage-daily',
+			providerId: 'claude',
+			command: 'bunx',
+			args: ['-p', 'ccusage@18.0.11', 'ccusage', 'daily', '--json'],
+		},
+		{
+			id: 'ccusage-weekly',
+			providerId: 'claude',
+			command: 'bunx',
+			args: ['-p', 'ccusage@18.0.11', 'ccusage', 'weekly', '--json'],
+		},
 		{
 			id: 'ccusage-monthly',
 			providerId: 'claude',
-			command: 'ccusage',
-			args: ['monthly', '--json'],
+			command: 'bunx',
+			args: ['-p', 'ccusage@18.0.11', 'ccusage', 'monthly', '--json'],
 		},
 		{
 			id: 'ccusage-sessions',
 			providerId: 'claude',
-			command: 'ccusage',
-			args: ['session', '--json'],
+			command: 'bunx',
+			args: ['-p', 'ccusage@18.0.11', 'ccusage', 'session', '--json'],
 		},
-		{ id: 'ccusage-blocks', providerId: 'claude', command: 'ccusage', args: ['blocks', '--json'] },
+		{
+			id: 'ccusage-blocks',
+			providerId: 'claude',
+			command: 'bunx',
+			args: ['-p', 'ccusage@18.0.11', 'ccusage', 'blocks', '--json'],
+		},
 		{
 			id: 'ccusage-codex-daily',
 			providerId: 'codex',
-			command: 'ccusage-codex',
-			args: ['daily', '--json'],
+			command: 'bunx',
+			args: ['-p', '@ccusage/codex@18.0.11', 'ccusage-codex', 'daily', '--json'],
 		},
 		{
 			id: 'ccusage-codex-monthly',
 			providerId: 'codex',
-			command: 'ccusage-codex',
-			args: ['monthly', '--json'],
+			command: 'bunx',
+			args: ['-p', '@ccusage/codex@18.0.11', 'ccusage-codex', 'monthly', '--json'],
 		},
 		{
 			id: 'ccusage-codex-sessions',
 			providerId: 'codex',
-			command: 'ccusage-codex',
-			args: ['session', '--json'],
+			command: 'bunx',
+			args: ['-p', '@ccusage/codex@18.0.11', 'ccusage-codex', 'session', '--json'],
 		},
 	]
 	return provider === 'all'
