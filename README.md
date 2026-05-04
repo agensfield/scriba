@@ -24,6 +24,7 @@ bun run gate
 bun run scriba status
 bun run scriba claude daily
 bun run scriba codex sessions
+bun run scriba telegram alerts
 bun run scriba bench ccusage --provider codex
 ```
 

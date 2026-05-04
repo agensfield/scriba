@@ -10,6 +10,7 @@ bun run scriba status
 bun run scriba schema
 bun run scriba cache status
 bun run scriba cache reset
+bun run scriba telegram alerts
 ```
 
 `status` composes local log summaries and remote provider-window probes when
@@ -51,3 +52,14 @@ bun run scriba bench ccusage --provider codex --execute --timeout-ms 30000
 Without `--execute`, the benchmark only summarizes local dataset size and prints
 the reference command plan. With `--execute`, each reference command gets its own
 timeout and output samples are capped.
+
+## Telegram
+
+```sh
+bun run scriba telegram alerts
+bun run scriba telegram alerts --send
+```
+
+`telegram alerts` builds the current status snapshot and evaluates configured
+thresholds. `--send` requires `telegram.chatId` in config and the bot token in
+the configured environment variable.

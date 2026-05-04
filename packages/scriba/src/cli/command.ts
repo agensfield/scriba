@@ -16,6 +16,8 @@ import {
 } from '../reports/local.ts'
 import { buildJsonSchemaRegistry } from '../schema/json-schema.ts'
 import { buildStatusSnapshot } from '../status/build.ts'
+import { evaluateTelegramAlerts } from '../telegram/alerts.ts'
+import { sendTelegramAlerts } from '../telegram/send.ts'
 import { VERSION } from '../version.ts'
 
 function notImplemented(command: string): never {
@@ -80,6 +82,15 @@ const benchArgs = {
 		type: 'string',
 		description: 'Per-command timeout when --execute is enabled.',
 		default: '30000',
+	},
+} as const
+
+const telegramArgs = {
+	...globalArgs,
+	send: {
+		type: 'boolean',
+		description: 'Send matching alerts through Telegram.',
+		default: false,
 	},
 } as const
 
@@ -367,6 +378,39 @@ const benchSubCommands = {
 	}),
 }
 
+const telegramSubCommands = {
+	alerts: defineCommand({
+		meta: {
+			name: 'alerts',
+			description: 'Evaluate Telegram alerts for the current status snapshot.',
+		},
+		args: telegramArgs,
+		async run({ args }) {
+			const loaded = await loadCliConfig(args)
+			const built = await buildStatusSnapshot({ config: loaded.config })
+			const alerts = evaluateTelegramAlerts(built.snapshot, loaded.config.telegram)
+			let sent = 0
+			if (args.send === true && alerts.length > 0) {
+				const botToken = process.env[loaded.config.telegram.botTokenEnv]
+				const chatId = loaded.config.telegram.chatId
+				if (botToken == null || botToken === '') {
+					throw new Error(`Missing Telegram bot token env: ${loaded.config.telegram.botTokenEnv}`)
+				}
+				if (chatId == null || chatId === '') {
+					throw new Error('Missing telegram.chatId in Scriba config')
+				}
+				sent = await sendTelegramAlerts({ botToken, chatId, alerts })
+			}
+			printJson({
+				generatedAt: built.snapshot.generatedAt,
+				enabled: loaded.config.telegram.enabled,
+				alerts,
+				sent,
+			})
+		},
+	}),
+}
+
 export function createRootCommand() {
 	return defineCommand({
 		meta: {
@@ -442,6 +486,13 @@ export function createRootCommand() {
 				},
 				subCommands: benchSubCommands,
 			}),
+			telegram: defineCommand({
+				meta: {
+					name: 'telegram',
+					description: 'Evaluate or send Telegram alerts.',
+				},
+				subCommands: telegramSubCommands,
+			}),
 		},
 		run({ rawArgs }) {
 			if (rawArgs.length === 0) {
@@ -453,9 +504,10 @@ export function createRootCommand() {
 
 export const CLI_COMMANDS = {
 	packageName: SCRIBA_PACKAGE_NAME,
-	root: ['status', 'claude', 'codex', 'schema', 'cache', 'bench'],
+	root: ['status', 'claude', 'codex', 'schema', 'cache', 'bench', 'telegram'],
 	claude: Object.keys(claudeSubCommands),
 	codex: Object.keys(codexSubCommands),
 	cache: Object.keys(cacheSubCommands),
 	bench: Object.keys(benchSubCommands),
+	telegram: Object.keys(telegramSubCommands),
 } as const
