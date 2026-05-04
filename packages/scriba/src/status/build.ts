@@ -2,6 +2,8 @@ import type { ScribaConfig } from '../config/schema.ts'
 import { scanClaudeLogs } from '../local/claude.ts'
 import { scanCodexLogs } from '../local/codex.ts'
 import type { ScannerStats } from '../local/types.ts'
+import { probeClaudeUsage } from '../remote/claude.ts'
+import { probeCodexUsage } from '../remote/codex.ts'
 import { buildDailyReport } from '../reports/local.ts'
 import {
 	type MetricLine,
@@ -13,6 +15,7 @@ import {
 export type BuildStatusOptions = {
 	config: ScribaConfig
 	now?: Date
+	includeRemote?: boolean
 }
 
 export type BuiltStatus = {
@@ -28,13 +31,21 @@ export async function buildStatusSnapshot(options: BuildStatusOptions): Promise<
 	if (options.config.providers.claude.enabled) {
 		const scan = await scanClaudeLogs({ paths: optionPaths(options.config.providers.claude.paths) })
 		scanStats.claude = scan.stats
-		providers.push(providerFromDailyReports('claude', 'Claude', scan.events, generatedAt))
+		const provider = providerFromDailyReports('claude', 'Claude', scan.events, generatedAt)
+		if (options.includeRemote !== false) {
+			await appendRemoteLines(provider, () => probeClaudeUsage())
+		}
+		providers.push(provider)
 	}
 
 	if (options.config.providers.codex.enabled) {
 		const scan = await scanCodexLogs({ paths: optionPaths(options.config.providers.codex.paths) })
 		scanStats.codex = scan.stats
-		providers.push(providerFromDailyReports('codex', 'Codex', scan.events, generatedAt))
+		const provider = providerFromDailyReports('codex', 'Codex', scan.events, generatedAt)
+		if (options.includeRemote !== false) {
+			await appendRemoteLines(provider, () => probeCodexUsage())
+		}
+		providers.push(provider)
 	}
 
 	return {
@@ -96,4 +107,22 @@ function providerFromDailyReports(
 
 function formatTokens(tokens: number): string {
 	return Intl.NumberFormat('en-US').format(tokens)
+}
+
+async function appendRemoteLines(
+	provider: ProviderSnapshot,
+	probe: () => Promise<{ lines: MetricLine[]; provenance: ProviderSnapshot['provenance'] }>,
+): Promise<void> {
+	try {
+		const remote = await probe()
+		provider.lines.unshift(...remote.lines)
+		provider.provenance.push(...remote.provenance)
+	} catch (error) {
+		provider.provenance.push({
+			kind: 'provider-api',
+			providerId: provider.providerId,
+			fetchedAt: new Date().toISOString(),
+			error: error instanceof Error ? error.message : String(error),
+		})
+	}
 }

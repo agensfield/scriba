@@ -31,6 +31,7 @@ describe('buildStatusSnapshot', () => {
 		const built = await buildStatusSnapshot({
 			config,
 			now: new Date('2026-05-05T12:00:00.000Z'),
+			includeRemote: false,
 		})
 		const line = built.snapshot.providers[0]?.lines[0]
 		expect(line?.type).toBe('text')
