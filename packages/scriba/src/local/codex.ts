@@ -21,8 +21,8 @@ type RawUsage = {
 }
 
 export type CodexScanOptions = {
-	paths?: string[]
-	env?: Record<string, string | undefined>
+	paths?: string[] | undefined
+	env?: Record<string, string | undefined> | undefined
 }
 
 export function defaultCodexSessionDirs(env: Record<string, string | undefined> = process.env) {

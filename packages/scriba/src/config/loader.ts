@@ -5,9 +5,9 @@ import { z } from 'zod'
 import { type ScribaConfig, scribaConfigSchema } from './schema.ts'
 
 export type LoadConfigOptions = {
-	cwd?: string
-	configPath?: string
-	env?: Record<string, string | undefined>
+	cwd?: string | undefined
+	configPath?: string | undefined
+	env?: Record<string, string | undefined> | undefined
 }
 
 export type LoadedConfig = {

@@ -26,8 +26,8 @@ const claudeUsageSchema = z.object({
 })
 
 export type ClaudeScanOptions = {
-	paths?: string[]
-	env?: Record<string, string | undefined>
+	paths?: string[] | undefined
+	env?: Record<string, string | undefined> | undefined
 }
 
 export function defaultClaudeProjectDirs(env: Record<string, string | undefined> = process.env) {

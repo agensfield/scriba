@@ -1,6 +1,9 @@
 import { defineCommand } from 'citty'
-import { SCRIBA_PACKAGE_NAME } from '../index.ts'
+import { resetCache, ScribaCache } from '../cache/sqlite.ts'
+import { loadConfig } from '../config/loader.ts'
+import { SCRIBA_PACKAGE_NAME } from '../constants.ts'
 import { buildJsonSchemaRegistry } from '../schema/json-schema.ts'
+import { buildStatusSnapshot } from '../status/build.ts'
 import { VERSION } from '../version.ts'
 
 function notImplemented(command: string): never {
@@ -60,8 +63,35 @@ const codexSubCommands = {
 }
 
 const cacheSubCommands = {
-	status: defineCommand({ meta: { name: 'status' }, run: () => notImplemented('cache status') }),
-	reset: defineCommand({ meta: { name: 'reset' }, run: () => notImplemented('cache reset') }),
+	status: defineCommand({
+		meta: { name: 'status' },
+		args: globalArgs,
+		async run({ args }) {
+			const loaded = await loadConfig({
+				configPath: typeof args.config === 'string' ? args.config : undefined,
+			})
+			const cache = await ScribaCache.open({
+				cacheDir:
+					typeof args['cache-dir'] === 'string' ? args['cache-dir'] : loaded.config.cacheDir,
+			})
+			console.log(JSON.stringify(cache.status(), null, 2))
+			cache.close()
+		},
+	}),
+	reset: defineCommand({
+		meta: { name: 'reset' },
+		args: globalArgs,
+		async run({ args }) {
+			const loaded = await loadConfig({
+				configPath: typeof args.config === 'string' ? args.config : undefined,
+			})
+			const cacheDir = await resetCache({
+				cacheDir:
+					typeof args['cache-dir'] === 'string' ? args['cache-dir'] : loaded.config.cacheDir,
+			})
+			console.log(JSON.stringify({ ok: true, cacheDir }, null, 2))
+		},
+	}),
 }
 
 export function createRootCommand() {
@@ -78,7 +108,29 @@ export function createRootCommand() {
 					name: 'status',
 					description: 'Show the composed Scriba status snapshot.',
 				},
-				run: () => notImplemented('status'),
+				args: globalArgs,
+				async run({ args }) {
+					const loaded = await loadConfig({
+						configPath: typeof args.config === 'string' ? args.config : undefined,
+					})
+					const built = await buildStatusSnapshot({ config: loaded.config })
+					if (args['no-cache'] !== true) {
+						const cache = await ScribaCache.open({
+							cacheDir:
+								typeof args['cache-dir'] === 'string' ? args['cache-dir'] : loaded.config.cacheDir,
+						})
+						cache.saveSnapshot('status', built.snapshot, built.snapshot.generatedAt)
+						if (built.scanStats.claude != null) {
+							cache.saveScanStats('claude', built.scanStats.claude, built.snapshot.generatedAt)
+						}
+						if (built.scanStats.codex != null) {
+							cache.saveScanStats('codex', built.scanStats.codex, built.snapshot.generatedAt)
+						}
+						await cache.writeJsonSnapshot('status', built.snapshot)
+						cache.close()
+					}
+					console.log(JSON.stringify(built.snapshot, null, 2))
+				},
 			}),
 			claude: defineCommand({
 				meta: {

@@ -1,11 +1,12 @@
+export * from './cache/index.ts'
 export { CLI_COMMANDS, createRootCommand } from './cli/command.ts'
 export * from './config/index.ts'
+export { SCRIBA_PACKAGE_NAME } from './constants.ts'
 export * from './local/index.ts'
 export * from './reports/index.ts'
 export * from './schema/index.ts'
+export * from './status/index.ts'
 export { VERSION } from './version.ts'
-
-export const SCRIBA_PACKAGE_NAME = '@agensfield/scriba'
 
 export type ProviderId = 'claude' | 'codex' | (string & {})
 
