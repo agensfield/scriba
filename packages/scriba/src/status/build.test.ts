@@ -42,6 +42,39 @@ describe('buildStatusSnapshot', () => {
 		expect(built.scanStats.claude?.events).toBe(1)
 	})
 
+	it('keeps provider ok when one configured local source exists and another is missing', async () => {
+		const root = await mkdtemp('/tmp/scriba-status-partial-')
+		const claudeDir = join(root, 'claude', 'proj', 'session')
+		await mkdir(claudeDir, { recursive: true })
+		await writeFile(
+			join(claudeDir, 'usage.jsonl'),
+			`${JSON.stringify({
+				timestamp: '2026-05-05T10:00:00.000Z',
+				sessionId: 'session',
+				message: {
+					id: 'm',
+					model: 'claude-sonnet',
+					usage: { input_tokens: 100, output_tokens: 20 },
+				},
+			})}\n`,
+		)
+		const config = scribaConfigSchema.parse({
+			providers: {
+				claude: { paths: [join(root, 'missing'), join(root, 'claude')] },
+				codex: { enabled: false },
+			},
+		})
+
+		const built = await buildStatusSnapshot({
+			config,
+			now: new Date('2026-05-05T12:00:00.000Z'),
+			includeRemote: false,
+		})
+
+		expect(built.scanStats.claude?.missingDirectories).toEqual([join(root, 'missing')])
+		expect(built.snapshot.providers[0]?.state).toBe('ok')
+	})
+
 	it('uses the derived file-event cache when provided', async () => {
 		const root = await mkdtemp('/tmp/scriba-status-cache-')
 		const codexDir = join(root, 'codex-sessions')

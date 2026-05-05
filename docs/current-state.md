@@ -140,9 +140,12 @@ Current benchmark evidence:
   code-review and credits were absent/null for the current account response.
 - Claude OAuth usage refs include aliases for `seven_day_sonnet`,
   `seven_day_oauth_apps`, Claude Design, Claude Routines, extra spend, and
-  CodexBar's local peak-hours calculation. The current machine does not expose
-  a Claude OAuth credentials file at the standard path, so the live Claude API
-  probe returned auth unavailable.
+  CodexBar's local peak-hours calculation. Claude auth now checks the standard
+  `~/.claude/.credentials.json` file first and falls back to the Claude Code
+  macOS Keychain service (`Claude Code-credentials`, including
+  `CLAUDE_CONFIG_DIR` hashed variants). Real local proof on 2026-05-05 loaded
+  OAuth from Keychain and returned Claude remote windows without degrading the
+  provider.
 
 ## Open Questions
 

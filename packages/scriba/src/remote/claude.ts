@@ -1,7 +1,10 @@
+import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { MetricLine } from '../schema/model.ts'
 import type { FetchLike, RemoteProbeResult } from './types.ts'
@@ -10,6 +13,8 @@ const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 const REFRESH_URL = 'https://platform.claude.com/v1/oauth/token'
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 const REFRESH_BUFFER_MS = 5 * 60 * 1000
+const KEYCHAIN_SERVICE_PREFIX = 'Claude Code'
+const execFileAsync = promisify(execFile)
 
 const claudeCredentialSchema = z.object({
 	claudeAiOauth: z.object({
@@ -21,42 +26,47 @@ const claudeCredentialSchema = z.object({
 })
 
 const usageSchema = z.object({
-	five_hour: claudeWindowSchema().optional(),
-	seven_day: claudeWindowSchema().optional(),
-	seven_day_oauth_apps: claudeWindowSchema().optional(),
-	seven_day_sonnet: claudeWindowSchema().optional(),
-	seven_day_opus: claudeWindowSchema().optional(),
-	seven_day_design: claudeWindowSchema().optional(),
-	seven_day_claude_design: claudeWindowSchema().optional(),
-	seven_day_omelette: claudeWindowSchema().optional(),
-	claude_design: claudeWindowSchema().optional(),
-	design: claudeWindowSchema().optional(),
-	omelette: claudeWindowSchema().optional(),
-	omelette_promotional: claudeWindowSchema().optional(),
-	seven_day_routines: claudeWindowSchema().optional(),
-	seven_day_claude_routines: claudeWindowSchema().optional(),
-	claude_routines: claudeWindowSchema().optional(),
-	routines: claudeWindowSchema().optional(),
-	routine: claudeWindowSchema().optional(),
-	seven_day_cowork: claudeWindowSchema().optional(),
-	cowork: claudeWindowSchema().optional(),
-	iguana_necktie: claudeWindowSchema().optional(),
+	five_hour: nullableClaudeWindowSchema(),
+	seven_day: nullableClaudeWindowSchema(),
+	seven_day_oauth_apps: nullableClaudeWindowSchema(),
+	seven_day_sonnet: nullableClaudeWindowSchema(),
+	seven_day_opus: nullableClaudeWindowSchema(),
+	seven_day_design: nullableClaudeWindowSchema(),
+	seven_day_claude_design: nullableClaudeWindowSchema(),
+	seven_day_omelette: nullableClaudeWindowSchema(),
+	claude_design: nullableClaudeWindowSchema(),
+	design: nullableClaudeWindowSchema(),
+	omelette: nullableClaudeWindowSchema(),
+	omelette_promotional: nullableClaudeWindowSchema(),
+	seven_day_routines: nullableClaudeWindowSchema(),
+	seven_day_claude_routines: nullableClaudeWindowSchema(),
+	claude_routines: nullableClaudeWindowSchema(),
+	routines: nullableClaudeWindowSchema(),
+	routine: nullableClaudeWindowSchema(),
+	seven_day_cowork: nullableClaudeWindowSchema(),
+	cowork: nullableClaudeWindowSchema(),
+	iguana_necktie: nullableClaudeWindowSchema(),
 	extra_usage: z
 		.object({
 			is_enabled: z.boolean().optional(),
-			used_credits: z.number().optional(),
-			monthly_limit: z.number().optional(),
-			utilization: z.number().optional(),
+			used_credits: z.number().nullable().optional(),
+			monthly_limit: z.number().nullable().optional(),
+			utilization: z.number().nullable().optional(),
 			currency: z.string().optional(),
 		})
+		.nullable()
 		.optional(),
 })
 
 function claudeWindowSchema() {
 	return z.object({
 		utilization: z.number().optional(),
-		resets_at: z.string().optional(),
+		resets_at: z.string().nullable().optional(),
 	})
+}
+
+function nullableClaudeWindowSchema() {
+	return claudeWindowSchema().nullable().optional()
 }
 
 export type ClaudeProbeOptions = {
@@ -64,6 +74,8 @@ export type ClaudeProbeOptions = {
 	fetch?: FetchLike | undefined
 	now?: Date | undefined
 	credentialPaths?: string[] | undefined
+	keychainServices?: string[] | undefined
+	readKeychainCredential?: ((service: string) => Promise<string | null>) | undefined
 }
 
 export function claudeCredentialPaths(
@@ -74,6 +86,33 @@ export function claudeCredentialPaths(
 		return configured.split(',').map((path) => join(path.trim(), '.credentials.json'))
 	}
 	return [join(homedir(), '.claude', '.credentials.json')]
+}
+
+export function claudeKeychainServices(
+	env: Record<string, string | undefined> = process.env,
+): string[] {
+	const base = `${KEYCHAIN_SERVICE_PREFIX}${claudeOauthFileSuffix(env)}-credentials`
+	const configured = env.CLAUDE_CONFIG_DIR?.trim()
+	const hash =
+		configured == null || configured === ''
+			? null
+			: createHash('sha256').update(configured.normalize('NFC')).digest('hex').slice(0, 8)
+	return hash == null ? [base] : [`${base}-${hash}`, base]
+}
+
+export async function claudeKeychainServiceExists(service: string): Promise<boolean> {
+	if (process.platform !== 'darwin') {
+		return false
+	}
+	try {
+		await execFileAsync('security', ['find-generic-password', '-s', service], {
+			timeout: 5000,
+			maxBuffer: 1024 * 1024,
+		})
+		return true
+	} catch {
+		return false
+	}
 }
 
 export async function probeClaudeUsage(
@@ -208,27 +247,162 @@ async function loadClaudeAuth(options: ClaudeProbeOptions) {
 		if (!existsSync(path)) {
 			continue
 		}
-		const credentials = claudeCredentialSchema.parse(JSON.parse(await readFile(path, 'utf8')))
-		const oauth = credentials.claudeAiOauth
-		const accessToken = oauth.accessToken
-		const refreshToken = oauth.refreshToken
-		if (accessToken == null || accessToken === '') {
+		const credentials = parseClaudeCredentials(await readFile(path, 'utf8'))
+		if (credentials == null) {
 			continue
 		}
-		if (refreshToken != null && shouldRefresh(oauth.expiresAt, options.now ?? new Date())) {
-			const refreshed = await refreshClaudeToken(credentials, refreshToken, options.fetch ?? fetch)
-			if (refreshed != null) {
-				await writeFile(path, `${JSON.stringify(refreshed, null, 2)}\n`)
-				return {
-					ok: true as const,
-					accessToken: refreshed.claudeAiOauth.accessToken ?? accessToken,
-					source: path,
-				}
-			}
+		const auth = await resolveClaudeCredentials(
+			credentials,
+			`file:${path}`,
+			options,
+			async (next) => {
+				await writeFile(path, `${JSON.stringify(next, null, 2)}\n`)
+			},
+		)
+		if (auth != null) {
+			return auth
 		}
-		return { ok: true as const, accessToken, source: path }
+	}
+	const services = options.keychainServices ?? claudeKeychainServices(options.env)
+	for (const service of services) {
+		const text = await readClaudeKeychainCredential(service, options)
+		if (text == null) {
+			continue
+		}
+		const credentials = parseClaudeCredentials(text)
+		if (credentials == null) {
+			continue
+		}
+		const auth = await resolveClaudeCredentials(
+			credentials,
+			`keychain:${service}`,
+			options,
+			async (next) => {
+				await writeClaudeKeychainCredential(service, next)
+			},
+		)
+		if (auth != null) {
+			return auth
+		}
 	}
 	return { ok: false as const, error: 'Not logged in. Run `claude` to authenticate.' }
+}
+
+async function resolveClaudeCredentials(
+	credentials: z.infer<typeof claudeCredentialSchema>,
+	source: string,
+	options: ClaudeProbeOptions,
+	persist: (credentials: z.infer<typeof claudeCredentialSchema>) => Promise<void>,
+) {
+	const oauth = credentials.claudeAiOauth
+	const accessToken = oauth.accessToken
+	const refreshToken = oauth.refreshToken
+	if (accessToken == null || accessToken === '') {
+		return null
+	}
+	if (refreshToken != null && shouldRefresh(oauth.expiresAt, options.now ?? new Date())) {
+		const refreshed = await refreshClaudeToken(credentials, refreshToken, options.fetch ?? fetch)
+		if (refreshed != null) {
+			await persist(refreshed)
+			return {
+				ok: true as const,
+				accessToken: refreshed.claudeAiOauth.accessToken ?? accessToken,
+				source,
+			}
+		}
+	}
+	return { ok: true as const, accessToken, source }
+}
+
+function parseClaudeCredentials(text: string) {
+	const direct = parseClaudeCredentialJson(text)
+	if (direct != null) {
+		return direct
+	}
+	const decoded = decodeHexJson(text)
+	return decoded == null ? null : parseClaudeCredentialJson(decoded)
+}
+
+function parseClaudeCredentialJson(text: string) {
+	try {
+		return claudeCredentialSchema.parse(JSON.parse(text))
+	} catch {
+		return null
+	}
+}
+
+function decodeHexJson(text: string): string | null {
+	const trimmed = text.trim()
+	const hex = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed
+	if (hex.length === 0 || hex.length % 2 !== 0 || !/^[\da-f]+$/i.test(hex)) {
+		return null
+	}
+	return Buffer.from(hex, 'hex').toString('utf8')
+}
+
+async function readClaudeKeychainCredential(
+	service: string,
+	options: ClaudeProbeOptions,
+): Promise<string | null> {
+	if (options.readKeychainCredential != null) {
+		return options.readKeychainCredential(service)
+	}
+	if (process.platform !== 'darwin') {
+		return null
+	}
+	const user = (options.env ?? process.env).USER?.trim()
+	if (user != null && user !== '') {
+		const currentUser = await readMacosKeychain(['-a', user, '-s', service, '-w'])
+		if (currentUser != null) {
+			return currentUser
+		}
+	}
+	return readMacosKeychain(['-s', service, '-w'])
+}
+
+async function readMacosKeychain(args: string[]): Promise<string | null> {
+	try {
+		const { stdout } = await execFileAsync('security', ['find-generic-password', ...args], {
+			timeout: 5000,
+			maxBuffer: 1024 * 1024,
+		})
+		const value = stdout.trim()
+		return value === '' ? null : value
+	} catch {
+		return null
+	}
+}
+
+async function writeClaudeKeychainCredential(
+	service: string,
+	credentials: z.infer<typeof claudeCredentialSchema>,
+): Promise<void> {
+	if (process.platform !== 'darwin') {
+		return
+	}
+	try {
+		await execFileAsync(
+			'security',
+			['add-generic-password', '-U', '-s', service, '-w', JSON.stringify(credentials, null, 2)],
+			{ timeout: 5000, maxBuffer: 1024 * 1024 },
+		)
+	} catch {
+		// Keep the refreshed in-memory token even if Keychain persistence is denied.
+	}
+}
+
+function claudeOauthFileSuffix(env: Record<string, string | undefined>): string {
+	const userType = env.USER_TYPE?.trim()
+	if (userType === 'ant' && env.USE_LOCAL_OAUTH === '1') {
+		return '-local-oauth'
+	}
+	if (userType === 'ant' && env.USE_STAGING_OAUTH === '1') {
+		return '-staging-oauth'
+	}
+	if (env.CLAUDE_CODE_CUSTOM_OAUTH_URL?.trim()) {
+		return '-custom-oauth'
+	}
+	return ''
 }
 
 function shouldRefresh(expiresAt: number | undefined, now: Date): boolean {
@@ -276,7 +450,7 @@ async function refreshClaudeToken(
 function pushWindow(
 	lines: MetricLine[],
 	label: string,
-	window: z.infer<ReturnType<typeof claudeWindowSchema>> | undefined,
+	window: z.infer<ReturnType<typeof claudeWindowSchema>> | null | undefined,
 ) {
 	if (window?.utilization == null) {
 		return
@@ -291,6 +465,6 @@ function progressLine(label: string, window: z.infer<ReturnType<typeof claudeWin
 		used: window.utilization ?? 0,
 		limit: 100,
 		format: { kind: 'percent' as const },
-		resetsAt: window.resets_at,
+		resetsAt: window.resets_at ?? undefined,
 	}
 }

@@ -130,7 +130,7 @@ function providerFromDailyReports(
 	return {
 		providerId,
 		displayName,
-		state: stats.missingDirectories.length > 0 ? 'degraded' : 'ok',
+		state: stats.files === 0 && stats.missingDirectories.length > 0 ? 'degraded' : 'ok',
 		lines,
 		provenance: [{ kind: 'local-log', providerId, fetchedAt: generatedAt }],
 	}

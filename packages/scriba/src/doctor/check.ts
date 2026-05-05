@@ -3,6 +3,7 @@ import type { ScribaCache } from '../cache/sqlite.ts'
 import type { ScribaConfig } from '../config/schema.ts'
 import { isDirectory } from '../local/files.ts'
 import { PROVIDERS } from '../providers/descriptors.ts'
+import { claudeKeychainServiceExists, claudeKeychainServices } from '../remote/claude.ts'
 
 export type DoctorState = 'ok' | 'degraded' | 'broken'
 
@@ -58,7 +59,10 @@ export async function buildDoctorReport(options: {
 		const localPaths = await Promise.all(
 			localPathValues.map(async (path) => ({ path, exists: await isDirectory(path) })),
 		)
-		const authPaths = descriptor.authPaths().map((path) => ({ path, exists: existsSync(path) }))
+		const authPaths = [
+			...descriptor.authPaths().map((path) => ({ path, exists: existsSync(path) })),
+			...(descriptor.id === 'claude' ? await claudeKeychainAuthPaths() : []),
+		]
 		const authState: DoctorState = authPaths.some((path) => path.exists) ? 'ok' : 'degraded'
 		const localState: DoctorState = localPaths.some((path) => path.exists) ? 'ok' : 'degraded'
 		let remote: DoctorPayload['providers'][number]['remote'] = { state: 'skipped' }
@@ -99,6 +103,15 @@ export async function buildDoctorReport(options: {
 		},
 		providers,
 	}
+}
+
+async function claudeKeychainAuthPaths(): Promise<Array<{ path: string; exists: boolean }>> {
+	return Promise.all(
+		claudeKeychainServices().map(async (service) => ({
+			path: `macOS Keychain: ${service}`,
+			exists: await claudeKeychainServiceExists(service),
+		})),
+	)
 }
 
 function worstState(states: Array<DoctorState>): DoctorState {

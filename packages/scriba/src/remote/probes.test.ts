@@ -1,7 +1,7 @@
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { probeClaudeUsage } from './claude.ts'
+import { claudeKeychainServices, probeClaudeUsage } from './claude.ts'
 import { probeCodexUsage } from './codex.ts'
 
 describe('remote provider probes', () => {
@@ -41,6 +41,60 @@ describe('remote provider probes', () => {
 			'Claude Design',
 			'Claude Routines',
 			'Extra usage spent',
+		])
+	})
+
+	it('loads Claude OAuth credentials from macOS keychain fallback', async () => {
+		const credentialJson = JSON.stringify({
+			claudeAiOauth: {
+				accessToken: 'keychain-token',
+				refreshToken: 'refresh',
+				expiresAt: Date.now() + 60 * 60 * 1000,
+			},
+		})
+		const seenHeaders: string[] = []
+		const result = await probeClaudeUsage({
+			credentialPaths: ['/tmp/scriba-missing-claude-credentials.json'],
+			keychainServices: ['Claude Code-credentials'],
+			readKeychainCredential: async (service) =>
+				service === 'Claude Code-credentials' ? credentialJson : null,
+			fetch: async (_input, init) => {
+				seenHeaders.push(new Headers(init?.headers).get('authorization') ?? '')
+				return Response.json({ five_hour: { utilization: 1 } })
+			},
+		})
+
+		expect(result.authState).toMatchObject({
+			ok: true,
+			source: 'keychain:Claude Code-credentials',
+		})
+		expect(seenHeaders).toEqual(['Bearer keychain-token'])
+		expect(result.lines.find((line) => line.label === 'Session')).toBeDefined()
+	})
+
+	it('accepts hex-encoded Claude keychain credentials', async () => {
+		const credentialJson = JSON.stringify({
+			claudeAiOauth: {
+				accessToken: 'hex-token',
+				expiresAt: Date.now() + 60 * 60 * 1000,
+			},
+		})
+		const result = await probeClaudeUsage({
+			credentialPaths: ['/tmp/scriba-missing-claude-credentials.json'],
+			keychainServices: ['Claude Code-credentials'],
+			readKeychainCredential: async () =>
+				`0x${Buffer.from(credentialJson, 'utf8').toString('hex')}`,
+			fetch: async () => Response.json({ five_hour: { utilization: 1 } }),
+		})
+
+		expect(result.authState.ok).toBe(true)
+		expect(result.lines.find((line) => line.label === 'Session')).toBeDefined()
+	})
+
+	it('uses Claude config-dir hashed keychain service before legacy service', () => {
+		expect(claudeKeychainServices({ CLAUDE_CONFIG_DIR: '/Users/test/.claude' })).toEqual([
+			'Claude Code-credentials-462977e4',
+			'Claude Code-credentials',
 		])
 	})
 

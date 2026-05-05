@@ -28,6 +28,10 @@ unless `--no-cache` is passed.
 schema/WAL state, cache size, and latest snapshot age. It reports `ok`,
 `degraded`, or `broken` in human and JSON output.
 
+Claude remote auth checks `~/.claude/.credentials.json` first, then the Claude
+Code macOS Keychain services. Normal `--fast` and `--no-remote` status reads do
+not touch provider APIs or prompt-capable Keychain password reads.
+
 `--fast` reads the cached status snapshot only. It is intended for menu bar,
 Telegram, and agent reads that should not trigger a foreground scan. `--no-remote`
 skips provider API probes. `--redact` removes paths, account identifiers, and
