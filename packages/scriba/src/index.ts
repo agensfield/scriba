@@ -32,6 +32,13 @@ export type MetricFormat =
 export type MetricLine =
 	| { type: 'text'; label: string; value: string; provenance?: SourceProvenance[] }
 	| {
+			type: 'amount'
+			label: string
+			value: number
+			format: MetricFormat
+			provenance?: SourceProvenance[]
+	  }
+	| {
 			type: 'progress'
 			label: string
 			used: number

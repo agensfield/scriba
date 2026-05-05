@@ -20,16 +20,26 @@ describe('remote provider probes', () => {
 		)
 		const result = await probeClaudeUsage({
 			credentialPaths: [credentialPath],
+			now: new Date('2026-05-05T13:00:00.000Z'),
 			fetch: async () =>
 				Response.json({
 					five_hour: { utilization: 12, resets_at: '2026-05-05T12:00:00.000Z' },
 					seven_day: { utilization: 34, resets_at: '2026-05-06T12:00:00.000Z' },
+					seven_day_oauth_apps: { utilization: 8 },
+					seven_day_sonnet: { utilization: 56 },
+					seven_day_design: { utilization: 78 },
+					seven_day_routines: { utilization: 9 },
 					extra_usage: { is_enabled: true, used_credits: 250, monthly_limit: 1000 },
 				}),
 		})
 		expect(result.lines.map((line) => line.label)).toEqual([
+			'Peak Hours',
 			'Session',
 			'Weekly',
+			'OAuth Apps',
+			'Sonnet',
+			'Claude Design',
+			'Claude Routines',
 			'Extra usage spent',
 		])
 	})
@@ -70,17 +80,29 @@ describe('remote provider probes', () => {
 							reset_at: 1_778_000_000,
 							limit_window_seconds: 604800,
 						},
+						secondary_window: {
+							used_percent: 15,
+							reset_at: 1_778_000_000,
+							limit_window_seconds: 604800,
+						},
 					},
-					credits: { has_credits: true, unlimited: false, balance: 4.2 },
+					credits: { has_credits: true, unlimited: false, balance: '4.2' },
+					plan_type: 'pro',
 				}),
 		})
 		expect(result.lines.map((line) => line.label)).toEqual([
+			'Plan',
 			'Session',
 			'Weekly',
 			'Spark Weekly',
 			'Spark',
 			'Reviews',
-			'Credits',
+			'Review Weekly',
+			'Credits left',
 		])
+		expect(result.lines.find((line) => line.label === 'Credits left')).toMatchObject({
+			type: 'amount',
+			value: 4.2,
+		})
 	})
 })

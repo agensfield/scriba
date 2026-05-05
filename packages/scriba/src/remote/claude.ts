@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
+import type { MetricLine } from '../schema/model.ts'
 import type { FetchLike, RemoteProbeResult } from './types.ts'
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
@@ -22,13 +23,30 @@ const claudeCredentialSchema = z.object({
 const usageSchema = z.object({
 	five_hour: claudeWindowSchema().optional(),
 	seven_day: claudeWindowSchema().optional(),
+	seven_day_oauth_apps: claudeWindowSchema().optional(),
+	seven_day_sonnet: claudeWindowSchema().optional(),
 	seven_day_opus: claudeWindowSchema().optional(),
+	seven_day_design: claudeWindowSchema().optional(),
+	seven_day_claude_design: claudeWindowSchema().optional(),
 	seven_day_omelette: claudeWindowSchema().optional(),
+	claude_design: claudeWindowSchema().optional(),
+	design: claudeWindowSchema().optional(),
+	omelette: claudeWindowSchema().optional(),
+	omelette_promotional: claudeWindowSchema().optional(),
+	seven_day_routines: claudeWindowSchema().optional(),
+	seven_day_claude_routines: claudeWindowSchema().optional(),
+	claude_routines: claudeWindowSchema().optional(),
+	routines: claudeWindowSchema().optional(),
+	routine: claudeWindowSchema().optional(),
+	seven_day_cowork: claudeWindowSchema().optional(),
+	cowork: claudeWindowSchema().optional(),
+	iguana_necktie: claudeWindowSchema().optional(),
 	extra_usage: z
 		.object({
 			is_enabled: z.boolean().optional(),
 			used_credits: z.number().optional(),
 			monthly_limit: z.number().optional(),
+			utilization: z.number().optional(),
 			currency: z.string().optional(),
 		})
 		.optional(),
@@ -36,7 +54,7 @@ const usageSchema = z.object({
 
 function claudeWindowSchema() {
 	return z.object({
-		utilization: z.number(),
+		utilization: z.number().optional(),
 		resets_at: z.string().optional(),
 	})
 }
@@ -92,25 +110,43 @@ export async function probeClaudeUsage(
 		throw new Error(`Claude usage request failed: ${resp.status}`)
 	}
 	const parsed = usageSchema.parse(await resp.json())
-	const lines = []
-	if (parsed.five_hour != null) {
-		lines.push(progressLine('Session', parsed.five_hour))
-	}
-	if (parsed.seven_day != null) {
-		lines.push(progressLine('Weekly', parsed.seven_day))
-	}
-	if (parsed.seven_day_opus != null) {
-		lines.push(progressLine('Sonnet', parsed.seven_day_opus))
-	}
-	if (parsed.seven_day_omelette != null) {
-		lines.push(progressLine('Claude Design', parsed.seven_day_omelette))
-	}
+	const lines: MetricLine[] = []
+	lines.push(claudePeakHoursLine(now))
+	pushWindow(lines, 'Session', parsed.five_hour)
+	pushWindow(lines, 'Weekly', parsed.seven_day)
+	pushWindow(lines, 'OAuth Apps', parsed.seven_day_oauth_apps)
+	pushWindow(lines, 'Sonnet', parsed.seven_day_sonnet ?? parsed.seven_day_opus)
+	pushWindow(
+		lines,
+		'Claude Design',
+		parsed.seven_day_design ??
+			parsed.seven_day_claude_design ??
+			parsed.claude_design ??
+			parsed.design ??
+			parsed.seven_day_omelette ??
+			parsed.omelette ??
+			parsed.omelette_promotional,
+	)
+	pushWindow(
+		lines,
+		'Claude Routines',
+		parsed.seven_day_routines ??
+			parsed.seven_day_claude_routines ??
+			parsed.claude_routines ??
+			parsed.routines ??
+			parsed.routine ??
+			parsed.seven_day_cowork ??
+			parsed.cowork,
+	)
+	pushWindow(lines, 'Extra Claude window', parsed.iguana_necktie)
 	if (parsed.extra_usage?.is_enabled === true) {
+		const used = (parsed.extra_usage.used_credits ?? 0) / 100
+		const limit = Math.max(1, (parsed.extra_usage.monthly_limit ?? 0) / 100)
 		lines.push({
 			type: 'progress' as const,
 			label: 'Extra usage spent',
-			used: (parsed.extra_usage.used_credits ?? 0) / 100,
-			limit: Math.max(1, (parsed.extra_usage.monthly_limit ?? 0) / 100),
+			used,
+			limit,
 			format: { kind: 'dollars' as const },
 		})
 	}
@@ -121,6 +157,49 @@ export async function probeClaudeUsage(
 		provenance: [{ kind: 'provider-api', providerId: 'claude', fetchedAt: now.toISOString() }],
 		authState: auth,
 	}
+}
+
+function claudePeakHoursLine(now: Date): MetricLine {
+	const minutes = newYorkMinutes(now)
+	const peakStart = 8 * 60
+	const peakEnd = 14 * 60
+	if (minutes >= peakStart && minutes < peakEnd) {
+		return {
+			type: 'badge',
+			label: 'Peak Hours',
+			text: `Peak · ${durationLabel(peakEnd - minutes)} left`,
+		}
+	}
+	const untilPeak = minutes < peakStart ? peakStart - minutes : 24 * 60 - minutes + peakStart
+	return {
+		type: 'badge',
+		label: 'Peak Hours',
+		text: `Off-peak · peak in ${durationLabel(untilPeak)}`,
+	}
+}
+
+function newYorkMinutes(now: Date): number {
+	const parts = new Intl.DateTimeFormat('en-US', {
+		timeZone: 'America/New_York',
+		hour: 'numeric',
+		minute: 'numeric',
+		hourCycle: 'h23',
+	}).formatToParts(now)
+	const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0)
+	const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? 0)
+	return hour * 60 + minute
+}
+
+function durationLabel(minutes: number): string {
+	const hours = Math.floor(minutes / 60)
+	const mins = minutes % 60
+	if (hours > 0 && mins > 0) {
+		return `${hours}h ${mins}m`
+	}
+	if (hours > 0) {
+		return `${hours}h`
+	}
+	return `${mins}m`
 }
 
 async function loadClaudeAuth(options: ClaudeProbeOptions) {
@@ -194,11 +273,22 @@ async function refreshClaudeToken(
 	}
 }
 
+function pushWindow(
+	lines: MetricLine[],
+	label: string,
+	window: z.infer<ReturnType<typeof claudeWindowSchema>> | undefined,
+) {
+	if (window?.utilization == null) {
+		return
+	}
+	lines.push(progressLine(label, window))
+}
+
 function progressLine(label: string, window: z.infer<ReturnType<typeof claudeWindowSchema>>) {
 	return {
 		type: 'progress' as const,
 		label,
-		used: window.utilization,
+		used: window.utilization ?? 0,
 		limit: 100,
 		format: { kind: 'percent' as const },
 		resetsAt: window.resets_at,

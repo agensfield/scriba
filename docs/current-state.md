@@ -57,11 +57,12 @@ Local token/cost reports:
 - Common rollups: today, yesterday, last 30 days, models, cache tokens, costs,
   sessions/projects where available.
 
-Remote/window metrics borrowed from OpenUsage references:
+Remote/window metrics borrowed from OpenUsage/CodexBar references:
 
-- Claude: Session, Weekly, Peak Hours, Sonnet, Claude Design, Extra usage
-  spent.
-- Codex: Session, Weekly, Spark, Spark Weekly, Reviews, Credits.
+- Claude: Peak Hours, Session, Weekly, OAuth Apps, Sonnet, Claude Design,
+  Claude Routines, Extra Claude window, Extra usage spent.
+- Codex: Plan, Session, Weekly, Spark, Spark Weekly, Reviews, Review Weekly,
+  Credits left.
 
 ## Invariants
 
@@ -112,6 +113,16 @@ Current benchmark evidence:
 - Schedules slow cost scans outside the foreground refresh group.
 - Uses a single central store plus provider descriptors, a pattern worth
   adapting for the Tauri app state.
+- Codex OAuth usage API fields observed in the ref: `plan_type`,
+  `rate_limit.primary_window`, `rate_limit.secondary_window`,
+  `code_review_rate_limit`, and `credits.balance`. Real local probe on
+  2026-05-05 returned plan `prolite`, 18% session used, and 3% weekly used;
+  code-review and credits were absent/null for the current account response.
+- Claude OAuth usage refs include aliases for `seven_day_sonnet`,
+  `seven_day_oauth_apps`, Claude Design, Claude Routines, extra spend, and
+  CodexBar's local peak-hours calculation. The current machine does not expose
+  a Claude OAuth credentials file at the standard path, so the live Claude API
+  probe returned auth unavailable.
 
 ## Open Questions
 

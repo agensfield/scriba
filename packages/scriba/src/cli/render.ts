@@ -1,7 +1,7 @@
 import ansis from 'ansis'
 import type { BenchmarkCommandResult, DatasetSummary } from '../bench/ccusage.ts'
 import type { ScannerStats } from '../local/types.ts'
-import type { MetricLine, StatusSnapshot } from '../schema/model.ts'
+import type { MetricFormat, MetricLine, StatusSnapshot } from '../schema/model.ts'
 import type { TelegramAlert } from '../telegram/alerts.ts'
 
 type ReportPayload = {
@@ -132,11 +132,24 @@ function renderMetricLine(line: MetricLine): string {
 	if (line.type === 'text') {
 		return `${muted(line.label)} ${ansis.bold(line.value)}`
 	}
+	if (line.type === 'amount') {
+		return `${muted(line.label)} ${ansis.bold(formatMetricValue(line.value, line.format))}`
+	}
 	if (line.type === 'badge') {
 		return `${muted(line.label)} ${ansis.cyan(line.text)}`
 	}
 	const percent = line.limit === 0 ? 0 : Math.round((line.used / line.limit) * 100)
-	return `${muted(line.label)} ${bar(percent)} ${ansis.bold(`${percent}%`)}`
+	return `${muted(line.label)} ${bar(percent)} ${ansis.bold(`${percent}%`)} ${muted(`(${formatMetricValue(line.used, line.format)} / ${formatMetricValue(line.limit, line.format)})`)}`
+}
+
+function formatMetricValue(value: number, format: MetricFormat): string {
+	if (format.kind === 'percent') {
+		return `${Math.round(value)}%`
+	}
+	if (format.kind === 'dollars') {
+		return `$${value.toFixed(value < 10 ? 2 : 0)}`
+	}
+	return `${Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value)} ${format.suffix}`
 }
 
 function table(headers: string[], rows: string[][]): string {

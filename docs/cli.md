@@ -17,6 +17,10 @@ bun run scriba telegram alerts
 auth is available. It writes a derived JSON snapshot and SQLite scan stats
 unless `--no-cache` is passed.
 
+Remote status lines currently include Claude peak-hours/window metrics and
+Codex plan/window metrics. Standalone balances, such as Codex credits remaining,
+are represented as `amount` lines in JSON instead of fake progress bars.
+
 ## Claude
 
 ```sh

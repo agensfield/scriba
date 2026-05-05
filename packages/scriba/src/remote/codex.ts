@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
+import type { MetricLine } from '../schema/model.ts'
 import type { FetchLike, RemoteProbeResult } from './types.ts'
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
@@ -30,18 +31,22 @@ const usageSchema = z.object({
 			primary_window: windowSchema().optional(),
 			secondary_window: windowSchema().optional(),
 		})
+		.nullable()
 		.optional(),
 	code_review_rate_limit: z
 		.object({
 			primary_window: windowSchema().optional(),
+			secondary_window: windowSchema().optional(),
 		})
+		.nullable()
 		.optional(),
 	credits: z
 		.object({
 			has_credits: z.boolean().optional(),
 			unlimited: z.boolean().optional(),
-			balance: z.number().optional(),
+			balance: z.union([z.number(), z.string()]).optional(),
 		})
+		.nullable()
 		.optional(),
 })
 
@@ -99,10 +104,14 @@ export async function probeCodexUsage(options: CodexProbeOptions = {}): Promise<
 		throw new Error(`Codex usage request failed: ${resp.status}`)
 	}
 	const parsed = usageSchema.parse(await resp.json())
-	const lines = []
+	const lines: MetricLine[] = []
 	const primary = parsed.rate_limit?.primary_window
 	const secondary = parsed.rate_limit?.secondary_window
 	const reviews = parsed.code_review_rate_limit?.primary_window
+	const weeklyReviews = parsed.code_review_rate_limit?.secondary_window
+	if (parsed.plan_type != null && parsed.plan_type !== '') {
+		lines.push({ type: 'badge', label: 'Plan', text: parsed.plan_type })
+	}
 	if (primary != null) {
 		lines.push(progressLine('Session', primary))
 	}
@@ -116,14 +125,16 @@ export async function probeCodexUsage(options: CodexProbeOptions = {}): Promise<
 	if (reviews != null) {
 		lines.push(progressLine('Reviews', reviews))
 	}
+	if (weeklyReviews != null) {
+		lines.push(progressLine('Review Weekly', weeklyReviews))
+	}
 	if (parsed.credits?.has_credits === true) {
-		lines.push({
-			type: 'progress' as const,
-			label: 'Credits',
-			used: parsed.credits.unlimited === true ? 0 : Math.max(0, parsed.credits.balance ?? 0),
-			limit: Math.max(1, parsed.credits.balance ?? 1),
-			format: { kind: 'dollars' as const },
-		})
+		const balance = Number(parsed.credits.balance ?? 0)
+		if (parsed.credits.unlimited === true) {
+			lines.push({ type: 'badge', label: 'Credits', text: 'unlimited' })
+		} else if (Number.isFinite(balance)) {
+			lines.push(amountLine('Credits left', Math.max(0, balance)))
+		}
 	}
 
 	return {
@@ -206,6 +217,15 @@ async function refreshCodexToken(
 			id_token: typeof json.id_token === 'string' ? json.id_token : auth.tokens?.id_token,
 		},
 		last_refresh: new Date().toISOString(),
+	}
+}
+
+function amountLine(label: string, value: number): MetricLine {
+	return {
+		type: 'amount',
+		label,
+		value,
+		format: { kind: 'count', suffix: 'credits' },
 	}
 }
 

@@ -36,6 +36,11 @@ export const metricLineSchema = z.discriminatedUnion('type', [
 		value: z.string(),
 	}),
 	metricBaseSchema.extend({
+		type: z.literal('amount'),
+		value: z.number().finite(),
+		format: metricFormatSchema,
+	}),
+	metricBaseSchema.extend({
 		type: z.literal('progress'),
 		used: z.number().finite(),
 		limit: z.number().finite().positive(),
