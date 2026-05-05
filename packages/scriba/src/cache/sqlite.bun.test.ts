@@ -52,6 +52,34 @@ describe('ScribaCache', () => {
 			})?.events[0]?.id,
 		).toBe('event-1')
 		expect(cache.status().fileEvents[0]?.files).toBe(1)
+		expect(cache.status().schemaVersion).toBe(1)
+		expect(cache.status().sizeBytes).toBeGreaterThan(0)
+		cache.close()
+		await resetCache({ cacheDir })
+	})
+
+	it('prunes stale file-event rows and vacuums', async () => {
+		const cacheDir = await mkdtemp('/tmp/scriba-cache-')
+		const cache = await ScribaCache.open({ cacheDir })
+		cache.saveFileEvents(
+			'codex',
+			'/tmp/deleted.jsonl',
+			{ size: 10, mtimeMs: 20 },
+			[{ id: 'event-1' }],
+			{
+				files: 1,
+				bytes: 10,
+				lines: 1,
+				events: 1,
+				invalidLines: 0,
+				duplicates: 0,
+				missingDirectories: [],
+			},
+		)
+
+		expect(cache.pruneFileEvents(new Set())).toBe(1)
+		expect(cache.status().fileEvents).toHaveLength(0)
+		cache.vacuum()
 		cache.close()
 		await resetCache({ cacheDir })
 	})

@@ -131,6 +131,17 @@ export async function buildCcusageBenchmark(options: CcusageBenchmarkOptions = {
 		execute: options.execute === true,
 		timeoutMs,
 		sampleBytes,
+		machine: {
+			platform: process.platform,
+			arch: process.arch,
+			node: process.versions.node,
+			bun: process.versions.bun ?? null,
+		},
+		tools: {
+			scriba: 'local',
+			ccusage: '18.0.11',
+			ccusageCodex: '18.0.11',
+		},
 		datasets,
 		results,
 	}

@@ -1,13 +1,18 @@
+import { writeFile } from 'node:fs/promises'
 import { defineCommand } from 'citty'
 import { buildCcusageBenchmark } from '../bench/ccusage.ts'
 import { resetCache, ScribaCache } from '../cache/sqlite.ts'
 import { loadConfig } from '../config/loader.ts'
 import type { ScribaConfig } from '../config/schema.ts'
 import { SCRIBA_PACKAGE_NAME } from '../constants.ts'
+import { buildDoctorReport } from '../doctor/check.ts'
 import { iterateCachedClaudeEvents, iterateCachedCodexEvents } from '../local/cached.ts'
 import { iterateClaudeEvents, scanClaudeLogs } from '../local/claude.ts'
 import { iterateCodexEvents } from '../local/codex.ts'
+import { isDirectory, walkJsonlFiles } from '../local/files.ts'
 import { emptyScannerStats, type LocalUsageEvent, type ScanResult } from '../local/types.ts'
+import { redactForSharing } from '../privacy/redact.ts'
+import { PROVIDER_DESCRIPTORS } from '../providers/descriptors.ts'
 import { buildClaudeBlocks } from '../reports/blocks.ts'
 import {
 	buildDailyReportFromAsync,
@@ -16,11 +21,18 @@ import {
 	buildWeeklyReportFromAsync,
 } from '../reports/stream.ts'
 import { buildJsonSchemaRegistry } from '../schema/json-schema.ts'
+import type { ProviderSnapshot, StatusSnapshot } from '../schema/model.ts'
 import { buildStatusSnapshot } from '../status/build.ts'
 import { evaluateTelegramAlerts } from '../telegram/alerts.ts'
 import { sendTelegramAlerts } from '../telegram/send.ts'
 import { VERSION } from '../version.ts'
-import { renderBenchmark, renderReport, renderStatus, renderTelegram } from './render.ts'
+import {
+	renderBenchmark,
+	renderDoctor,
+	renderReport,
+	renderStatus,
+	renderTelegram,
+} from './render.ts'
 
 function notImplemented(command: string): never {
 	throw new Error(`${command} is not implemented yet`)
@@ -30,12 +42,13 @@ function printJson(value: unknown) {
 	console.log(JSON.stringify(value, null, 2))
 }
 
-function printOutput(args: CliArgs, value: unknown, human: () => string) {
+function printOutput<T>(args: CliArgs, value: T, human: (value: T) => string) {
+	const outputValue = (args.redact === true ? redactForSharing(value) : value) as T
 	if (args.json === true) {
-		printJson(value)
+		printJson(outputValue)
 		return
 	}
-	console.log(human())
+	console.log(human(outputValue))
 }
 
 const globalArgs = {
@@ -58,6 +71,21 @@ const globalArgs = {
 	'no-cache': {
 		type: 'boolean',
 		description: 'Disable reading and writing derived cache state.',
+		default: false,
+	},
+	'no-remote': {
+		type: 'boolean',
+		description: 'Skip provider API probes and use local/cache data only.',
+		default: false,
+	},
+	fast: {
+		type: 'boolean',
+		description: 'Read the cached status snapshot without live scanning.',
+		default: false,
+	},
+	redact: {
+		type: 'boolean',
+		description: 'Redact local paths, account identifiers, and emails from output.',
 		default: false,
 	},
 } as const
@@ -93,6 +121,11 @@ const benchArgs = {
 		description: 'Per-command timeout when --execute is enabled.',
 		default: '30000',
 	},
+	out: {
+		type: 'string',
+		description: 'Write benchmark JSON artifact to this path.',
+		valueHint: 'path',
+	},
 } as const
 
 const telegramArgs = {
@@ -112,6 +145,12 @@ type CliArgs = {
 	'no-cache'?: boolean | undefined
 	cache?: boolean | undefined
 	noCache?: boolean | undefined
+	noRemote?: boolean | undefined
+	'no-remote'?: boolean | undefined
+	remote?: boolean | undefined
+	fast?: boolean | undefined
+	redact?: boolean | undefined
+	out?: string | undefined
 	since?: string | undefined
 	until?: string | undefined
 }
@@ -126,6 +165,14 @@ function cacheDirArg(args: CliArgs, config: ScribaConfig): string | undefined {
 		: typeof args.cacheDir === 'string'
 			? args.cacheDir
 			: config.cacheDir
+}
+
+function remoteDisabled(args: CliArgs): boolean {
+	return args['no-remote'] === true || args.noRemote === true || args.remote === false
+}
+
+function remoteOption(args: CliArgs): { includeRemote?: boolean } {
+	return remoteDisabled(args) ? { includeRemote: false } : {}
 }
 
 function explicitPaths(paths: string[]): string[] | undefined {
@@ -313,7 +360,7 @@ async function runClaudeSummary(args: CliArgs) {
 			},
 		},
 	})
-	printOutput(args, built.snapshot, () => renderStatus(built.snapshot))
+	printOutput(args, built.snapshot, (snapshot) => renderStatus(snapshot))
 }
 
 async function runCodexSummary(args: CliArgs) {
@@ -327,7 +374,7 @@ async function runCodexSummary(args: CliArgs) {
 			},
 		},
 	})
-	printOutput(args, built.snapshot, () => renderStatus(built.snapshot))
+	printOutput(args, built.snapshot, (snapshot) => renderStatus(snapshot))
 }
 
 async function buildStatusSnapshotForCli(
@@ -335,16 +382,74 @@ async function buildStatusSnapshotForCli(
 	options: Parameters<typeof buildStatusSnapshot>[0],
 ) {
 	if (cacheDisabled(args)) {
-		return buildStatusSnapshot(options)
+		return buildStatusSnapshot({ ...options, ...remoteOption(args) })
 	}
 	const cache = await ScribaCache.open({
 		cacheDir: cacheDirArg(args, options.config),
 	})
 	try {
-		return await buildStatusSnapshot({ ...options, cache })
+		if (args.fast === true) {
+			const snapshot = cache.loadSnapshot<StatusSnapshot>('status')
+			if (snapshot == null) {
+				throw new Error('No cached status snapshot found. Run `scriba status` first.')
+			}
+			return { snapshot, scanStats: { claude: null, codex: null }, fromCache: true }
+		}
+		try {
+			return await buildStatusSnapshot({
+				...options,
+				...remoteOption(args),
+				cache,
+			})
+		} catch (error) {
+			const snapshot = cache.loadSnapshot<StatusSnapshot>('status')
+			if (snapshot == null) {
+				throw error
+			}
+			return {
+				snapshot: markSnapshotStale(snapshot, error),
+				scanStats: { claude: null, codex: null },
+				fromCache: true,
+			}
+		}
 	} finally {
 		cache.close()
 	}
+}
+
+function markSnapshotStale(snapshot: StatusSnapshot, error: unknown): StatusSnapshot {
+	const message = error instanceof Error ? error.message : String(error)
+	return {
+		...snapshot,
+		providers: snapshot.providers.map((provider) => ({
+			...provider,
+			state: (provider.state === 'broken' ? 'broken' : 'degraded') as ProviderSnapshot['state'],
+			provenance: [
+				...provider.provenance,
+				{
+					kind: 'cache' as const,
+					providerId: provider.providerId,
+					fetchedAt: new Date().toISOString(),
+					stale: true,
+					error: message,
+				},
+			],
+		})),
+	}
+}
+
+function saveBuiltStatus(
+	cache: ScribaCache,
+	built: Awaited<ReturnType<typeof buildStatusSnapshot>>,
+) {
+	cache.saveSnapshot('status', built.snapshot, built.snapshot.generatedAt)
+	if (built.scanStats.claude != null) {
+		cache.saveScanStats('claude', built.scanStats.claude, built.snapshot.generatedAt)
+	}
+	if (built.scanStats.codex != null) {
+		cache.saveScanStats('codex', built.scanStats.codex, built.snapshot.generatedAt)
+	}
+	return cache.writeJsonSnapshot('status', built.snapshot)
 }
 
 async function runClaudeDaily(args: CliArgs) {
@@ -355,7 +460,7 @@ async function runClaudeDaily(args: CliArgs) {
 			stats: loaded.stats,
 			rows: await buildDailyReportFromAsync(loaded.events, reportOptions(loaded.config)),
 		}
-		printOutput(args, payload, () => renderReport('Claude Daily', payload))
+		printOutput(args, payload, (report) => renderReport('Claude Daily', report))
 	} finally {
 		loaded.close()
 	}
@@ -369,7 +474,7 @@ async function runClaudeWeekly(args: CliArgs) {
 			stats: loaded.stats,
 			rows: await buildWeeklyReportFromAsync(loaded.events, reportOptions(loaded.config)),
 		}
-		printOutput(args, payload, () => renderReport('Claude Weekly', payload))
+		printOutput(args, payload, (report) => renderReport('Claude Weekly', report))
 	} finally {
 		loaded.close()
 	}
@@ -383,7 +488,7 @@ async function runClaudeMonthly(args: CliArgs) {
 			stats: loaded.stats,
 			rows: await buildMonthlyReportFromAsync(loaded.events, reportOptions(loaded.config)),
 		}
-		printOutput(args, payload, () => renderReport('Claude Monthly', payload))
+		printOutput(args, payload, (report) => renderReport('Claude Monthly', report))
 	} finally {
 		loaded.close()
 	}
@@ -397,7 +502,7 @@ async function runClaudeSessions(args: CliArgs) {
 			stats: loaded.stats,
 			rows: await buildSessionReportFromAsync(loaded.events, reportOptions(loaded.config)),
 		}
-		printOutput(args, payload, () => renderReport('Claude Sessions', payload))
+		printOutput(args, payload, (report) => renderReport('Claude Sessions', report))
 	} finally {
 		loaded.close()
 	}
@@ -410,7 +515,7 @@ async function runClaudeBlocks(args: CliArgs) {
 		stats: scan.stats,
 		rows: buildClaudeBlocks(filterEvents(scan.events, args)),
 	}
-	printOutput(args, payload, () => renderReport('Claude Blocks', payload))
+	printOutput(args, payload, (report) => renderReport('Claude Blocks', report))
 }
 
 async function runCodexDaily(args: CliArgs) {
@@ -421,7 +526,7 @@ async function runCodexDaily(args: CliArgs) {
 			stats: loaded.stats,
 			rows: await buildDailyReportFromAsync(loaded.events, reportOptions(loaded.config)),
 		}
-		printOutput(args, payload, () => renderReport('Codex Daily', payload))
+		printOutput(args, payload, (report) => renderReport('Codex Daily', report))
 	} finally {
 		loaded.close()
 	}
@@ -435,7 +540,7 @@ async function runCodexWeekly(args: CliArgs) {
 			stats: loaded.stats,
 			rows: await buildWeeklyReportFromAsync(loaded.events, reportOptions(loaded.config)),
 		}
-		printOutput(args, payload, () => renderReport('Codex Weekly', payload))
+		printOutput(args, payload, (report) => renderReport('Codex Weekly', report))
 	} finally {
 		loaded.close()
 	}
@@ -449,7 +554,7 @@ async function runCodexMonthly(args: CliArgs) {
 			stats: loaded.stats,
 			rows: await buildMonthlyReportFromAsync(loaded.events, reportOptions(loaded.config)),
 		}
-		printOutput(args, payload, () => renderReport('Codex Monthly', payload))
+		printOutput(args, payload, (report) => renderReport('Codex Monthly', report))
 	} finally {
 		loaded.close()
 	}
@@ -463,7 +568,7 @@ async function runCodexSessions(args: CliArgs) {
 			stats: loaded.stats,
 			rows: await buildSessionReportFromAsync(loaded.events, reportOptions(loaded.config)),
 		}
-		printOutput(args, payload, () => renderReport('Codex Sessions', payload))
+		printOutput(args, payload, (report) => renderReport('Codex Sessions', report))
 	} finally {
 		loaded.close()
 	}
@@ -568,6 +673,62 @@ const cacheSubCommands = {
 			printJson({ ok: true, cacheDir })
 		},
 	}),
+	prune: defineCommand({
+		meta: { name: 'prune' },
+		args: globalArgs,
+		async run({ args }) {
+			const loaded = await loadCliConfig(args)
+			const cache = await ScribaCache.open({ cacheDir: cacheDirArg(args, loaded.config) })
+			try {
+				const existingPaths = await collectExistingLogPaths(loaded.config)
+				const pruned = cache.pruneFileEvents(existingPaths)
+				printJson({ ok: true, pruned, remaining: cache.status().fileEvents })
+			} finally {
+				cache.close()
+			}
+		},
+	}),
+	vacuum: defineCommand({
+		meta: { name: 'vacuum' },
+		args: globalArgs,
+		async run({ args }) {
+			const loaded = await loadCliConfig(args)
+			const cache = await ScribaCache.open({ cacheDir: cacheDirArg(args, loaded.config) })
+			try {
+				const before = cache.status().sizeBytes
+				cache.vacuum()
+				const after = cache.status().sizeBytes
+				printJson({ ok: true, beforeBytes: before, afterBytes: after })
+			} finally {
+				cache.close()
+			}
+		},
+	}),
+}
+
+async function collectExistingLogPaths(config: ScribaConfig): Promise<Set<string>> {
+	const paths = new Set<string>()
+	const dirs = [
+		...(config.providers.claude.enabled
+			? config.providers.claude.paths.length > 0
+				? config.providers.claude.paths
+				: PROVIDER_DESCRIPTORS.claude.defaultLocalPaths()
+			: []),
+		...(config.providers.codex.enabled
+			? config.providers.codex.paths.length > 0
+				? config.providers.codex.paths
+				: PROVIDER_DESCRIPTORS.codex.defaultLocalPaths()
+			: []),
+	]
+	for (const dir of dirs) {
+		if (!(await isDirectory(dir))) {
+			continue
+		}
+		for await (const filePath of walkJsonlFiles(dir)) {
+			paths.add(filePath)
+		}
+	}
+	return paths
 }
 
 const benchSubCommands = {
@@ -583,7 +744,10 @@ const benchSubCommands = {
 				execute: args.execute === true,
 				timeoutMs: normalizeTimeoutMs(args['timeout-ms']),
 			})
-			printOutput(args, payload, () => renderBenchmark(payload))
+			if (typeof args.out === 'string' && args.out !== '') {
+				await writeFile(args.out, `${JSON.stringify(redactForSharing(payload), null, 2)}\n`)
+			}
+			printOutput(args, payload, (benchmark) => renderBenchmark(benchmark))
 		},
 	}),
 }
@@ -617,7 +781,7 @@ const telegramSubCommands = {
 				alerts,
 				sent,
 			}
-			printOutput(args, payload, () => renderTelegram(payload))
+			printOutput(args, payload, (telegram) => renderTelegram(telegram))
 		},
 	}),
 }
@@ -631,6 +795,27 @@ export function createRootCommand() {
 		},
 		args: globalArgs,
 		subCommands: {
+			doctor: defineCommand({
+				meta: {
+					name: 'doctor',
+					description: 'Check local paths, auth, remote reachability, and cache health.',
+				},
+				args: globalArgs,
+				async run({ args }) {
+					const loaded = await loadCliConfig(args)
+					const cache = await ScribaCache.open({ cacheDir: cacheDirArg(args, loaded.config) })
+					try {
+						const payload = await buildDoctorReport({
+							config: loaded.config,
+							cache,
+							...remoteOption(args),
+						})
+						printOutput(args, payload, (doctor) => renderDoctor(doctor))
+					} finally {
+						cache.close()
+					}
+				},
+			}),
 			status: defineCommand({
 				meta: {
 					name: 'status',
@@ -646,23 +831,35 @@ export function createRootCommand() {
 							cacheDir: cacheDirArg(args, loaded.config),
 						})
 						try {
-							const built = await buildStatusSnapshot({ config: loaded.config, cache })
-							cache.saveSnapshot('status', built.snapshot, built.snapshot.generatedAt)
-							if (built.scanStats.claude != null) {
-								cache.saveScanStats('claude', built.scanStats.claude, built.snapshot.generatedAt)
+							const built =
+								args.fast === true
+									? {
+											snapshot: cache.loadSnapshot<StatusSnapshot>('status'),
+											scanStats: { claude: null, codex: null },
+											fromCache: true,
+										}
+									: await buildStatusSnapshot({
+											config: loaded.config,
+											cache,
+											...remoteOption(args),
+										})
+							if (built.snapshot == null) {
+								throw new Error('No cached status snapshot found. Run `scriba status` first.')
 							}
-							if (built.scanStats.codex != null) {
-								cache.saveScanStats('codex', built.scanStats.codex, built.snapshot.generatedAt)
+							if (!('fromCache' in built)) {
+								await saveBuiltStatus(cache, built)
 							}
-							await cache.writeJsonSnapshot('status', built.snapshot)
-							printOutput(args, built.snapshot, () => renderStatus(built.snapshot))
+							printOutput(args, built.snapshot, (snapshot) => renderStatus(snapshot))
 						} finally {
 							cache.close()
 						}
 						return
 					}
-					const built = await buildStatusSnapshot({ config: loaded.config })
-					printOutput(args, built.snapshot, () => renderStatus(built.snapshot))
+					const built = await buildStatusSnapshot({
+						config: loaded.config,
+						...remoteOption(args),
+					})
+					printOutput(args, built.snapshot, (snapshot) => renderStatus(snapshot))
 				},
 			}),
 			claude: defineCommand({
@@ -720,7 +917,7 @@ export function createRootCommand() {
 
 export const CLI_COMMANDS = {
 	packageName: SCRIBA_PACKAGE_NAME,
-	root: ['status', 'claude', 'codex', 'schema', 'cache', 'bench', 'telegram'],
+	root: ['doctor', 'status', 'claude', 'codex', 'schema', 'cache', 'bench', 'telegram'],
 	claude: Object.keys(claudeSubCommands),
 	codex: Object.keys(codexSubCommands),
 	cache: Object.keys(cacheSubCommands),

@@ -36,11 +36,12 @@ class of usage answers while staying resource-sane.
 
 Implemented alpha foundation:
 
-- Bun workspace with Biome, TypeScript, Vitest, and Bun SQLite tests.
+- Bun workspace with Biome, TypeScript, Vitest, and SQLite/cache tests.
 - `@agensfield/scriba` package and `scriba` CLI.
-- Dist-based package build for npm/Bun/pnpm/Yarn consumers, with Node 24+
-  `node:sqlite` cache support and Bun `bun:sqlite` support.
+- Dist-based package build for npm/Bun/pnpm/Yarn consumers, with one `libsql`
+  cache engine for Bun and Node.
 - Config discovery and schema metadata.
+- `scriba doctor` for local source/auth/remote/cache health.
 - Claude/Codex local JSONL scanners.
 - Daily, weekly, monthly, session, and Claude block report builders.
 - Human-friendly CLI output by default, with `--json` for agents.
@@ -50,6 +51,8 @@ Implemented alpha foundation:
 - Remote provider probes for Claude/Codex usage windows.
 - Telegram alert evaluator and sender.
 - Light `ccusage` benchmark harness.
+- Provider descriptor layer for labels, default paths, auth hints, reports, and
+  remote probes.
 
 Local token/cost reports:
 
@@ -74,12 +77,18 @@ Remote/window metrics borrowed from OpenUsage/CodexBar references:
   paths now reuse cached parsed file events for unchanged files.
 - SQLite cache uses WAL plus a busy timeout so concurrent cached commands do
   not immediately fail on transient reader/writer overlap.
+- Cache lifecycle has a schema version, cache size/status output, stale
+  file-event pruning, and `scriba cache vacuum`.
 - No `ccusage` subprocess dependency in the normal core path.
 - CLI output is agent-grade: JSON, predictable schema, source provenance,
   freshness, auth/cache/error state.
 - Package execution is ecosystem-compatible: the default binary is built JS for
-  npm/pnpm/Yarn/Bun installs, while cache features stay fast on Bun and work on
-  Node 24+ through `node:sqlite`.
+  npm/pnpm/Yarn/Bun installs, while cache features use `libsql` instead of a
+  runtime-specific SQLite module.
+- `scriba status --fast` reads only the cached status snapshot, and `--no-remote`
+  skips provider API probes.
+- `--redact` redacts local paths, account identifiers, and emails from JSON and
+  human output.
 - Cache deletion is safe: `scriba cache reset` can delete derived state and the
   next scan rebuilds from source logs.
 
@@ -137,9 +146,7 @@ Current benchmark evidence:
 
 ## Open Questions
 
-- SQLite library choice and native packaging implications for Tauri.
-- Whether to split CLI/Telegram/desktop into separate packages before first npm
-  publish or keep the single package longer.
+- Native packaging implications of `libsql` for the future Tauri app.
+- Whether to split CLI/Telegram/desktop into separate packages after first npm
+  publish pressure, or keep the single package longer.
 - Public command names once table output settles.
-- Port file-event cache to Claude report paths if Claude histories become a
-  bottleneck.

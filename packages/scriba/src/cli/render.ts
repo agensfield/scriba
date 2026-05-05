@@ -1,5 +1,6 @@
 import ansis from 'ansis'
 import type { BenchmarkCommandResult, DatasetSummary } from '../bench/ccusage.ts'
+import type { DoctorPayload, DoctorState } from '../doctor/check.ts'
 import type { ScannerStats } from '../local/types.ts'
 import type { MetricFormat, MetricLine, StatusSnapshot } from '../schema/model.ts'
 import type { TelegramAlert } from '../telegram/alerts.ts'
@@ -14,6 +15,13 @@ type BenchmarkPayload = {
 	generatedAt: string
 	execute: boolean
 	timeoutMs: number
+	machine?: {
+		platform: string
+		arch: string
+		node: string
+		bun: string | null
+	}
+	tools?: Record<string, string>
 	datasets: DatasetSummary[]
 	results: BenchmarkCommandResult[]
 }
@@ -28,7 +36,7 @@ type TelegramPayload = {
 export function renderStatus(snapshot: StatusSnapshot): string {
 	const lines = [header('Scriba Status'), muted(`generated ${snapshot.generatedAt}`), '']
 	for (const provider of snapshot.providers) {
-		lines.push(ansis.bold(provider.displayName))
+		lines.push(providerHeader(provider.displayName))
 		for (const line of provider.lines) {
 			lines.push(`  ${renderMetricLine(line)}`)
 		}
@@ -128,18 +136,60 @@ export function renderTelegram(payload: TelegramPayload): string {
 	return lines.join('\n')
 }
 
+export function renderDoctor(payload: DoctorPayload): string {
+	const lines = [
+		header('Scriba Doctor'),
+		`${stateLabel(payload.state)} ${muted(`generated ${payload.generatedAt}`)}`,
+		'',
+		providerHeader('Cache'),
+		`  ${label('State')} ${stateLabel(payload.cache.state)}`,
+		`  ${label('Path')} ${payload.cache.databasePath}`,
+		`  ${label('Size')} ${formatBytes(payload.cache.sizeBytes)}`,
+		`  ${label('Schema')} ${value(String(payload.cache.schemaVersion))}`,
+		`  ${label('WAL')} ${payload.cache.walEnabled ? badge('enabled') : ansis.yellowBright.bold('disabled')}`,
+		`  ${label('Snapshot age')} ${payload.cache.latestSnapshotAgeMs == null ? ansis.yellowBright.bold('none') : value(duration(payload.cache.latestSnapshotAgeMs))}`,
+		'',
+	]
+	for (const provider of payload.providers) {
+		lines.push(
+			providerHeader(provider.displayName),
+			`  ${label('State')} ${stateLabel(provider.state)}`,
+		)
+		for (const path of provider.localPaths) {
+			lines.push(
+				`  ${label('Source')} ${path.exists ? badge('found') : ansis.yellowBright.bold('missing')} ${path.path}`,
+			)
+		}
+		const foundAuth = provider.auth.paths.filter((path) => path.exists)
+		lines.push(
+			`  ${label('Auth')} ${foundAuth.length > 0 ? badge('found') : ansis.yellowBright.bold('missing')} ${foundAuth.length > 0 ? foundAuth.map((path) => path.path).join(', ') : provider.auth.hint}`,
+		)
+		lines.push(
+			`  ${label('Remote')} ${
+				provider.remote.state === 'skipped'
+					? ansis.blueBright('skipped')
+					: provider.remote.state === 'ok'
+						? badge('ok')
+						: ansis.yellowBright.bold(provider.remote.error ?? provider.remote.state)
+			}`,
+		)
+		lines.push('')
+	}
+	return lines.join('\n').trimEnd()
+}
+
 function renderMetricLine(line: MetricLine): string {
 	if (line.type === 'text') {
-		return `${muted(line.label)} ${ansis.bold(line.value)}`
+		return `${label(line.label)} ${value(line.value)}`
 	}
 	if (line.type === 'amount') {
-		return `${muted(line.label)} ${ansis.bold(formatMetricValue(line.value, line.format))}`
+		return `${label(line.label)} ${value(formatMetricValue(line.value, line.format))}`
 	}
 	if (line.type === 'badge') {
-		return `${muted(line.label)} ${ansis.cyan(line.text)}`
+		return `${label(line.label)} ${badge(line.text)}`
 	}
 	const percent = line.limit === 0 ? 0 : Math.round((line.used / line.limit) * 100)
-	return `${muted(line.label)} ${bar(percent)} ${ansis.bold(`${percent}%`)} ${muted(`(${formatMetricValue(line.used, line.format)} / ${formatMetricValue(line.limit, line.format)})`)}`
+	return `${label(line.label)} ${bar(percent)} ${percentValue(percent)} ${muted(`used ${formatMetricValue(line.used, line.format)} of ${formatMetricValue(line.limit, line.format)}`)}`
 }
 
 function formatMetricValue(value: number, format: MetricFormat): string {
@@ -158,9 +208,10 @@ function table(headers: string[], rows: string[][]): string {
 	)
 	const formatRow = (row: string[]) =>
 		row.map((value, index) => value.padStart(widths[index] ?? 0)).join('  ')
-	return [formatRow(headers.map((heading) => ansis.gray(heading))), ...rows.map(formatRow)].join(
-		'\n',
-	)
+	return [
+		formatRow(headers.map((heading) => ansis.cyanBright.bold(heading))),
+		...rows.map(formatRow),
+	].join('\n')
 }
 
 function firstPresentKey(rows: Record<string, unknown>[], keys: string[]): string | undefined {
@@ -196,11 +247,27 @@ function formatBytes(value: number): string {
 }
 
 function header(value: string): string {
-	return ansis.bold.cyan(value)
+	return ansis.cyanBright.bold(value)
 }
 
 function muted(value: string): string {
-	return ansis.gray(value)
+	return ansis.blueBright(value)
+}
+
+function label(value: string): string {
+	return ansis.cyan(value)
+}
+
+function value(text: string): string {
+	return ansis.whiteBright.bold(text)
+}
+
+function badge(text: string): string {
+	return ansis.greenBright.bold(text)
+}
+
+function providerHeader(value: string): string {
+	return ansis.whiteBright.bold(value)
 }
 
 function providerLabel(value: string): string {
@@ -211,10 +278,39 @@ function providerLabel(value: string): string {
 			: value
 }
 
+function stateLabel(state: DoctorState): string {
+	return state === 'ok'
+		? ansis.greenBright.bold('ok')
+		: state === 'degraded'
+			? ansis.yellowBright.bold('degraded')
+			: ansis.redBright.bold('broken')
+}
+
+function duration(ms: number): string {
+	const seconds = Math.round(ms / 1000)
+	if (seconds < 60) {
+		return `${seconds}s`
+	}
+	const minutes = Math.round(seconds / 60)
+	if (minutes < 60) {
+		return `${minutes}m`
+	}
+	const hours = Math.round(minutes / 60)
+	return `${hours}h`
+}
+
 function bar(percent: number): string {
 	const clamped = Math.max(0, Math.min(percent, 100))
-	const filled = Math.round(clamped / 10)
-	return `${ansis.green('█'.repeat(filled))}${ansis.gray('░'.repeat(10 - filled))}`
+	const filled = Math.round(clamped / 5)
+	const color =
+		clamped >= 90 ? ansis.redBright : clamped >= 70 ? ansis.yellowBright : ansis.greenBright
+	return `${color('▰'.repeat(filled))}${'▱'.repeat(20 - filled)}`
+}
+
+function percentValue(percent: number): string {
+	const color =
+		percent >= 90 ? ansis.redBright : percent >= 70 ? ansis.yellowBright : ansis.whiteBright
+	return color.bold(`${percent}%`)
 }
 
 function strip(value: string): string {

@@ -57,6 +57,7 @@ export const metricLineSchema = z.discriminatedUnion('type', [
 export const providerSnapshotSchema = z.object({
 	providerId: providerIdSchema,
 	displayName: z.string().min(1),
+	state: z.enum(['ok', 'degraded', 'broken']).default('ok'),
 	plan: z.string().optional(),
 	lines: z.array(metricLineSchema),
 	provenance: z.array(sourceProvenanceSchema),

@@ -4,6 +4,7 @@ import { CLI_COMMANDS, createRootCommand } from './command.ts'
 describe('CLI command surface', () => {
 	it('declares the alpha command groups', () => {
 		expect(CLI_COMMANDS.root).toEqual([
+			'doctor',
 			'status',
 			'claude',
 			'codex',
@@ -29,7 +30,7 @@ describe('CLI command surface', () => {
 			'sessions',
 			'session',
 		])
-		expect(CLI_COMMANDS.cache).toEqual(['status', 'reset'])
+		expect(CLI_COMMANDS.cache).toEqual(['status', 'reset', 'prune', 'vacuum'])
 		expect(CLI_COMMANDS.bench).toEqual(['ccusage'])
 		expect(CLI_COMMANDS.telegram).toEqual(['alerts'])
 	})

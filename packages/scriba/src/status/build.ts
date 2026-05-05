@@ -4,6 +4,7 @@ import { iterateCachedClaudeEvents, iterateCachedCodexEvents } from '../local/ca
 import { iterateClaudeEvents } from '../local/claude.ts'
 import { iterateCodexEvents } from '../local/codex.ts'
 import { emptyScannerStats, type ScannerStats } from '../local/types.ts'
+import { PROVIDER_DESCRIPTORS } from '../providers/descriptors.ts'
 import { probeClaudeUsage } from '../remote/claude.ts'
 import { probeCodexUsage } from '../remote/codex.ts'
 import { buildDailyReportFromAsync } from '../reports/stream.ts'
@@ -41,7 +42,13 @@ export async function buildStatusSnapshot(options: BuildStatusOptions): Promise<
 			{ order: 'desc' },
 		)
 		scanStats.claude = stats
-		const provider = providerFromDailyReports('claude', 'Claude', daily, generatedAt)
+		const provider = providerFromDailyReports(
+			'claude',
+			PROVIDER_DESCRIPTORS.claude.displayName,
+			daily,
+			stats,
+			generatedAt,
+		)
 		if (options.includeRemote !== false) {
 			await appendRemoteLines(provider, () => probeClaudeUsage())
 		}
@@ -58,7 +65,13 @@ export async function buildStatusSnapshot(options: BuildStatusOptions): Promise<
 			{ order: 'desc' },
 		)
 		scanStats.codex = stats
-		const provider = providerFromDailyReports('codex', 'Codex', daily, generatedAt)
+		const provider = providerFromDailyReports(
+			'codex',
+			PROVIDER_DESCRIPTORS.codex.displayName,
+			daily,
+			stats,
+			generatedAt,
+		)
 		if (options.includeRemote !== false) {
 			await appendRemoteLines(provider, () => probeCodexUsage())
 		}
@@ -83,6 +96,7 @@ function providerFromDailyReports(
 	providerId: 'claude' | 'codex',
 	displayName: string,
 	daily: Awaited<ReturnType<typeof buildDailyReportFromAsync>>,
+	stats: ScannerStats,
 	generatedAt: string,
 ): ProviderSnapshot {
 	const todayKey = generatedAt.slice(0, 10)
@@ -116,6 +130,7 @@ function providerFromDailyReports(
 	return {
 		providerId,
 		displayName,
+		state: stats.missingDirectories.length > 0 ? 'degraded' : 'ok',
 		lines,
 		provenance: [{ kind: 'local-log', providerId, fetchedAt: generatedAt }],
 	}
@@ -140,5 +155,6 @@ async function appendRemoteLines(
 			fetchedAt: new Date().toISOString(),
 			error: error instanceof Error ? error.message : String(error),
 		})
+		provider.state = provider.state === 'broken' ? 'broken' : 'degraded'
 	}
 }

@@ -57,10 +57,13 @@ Current cache-backed status/report evidence after the Claude cache parity pass:
 
 ```sh
 bun run scriba bench ccusage --provider codex --execute --timeout-ms 30000
+bun run scriba bench ccusage --provider codex --out bench.json
 ```
 
 Execution is sequential. Each command has its own timeout. Stdout/stderr samples
 are capped so a broken reference command cannot flood the agent context.
+`--out` writes the JSON artifact, including machine metadata and pinned
+reference tool versions.
 
 The current command set is deliberately small:
 

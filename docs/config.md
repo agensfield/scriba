@@ -51,4 +51,7 @@ Empty provider `paths` means Scriba uses provider defaults:
 - Codex: `${CODEX_HOME:-~/.codex}/sessions`.
 
 `cacheDir` defaults to the user cache directory. The cache is derived state only
-and can be rebuilt from local logs plus provider APIs.
+and can be rebuilt from local logs plus provider APIs. `scriba cache status`
+shows cache size, schema version, WAL state, snapshots, scan stats, and cached
+file-event counts. `scriba cache prune` removes file-event rows for deleted log
+files, and `scriba cache vacuum` compacts the SQLite file.

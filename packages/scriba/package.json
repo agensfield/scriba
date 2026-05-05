@@ -18,8 +18,9 @@
 		"dist"
 	],
 	"scripts": {
-		"build": "node scripts/clean-dist.mjs && bun build src/cli.ts --target node --format esm --outfile dist/cli.js --minify && bun build src/index.ts --target node --format esm --outfile dist/index.js --minify && tsc -p tsconfig.json --outDir dist && node scripts/fix-build.mjs",
+		"build": "node scripts/clean-dist.mjs && bun build src/cli.ts --target node --format esm --external libsql --outfile dist/cli.js --minify && bun build src/index.ts --target node --format esm --external libsql --outfile dist/index.js --minify && tsc -p tsconfig.json --outDir dist && node scripts/fix-build.mjs",
 		"prepack": "bun run build",
+		"smoke:package": "node scripts/smoke-package.mjs",
 		"lint": "biome check .",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"test": "vitest run --exclude 'src/**/*.bun.test.ts' && bun test ./src/cache/sqlite.bun.test.ts ./src/local/cached.bun.test.ts",
@@ -28,10 +29,11 @@
 	"dependencies": {
 		"ansis": "^4.2.0",
 		"citty": "^0.2.2",
+		"libsql": "0.5.29",
 		"zod": "^4.2.1"
 	},
 	"engines": {
 		"bun": ">=1.2.0",
-		"node": ">=24.0.0"
+		"node": ">=22.0.0"
 	}
 }

@@ -4,7 +4,7 @@ import { SCHEMA_VERSION, type StatusSnapshot } from '../schema/model.ts'
 import { resetCache, ScribaCache } from './sqlite.ts'
 
 describe('ScribaCache on Node', () => {
-	it('stores snapshots through node:sqlite', async () => {
+	it('stores snapshots through libsql', async () => {
 		const cacheDir = await mkdtemp('/tmp/scriba-node-cache-')
 		const cache = await ScribaCache.open({ cacheDir })
 		const snapshot: StatusSnapshot = {

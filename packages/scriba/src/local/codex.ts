@@ -185,6 +185,7 @@ export async function parseCodexFile(
 		}
 
 		const extractedModel = extractModel({ ...payload.data, info: infoRecord })
+		const isFallbackModel = extractedModel == null && currentModel == null
 		const model = extractedModel ?? currentModel ?? 'gpt-5'
 		currentModel = model
 		const relativePath = relative(baseDir, filePath).split(/[\\/]/).join('/')
@@ -205,7 +206,7 @@ export async function parseCodexFile(
 			sourcePath: filePath,
 			directory: dirname(relativePath),
 			sessionFile: basename(relativePath),
-			isFallbackModel: extractedModel == null && currentModel == null,
+			isFallbackModel,
 		})
 		stats.events += 1
 	}

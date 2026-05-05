@@ -6,16 +6,50 @@ is the default; pass `--json` for the machine-readable agent contract.
 ## Root
 
 ```sh
+bun run scriba doctor
+bun run scriba doctor --no-remote --json
 bun run scriba status
+bun run scriba status --fast
+bun run scriba status --no-remote
+bun run scriba status --redact --json
 bun run scriba schema
 bun run scriba cache status
 bun run scriba cache reset
+bun run scriba cache prune
+bun run scriba cache vacuum
 bun run scriba telegram alerts
 ```
 
 `status` composes local log summaries and remote provider-window probes when
 auth is available. It writes a derived JSON snapshot and SQLite scan stats
 unless `--no-cache` is passed.
+
+`doctor` checks local source directories, auth files, remote reachability, cache
+schema/WAL state, cache size, and latest snapshot age. It reports `ok`,
+`degraded`, or `broken` in human and JSON output.
+
+`--fast` reads the cached status snapshot only. It is intended for menu bar,
+Telegram, and agent reads that should not trigger a foreground scan. `--no-remote`
+skips provider API probes. `--redact` removes paths, account identifiers, and
+emails from output before sharing.
+
+Stable JSON shape example:
+
+```json
+{
+  "schemaVersion": "scriba.alpha.v1",
+  "generatedAt": "2026-05-05T13:00:00.000Z",
+  "providers": [
+    {
+      "providerId": "codex",
+      "displayName": "Codex",
+      "state": "ok",
+      "lines": [],
+      "provenance": []
+    }
+  ]
+}
+```
 
 Remote status lines currently include Claude peak-hours/window metrics and
 Codex plan/window metrics. Standalone balances, such as Codex credits remaining,
@@ -33,9 +67,8 @@ pnpm dlx @agensfield/scriba status
 yarn dlx @agensfield/scriba status
 ```
 
-Cache-backed commands use `bun:sqlite` under Bun and `node:sqlite` under Node
-24+. Older Node versions should run uncached commands with `--no-cache` or use
-Bun.
+Cache-backed commands use `libsql`, so the same built package works under Bun
+and Node without runtime-specific SQLite imports.
 
 ## Claude
 
@@ -69,6 +102,7 @@ Codex local scanning reads `${CODEX_HOME:-~/.codex}/sessions/**/*.jsonl`.
 ```sh
 bun run scriba bench ccusage --provider all
 bun run scriba bench ccusage --provider codex --execute --timeout-ms 30000
+bun run scriba bench ccusage --provider codex --out bench.json
 ```
 
 Without `--execute`, the benchmark only summarizes local dataset size and prints

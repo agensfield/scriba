@@ -1,12 +1,18 @@
+import { existsSync, statSync } from 'node:fs'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import Database from 'libsql'
 import type { ScannerStats } from '../local/types.ts'
 import type { ProviderId, StatusSnapshot } from '../schema/model.ts'
 import { resolveCacheDir } from './paths.ts'
 
+export const CACHE_SCHEMA_VERSION = 1
+
 export type CacheStatus = {
 	cacheDir: string
 	databasePath: string
+	schemaVersion: number
+	sizeBytes: number
 	snapshots: Array<{
 		name: string
 		updatedAt: string
@@ -21,6 +27,11 @@ export type CacheStatus = {
 		files: number
 		updatedAt: string
 	}>
+	wal: {
+		enabled: boolean
+		mode: string
+		busyTimeoutMs: number
+	}
 }
 
 export type CachedFileEvents<T> = {
@@ -55,6 +66,10 @@ export class ScribaCache {
 				json text not null,
 				updated_at text not null
 			);
+			create table if not exists meta (
+				key text primary key,
+				value text not null
+			);
 			create table if not exists scan_stats (
 				provider_id text primary key,
 				json text not null,
@@ -71,12 +86,13 @@ export class ScribaCache {
 				primary key (provider_id, path)
 			);
 		`)
+		this.ensureSchemaVersion()
 	}
 
 	static async open(options: ScribaCacheOptions = {}): Promise<ScribaCache> {
 		const cacheDir = resolveCacheDir(options.cacheDir, options.env)
 		await mkdir(cacheDir, { recursive: true })
-		return new ScribaCache(await openCacheDatabase(join(cacheDir, 'scriba.sqlite')), {
+		return new ScribaCache(openCacheDatabase(join(cacheDir, 'scriba.sqlite')), {
 			...options,
 			cacheDir,
 		})
@@ -153,6 +169,17 @@ export class ScribaCache {
 	}
 
 	status(): CacheStatus {
+		const schemaVersion =
+			Number(
+				(
+					this.db.query('select value from meta where key = ?').get('schema_version') as
+						| { value: string }
+						| undefined
+				)?.value,
+			) || 0
+		const walMode = (
+			this.db.query('pragma journal_mode').get() as { journal_mode?: string } | undefined
+		)?.journal_mode
 		const snapshots = this.db
 			.query('select name, updated_at as updatedAt from snapshots order by name')
 			.all() as CacheStatus['snapshots']
@@ -169,6 +196,8 @@ export class ScribaCache {
 		return {
 			cacheDir: this.cacheDir,
 			databasePath: this.databasePath,
+			schemaVersion,
+			sizeBytes: databaseSizeBytes(this.databasePath),
 			snapshots,
 			scanStats: scanStats.map((row) => ({
 				providerId: row.providerId,
@@ -176,7 +205,41 @@ export class ScribaCache {
 				stats: JSON.parse(row.json) as ScannerStats,
 			})),
 			fileEvents,
+			wal: {
+				enabled: walMode === 'wal',
+				mode: walMode ?? 'unknown',
+				busyTimeoutMs: 5000,
+			},
 		}
+	}
+
+	pruneFileEvents(existingPaths: Set<string>, updatedAt = new Date().toISOString()): number {
+		let pruned = 0
+		const rows = this.db
+			.query('select provider_id as providerId, path from file_events')
+			.all() as Array<{
+			providerId: ProviderId
+			path: string
+		}>
+		for (const row of rows) {
+			if (existingPaths.has(row.path)) {
+				continue
+			}
+			this.db
+				.query('delete from file_events where provider_id = ? and path = ?')
+				.run(row.providerId, row.path)
+			pruned += 1
+		}
+		if (pruned > 0) {
+			this.db
+				.query('insert or replace into meta (key, value) values (?, ?)')
+				.run('last_pruned_at', updatedAt)
+		}
+		return pruned
+	}
+
+	vacuum(): void {
+		this.db.exec('vacuum')
 	}
 
 	async writeJsonSnapshot(name: string, snapshot: StatusSnapshot): Promise<string> {
@@ -187,6 +250,23 @@ export class ScribaCache {
 
 	close(): void {
 		this.db.close()
+	}
+
+	private ensureSchemaVersion(): void {
+		const row = this.db.query('select value from meta where key = ?').get('schema_version') as
+			| { value: string }
+			| undefined
+		const version = Number(row?.value ?? 0)
+		if (version > 0 && version !== CACHE_SCHEMA_VERSION) {
+			this.db.exec(`
+				delete from snapshots;
+				delete from scan_stats;
+				delete from file_events;
+			`)
+		}
+		this.db
+			.query('insert or replace into meta (key, value) values (?, ?)')
+			.run('schema_version', String(CACHE_SCHEMA_VERSION))
 	}
 }
 
@@ -200,52 +280,11 @@ type CacheDatabase = {
 	close(): void
 }
 
-async function openCacheDatabase(databasePath: string): Promise<CacheDatabase> {
-	if (isBunRuntime()) {
-		return openBunDatabase(databasePath)
-	}
-	return openNodeDatabase(databasePath)
+function openCacheDatabase(databasePath: string): CacheDatabase {
+	return new LibsqlCacheDatabase(new Database(databasePath))
 }
 
-function isBunRuntime(): boolean {
-	return typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined'
-}
-
-async function openBunDatabase(databasePath: string): Promise<CacheDatabase> {
-	const module = (await import('bun:sqlite')) as {
-		Database: new (path: string, options: { create: boolean }) => CacheDatabase
-	}
-	return new module.Database(databasePath, { create: true })
-}
-
-async function openNodeDatabase(databasePath: string): Promise<CacheDatabase> {
-	const module = (await importNodeSqlite()) as {
-		DatabaseSync?: new (path: string) => NodeSqliteDatabase
-	}
-	if (module.DatabaseSync == null) {
-		throw new Error('node:sqlite DatabaseSync is unavailable. Use Node >=24 or run with Bun.')
-	}
-	return new NodeCacheDatabase(new module.DatabaseSync(databasePath))
-}
-
-async function importNodeSqlite(): Promise<unknown> {
-	const emitWarning = process.emitWarning
-	process.emitWarning = ((warning: string | Error, ...args: unknown[]) => {
-		if (String(warning).includes('SQLite is an experimental feature')) {
-			return
-		}
-		return Reflect.apply(emitWarning, process, [warning, ...args])
-	}) as typeof process.emitWarning
-	try {
-		return await import('node:sqlite')
-	} catch (error) {
-		throw new Error('SQLite cache requires Bun or Node >=24 with node:sqlite.', { cause: error })
-	} finally {
-		process.emitWarning = emitWarning
-	}
-}
-
-type NodeSqliteDatabase = {
+type LibsqlDatabase = {
 	exec(sql: string): unknown
 	prepare(sql: string): {
 		run(...args: unknown[]): unknown
@@ -255,8 +294,8 @@ type NodeSqliteDatabase = {
 	close(): void
 }
 
-class NodeCacheDatabase implements CacheDatabase {
-	constructor(private readonly database: NodeSqliteDatabase) {}
+class LibsqlCacheDatabase implements CacheDatabase {
+	constructor(private readonly database: LibsqlDatabase) {}
 
 	exec(sql: string): unknown {
 		return this.database.exec(sql)
@@ -274,6 +313,11 @@ class NodeCacheDatabase implements CacheDatabase {
 	close(): void {
 		this.database.close()
 	}
+}
+
+function databaseSizeBytes(databasePath: string): number {
+	const paths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]
+	return paths.reduce((sum, path) => sum + (existsSync(path) ? statSync(path).size : 0), 0)
 }
 
 export async function resetCache(options: ScribaCacheOptions = {}): Promise<string> {

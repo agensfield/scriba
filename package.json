@@ -9,6 +9,7 @@
 	"scripts": {
 		"scriba": "bun run --cwd packages/scriba src/cli.ts",
 		"build": "bun --filter @agensfield/scriba build",
+		"smoke:package": "bun --filter @agensfield/scriba smoke:package",
 		"lint": "biome check .",
 		"format": "biome check --write .",
 		"typecheck": "bun --filter @agensfield/scriba typecheck",
