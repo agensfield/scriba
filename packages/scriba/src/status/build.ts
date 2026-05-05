@@ -1,4 +1,6 @@
+import type { ScribaCache } from '../cache/sqlite.ts'
 import type { ScribaConfig } from '../config/schema.ts'
+import { iterateCachedClaudeEvents, iterateCachedCodexEvents } from '../local/cached.ts'
 import { iterateClaudeEvents } from '../local/claude.ts'
 import { iterateCodexEvents } from '../local/codex.ts'
 import { emptyScannerStats, type ScannerStats } from '../local/types.ts'
@@ -14,6 +16,7 @@ import {
 
 export type BuildStatusOptions = {
 	config: ScribaConfig
+	cache?: ScribaCache | undefined
 	now?: Date
 	includeRemote?: boolean
 }
@@ -30,8 +33,11 @@ export async function buildStatusSnapshot(options: BuildStatusOptions): Promise<
 
 	if (options.config.providers.claude.enabled) {
 		const stats = emptyScannerStats()
+		const paths = optionPaths(options.config.providers.claude.paths)
 		const daily = await buildDailyReportFromAsync(
-			iterateClaudeEvents({ paths: optionPaths(options.config.providers.claude.paths), stats }),
+			options.cache == null
+				? iterateClaudeEvents({ paths, stats })
+				: iterateCachedClaudeEvents({ cache: options.cache, paths, stats }),
 			{ order: 'desc' },
 		)
 		scanStats.claude = stats
@@ -44,8 +50,11 @@ export async function buildStatusSnapshot(options: BuildStatusOptions): Promise<
 
 	if (options.config.providers.codex.enabled) {
 		const stats = emptyScannerStats()
+		const paths = optionPaths(options.config.providers.codex.paths)
 		const daily = await buildDailyReportFromAsync(
-			iterateCodexEvents({ paths: optionPaths(options.config.providers.codex.paths), stats }),
+			options.cache == null
+				? iterateCodexEvents({ paths, stats })
+				: iterateCachedCodexEvents({ cache: options.cache, paths, stats }),
 			{ order: 'desc' },
 		)
 		scanStats.codex = stats

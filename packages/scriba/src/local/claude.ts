@@ -3,7 +3,12 @@ import { join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import { fileSize, isDirectory, walkJsonlFiles } from './files.ts'
 import { readJsonlLines } from './jsonl.ts'
-import { emptyScannerStats, type LocalUsageEvent, type ScanResult } from './types.ts'
+import {
+	emptyScannerStats,
+	type LocalUsageEvent,
+	type ScannerStats,
+	type ScanResult,
+} from './types.ts'
 
 const claudeUsageSchema = z.object({
 	cwd: z.string().optional(),
@@ -80,62 +85,89 @@ export async function* iterateClaudeEvents(
 		}
 
 		for await (const filePath of walkJsonlFiles(dir)) {
-			stats.files += 1
-			stats.bytes += await fileSize(filePath)
-			for await (const { line } of readJsonlLines(filePath)) {
-				stats.lines += 1
-				let parsed: unknown
-				try {
-					parsed = JSON.parse(line)
-				} catch {
-					stats.invalidLines += 1
-					continue
-				}
-
-				const result = claudeUsageSchema.safeParse(parsed)
-				if (!result.success) {
-					continue
-				}
-
-				const data = result.data
-				const uniqueKey =
-					data.message.id != null && data.requestId != null
-						? `${data.message.id}:${data.requestId}`
-						: undefined
-				if (uniqueKey != null && seen.has(uniqueKey)) {
+			const parsed = await parseClaudeFile(dir, filePath)
+			addFileStats(stats, parsed.stats)
+			for (const event of parsed.events) {
+				if (event.uniqueKey != null && seen.has(event.uniqueKey)) {
 					stats.duplicates += 1
 					continue
 				}
-				if (uniqueKey != null) {
-					seen.add(uniqueKey)
-				}
-
-				const usage = data.message.usage
-				const inputTokens = usage.input_tokens
-				const outputTokens = usage.output_tokens
-				const cacheCreationTokens = usage.cache_creation_input_tokens
-				const cacheReadTokens = usage.cache_read_input_tokens
-
-				yield {
-					providerId: 'claude',
-					sessionId: data.sessionId ?? sessionFromPath(dir, filePath),
-					timestamp: data.timestamp,
-					model: data.message.model ?? 'unknown',
-					project: projectFromPath(dir, filePath),
-					projectPath: data.cwd,
-					inputTokens,
-					outputTokens,
-					cacheCreationTokens,
-					cacheReadTokens,
-					cachedInputTokens: cacheReadTokens,
-					reasoningOutputTokens: 0,
-					totalTokens: inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens,
-					costUSD: data.costUSD ?? null,
-					uniqueKey,
-					sourcePath: filePath,
+				if (event.uniqueKey != null) {
+					seen.add(event.uniqueKey)
 				}
 				stats.events += 1
+				yield event
 			}
 		}
 	}
+}
+
+export async function parseClaudeFile(
+	projectsDir: string,
+	filePath: string,
+): Promise<{ events: LocalUsageEvent[]; stats: ScannerStats }> {
+	const stats = emptyScannerStats()
+	const events: LocalUsageEvent[] = []
+	stats.files += 1
+	stats.bytes += await fileSize(filePath)
+
+	for await (const { line } of readJsonlLines(filePath)) {
+		stats.lines += 1
+		let parsed: unknown
+		try {
+			parsed = JSON.parse(line)
+		} catch {
+			stats.invalidLines += 1
+			continue
+		}
+
+		const result = claudeUsageSchema.safeParse(parsed)
+		if (!result.success) {
+			continue
+		}
+
+		const data = result.data
+		const uniqueKey =
+			data.message.id != null && data.requestId != null
+				? `${data.message.id}:${data.requestId}`
+				: undefined
+		const usage = data.message.usage
+		const inputTokens = usage.input_tokens
+		const outputTokens = usage.output_tokens
+		const cacheCreationTokens = usage.cache_creation_input_tokens
+		const cacheReadTokens = usage.cache_read_input_tokens
+
+		events.push({
+			providerId: 'claude',
+			sessionId: data.sessionId ?? sessionFromPath(projectsDir, filePath),
+			timestamp: data.timestamp,
+			model: data.message.model ?? 'unknown',
+			project: projectFromPath(projectsDir, filePath),
+			projectPath: data.cwd,
+			inputTokens,
+			outputTokens,
+			cacheCreationTokens,
+			cacheReadTokens,
+			cachedInputTokens: cacheReadTokens,
+			reasoningOutputTokens: 0,
+			totalTokens: inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens,
+			costUSD: data.costUSD ?? null,
+			uniqueKey,
+			sourcePath: filePath,
+		})
+	}
+
+	return { events, stats }
+}
+
+export function addClaudeParsedFileStats(target: ScannerStats, stats: ScannerStats): void {
+	addFileStats(target, stats)
+}
+
+function addFileStats(target: ScannerStats, stats: ScannerStats): void {
+	target.files += stats.files
+	target.bytes += stats.bytes
+	target.lines += stats.lines
+	target.invalidLines += stats.invalidLines
+	target.missingDirectories.push(...stats.missingDirectories)
 }

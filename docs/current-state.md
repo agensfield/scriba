@@ -69,9 +69,10 @@ Remote/window metrics borrowed from OpenUsage/CodexBar references:
 - Bounded-memory cold scan. The scanner reads JSONL line-by-line and the main
   report/status paths aggregate from async iterators. Claude blocks still sorts
   raw events because the block algorithm is chronological.
-- Fast incremental refresh after first scan. SQLite cache primitives exist;
-  Codex report paths now reuse cached parsed file events for unchanged files.
-  Claude report paths still need the same treatment.
+- Fast incremental refresh after first scan. Claude and Codex report/status
+  paths now reuse cached parsed file events for unchanged files.
+- SQLite cache uses WAL plus a busy timeout so concurrent cached commands do
+  not immediately fail on transient reader/writer overlap.
 - No `ccusage` subprocess dependency in the normal core path.
 - CLI output is agent-grade: JSON, predictable schema, source provenance,
   freshness, auth/cache/error state.
@@ -98,6 +99,13 @@ Current benchmark evidence:
   156,205,056 bytes max RSS.
 - `ccusage-codex daily --json` via `bunx -p @ccusage/codex@18.0.11`: 24.73s
   real, 6,893,535,232 bytes max RSS on the same history.
+- Scriba `status --json --no-cache`: 8.50s real, 1,023,508,480 bytes max RSS.
+- Scriba `status --json` cold after cache reset: 8.94s real, 992,968,704
+  bytes max RSS.
+- Scriba `status --json` warm after cache population: 1.00s real, 218,202,112
+  bytes max RSS.
+- Scriba `claude daily --json` warm with file-event cache: 0.20s real,
+  121,667,584 bytes max RSS.
 
 `openusage`:
 

@@ -46,6 +46,10 @@ export class ScribaCache {
 		this.databasePath = join(this.cacheDir, 'scriba.sqlite')
 		this.db = db
 		this.db.exec(`
+			pragma journal_mode = wal;
+			pragma busy_timeout = 5000;
+		`)
+		this.db.exec(`
 			create table if not exists snapshots (
 				name text primary key,
 				json text not null,

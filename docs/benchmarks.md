@@ -35,6 +35,24 @@ Current Codex baseline on the same local history:
   completed in 19,822ms, monthly timed out at 30,151ms, session completed in
   19,232ms.
 
+Current cache-backed status/report evidence after the Claude cache parity pass:
+
+- `bun run scriba status --json --no-cache`: 8.50s real, 1,023,508,480 bytes
+  max RSS.
+- `bun run scriba status --json` cold after `scriba cache reset`: 8.94s real,
+  992,968,704 bytes max RSS. This populates both Claude and Codex parsed
+  file-event caches.
+- `bun run scriba status --json` warm immediately after that cold run: 1.00s
+  real, 218,202,112 bytes max RSS.
+- `bun run scriba claude daily --json --no-cache`: 1.94s real, 570,638,336
+  bytes max RSS.
+- `bun run scriba claude daily --json` warm: 0.20s real, 121,667,584 bytes max
+  RSS.
+- `bun run scriba codex daily --json --no-cache`: 6.22s real, 753,238,016
+  bytes max RSS.
+- `bun run scriba codex daily --json` warm: 0.31s real, 180,912,128 bytes max
+  RSS.
+
 ## Executing the Baseline
 
 ```sh

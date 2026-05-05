@@ -4,7 +4,7 @@ import { resetCache, ScribaCache } from '../cache/sqlite.ts'
 import { loadConfig } from '../config/loader.ts'
 import type { ScribaConfig } from '../config/schema.ts'
 import { SCRIBA_PACKAGE_NAME } from '../constants.ts'
-import { iterateCachedCodexEvents } from '../local/cached.ts'
+import { iterateCachedClaudeEvents, iterateCachedCodexEvents } from '../local/cached.ts'
 import { iterateClaudeEvents, scanClaudeLogs } from '../local/claude.ts'
 import { iterateCodexEvents } from '../local/codex.ts'
 import { emptyScannerStats, type LocalUsageEvent, type ScanResult } from '../local/types.ts'
@@ -108,9 +108,24 @@ type CliArgs = {
 	json?: boolean | undefined
 	config?: string | undefined
 	'cache-dir'?: string | undefined
+	cacheDir?: string | undefined
 	'no-cache'?: boolean | undefined
+	cache?: boolean | undefined
+	noCache?: boolean | undefined
 	since?: string | undefined
 	until?: string | undefined
+}
+
+function cacheDisabled(args: CliArgs): boolean {
+	return args['no-cache'] === true || args.noCache === true || args.cache === false
+}
+
+function cacheDirArg(args: CliArgs, config: ScribaConfig): string | undefined {
+	return typeof args['cache-dir'] === 'string'
+		? args['cache-dir']
+		: typeof args.cacheDir === 'string'
+			? args.cacheDir
+			: config.cacheDir
 }
 
 function explicitPaths(paths: string[]): string[] | undefined {
@@ -185,22 +200,67 @@ async function loadCliConfig(args: CliArgs) {
 
 async function loadClaude(args: CliArgs): Promise<{ config: ScribaConfig; scan: ScanResult }> {
 	const loaded = await loadCliConfig(args)
-	const scan = loaded.config.providers.claude.enabled
-		? await scanClaudeLogs({ paths: explicitPaths(loaded.config.providers.claude.paths) })
-		: { events: [], stats: emptyScannerStats() }
-	return { config: loaded.config, scan }
+	if (!loaded.config.providers.claude.enabled) {
+		return { config: loaded.config, scan: { events: [], stats: emptyScannerStats() } }
+	}
+	if (cacheDisabled(args)) {
+		return {
+			config: loaded.config,
+			scan: await scanClaudeLogs({ paths: explicitPaths(loaded.config.providers.claude.paths) }),
+		}
+	}
+	const cache = await ScribaCache.open({
+		cacheDir: cacheDirArg(args, loaded.config),
+	})
+	try {
+		const stats = emptyScannerStats()
+		const events = []
+		for await (const event of iterateCachedClaudeEvents({
+			cache,
+			paths: explicitPaths(loaded.config.providers.claude.paths),
+			stats,
+		})) {
+			events.push(event)
+		}
+		return { config: loaded.config, scan: { events, stats } }
+	} finally {
+		cache.close()
+	}
 }
 
 async function loadClaudeStream(args: CliArgs) {
 	const loaded = await loadCliConfig(args)
 	const stats = emptyScannerStats()
-	const events = loaded.config.providers.claude.enabled
-		? filterAsyncEvents(
+	if (!loaded.config.providers.claude.enabled) {
+		return { config: loaded.config, stats, events: emptyEvents(), close: () => {} }
+	}
+	if (cacheDisabled(args)) {
+		return {
+			config: loaded.config,
+			stats,
+			events: filterAsyncEvents(
 				iterateClaudeEvents({ paths: explicitPaths(loaded.config.providers.claude.paths), stats }),
 				args,
-			)
-		: emptyEvents()
-	return { config: loaded.config, stats, events }
+			),
+			close: () => {},
+		}
+	}
+	const cache = await ScribaCache.open({
+		cacheDir: cacheDirArg(args, loaded.config),
+	})
+	return {
+		config: loaded.config,
+		stats,
+		events: filterAsyncEvents(
+			iterateCachedClaudeEvents({
+				cache,
+				paths: explicitPaths(loaded.config.providers.claude.paths),
+				stats,
+			}),
+			args,
+		),
+		close: () => cache.close(),
+	}
 }
 
 async function loadCodexStream(args: CliArgs) {
@@ -209,7 +269,7 @@ async function loadCodexStream(args: CliArgs) {
 	if (!loaded.config.providers.codex.enabled) {
 		return { config: loaded.config, stats, events: emptyEvents(), close: () => {} }
 	}
-	if (args['no-cache'] === true) {
+	if (cacheDisabled(args)) {
 		return {
 			config: loaded.config,
 			stats,
@@ -221,7 +281,7 @@ async function loadCodexStream(args: CliArgs) {
 		}
 	}
 	const cache = await ScribaCache.open({
-		cacheDir: typeof args['cache-dir'] === 'string' ? args['cache-dir'] : loaded.config.cacheDir,
+		cacheDir: cacheDirArg(args, loaded.config),
 	})
 	return {
 		config: loaded.config,
@@ -244,7 +304,7 @@ async function* emptyEvents(): AsyncGenerator<LocalUsageEvent> {
 
 async function runClaudeSummary(args: CliArgs) {
 	const loaded = await loadCliConfig(args)
-	const built = await buildStatusSnapshot({
+	const built = await buildStatusSnapshotForCli(args, {
 		config: {
 			...loaded.config,
 			providers: {
@@ -258,7 +318,7 @@ async function runClaudeSummary(args: CliArgs) {
 
 async function runCodexSummary(args: CliArgs) {
 	const loaded = await loadCliConfig(args)
-	const built = await buildStatusSnapshot({
+	const built = await buildStatusSnapshotForCli(args, {
 		config: {
 			...loaded.config,
 			providers: {
@@ -270,44 +330,77 @@ async function runCodexSummary(args: CliArgs) {
 	printOutput(args, built.snapshot, () => renderStatus(built.snapshot))
 }
 
-async function runClaudeDaily(args: CliArgs) {
-	const { config, stats, events } = await loadClaudeStream(args)
-	const payload = {
-		providerId: 'claude',
-		stats,
-		rows: await buildDailyReportFromAsync(events, reportOptions(config)),
+async function buildStatusSnapshotForCli(
+	args: CliArgs,
+	options: Parameters<typeof buildStatusSnapshot>[0],
+) {
+	if (cacheDisabled(args)) {
+		return buildStatusSnapshot(options)
 	}
-	printOutput(args, payload, () => renderReport('Claude Daily', payload))
+	const cache = await ScribaCache.open({
+		cacheDir: cacheDirArg(args, options.config),
+	})
+	try {
+		return await buildStatusSnapshot({ ...options, cache })
+	} finally {
+		cache.close()
+	}
+}
+
+async function runClaudeDaily(args: CliArgs) {
+	const loaded = await loadClaudeStream(args)
+	try {
+		const payload = {
+			providerId: 'claude',
+			stats: loaded.stats,
+			rows: await buildDailyReportFromAsync(loaded.events, reportOptions(loaded.config)),
+		}
+		printOutput(args, payload, () => renderReport('Claude Daily', payload))
+	} finally {
+		loaded.close()
+	}
 }
 
 async function runClaudeWeekly(args: CliArgs) {
-	const { config, stats, events } = await loadClaudeStream(args)
-	const payload = {
-		providerId: 'claude',
-		stats,
-		rows: await buildWeeklyReportFromAsync(events, reportOptions(config)),
+	const loaded = await loadClaudeStream(args)
+	try {
+		const payload = {
+			providerId: 'claude',
+			stats: loaded.stats,
+			rows: await buildWeeklyReportFromAsync(loaded.events, reportOptions(loaded.config)),
+		}
+		printOutput(args, payload, () => renderReport('Claude Weekly', payload))
+	} finally {
+		loaded.close()
 	}
-	printOutput(args, payload, () => renderReport('Claude Weekly', payload))
 }
 
 async function runClaudeMonthly(args: CliArgs) {
-	const { config, stats, events } = await loadClaudeStream(args)
-	const payload = {
-		providerId: 'claude',
-		stats,
-		rows: await buildMonthlyReportFromAsync(events, reportOptions(config)),
+	const loaded = await loadClaudeStream(args)
+	try {
+		const payload = {
+			providerId: 'claude',
+			stats: loaded.stats,
+			rows: await buildMonthlyReportFromAsync(loaded.events, reportOptions(loaded.config)),
+		}
+		printOutput(args, payload, () => renderReport('Claude Monthly', payload))
+	} finally {
+		loaded.close()
 	}
-	printOutput(args, payload, () => renderReport('Claude Monthly', payload))
 }
 
 async function runClaudeSessions(args: CliArgs) {
-	const { config, stats, events } = await loadClaudeStream(args)
-	const payload = {
-		providerId: 'claude',
-		stats,
-		rows: await buildSessionReportFromAsync(events, reportOptions(config)),
+	const loaded = await loadClaudeStream(args)
+	try {
+		const payload = {
+			providerId: 'claude',
+			stats: loaded.stats,
+			rows: await buildSessionReportFromAsync(loaded.events, reportOptions(loaded.config)),
+		}
+		printOutput(args, payload, () => renderReport('Claude Sessions', payload))
+	} finally {
+		loaded.close()
 	}
-	printOutput(args, payload, () => renderReport('Claude Sessions', payload))
 }
 
 async function runClaudeBlocks(args: CliArgs) {
@@ -456,8 +549,7 @@ const cacheSubCommands = {
 				configPath: typeof args.config === 'string' ? args.config : undefined,
 			})
 			const cache = await ScribaCache.open({
-				cacheDir:
-					typeof args['cache-dir'] === 'string' ? args['cache-dir'] : loaded.config.cacheDir,
+				cacheDir: cacheDirArg(args, loaded.config),
 			})
 			printJson(cache.status())
 			cache.close()
@@ -471,8 +563,7 @@ const cacheSubCommands = {
 				configPath: typeof args.config === 'string' ? args.config : undefined,
 			})
 			const cacheDir = await resetCache({
-				cacheDir:
-					typeof args['cache-dir'] === 'string' ? args['cache-dir'] : loaded.config.cacheDir,
+				cacheDir: cacheDirArg(args, loaded.config),
 			})
 			printJson({ ok: true, cacheDir })
 		},
@@ -506,7 +597,7 @@ const telegramSubCommands = {
 		args: telegramArgs,
 		async run({ args }) {
 			const loaded = await loadCliConfig(args)
-			const built = await buildStatusSnapshot({ config: loaded.config })
+			const built = await buildStatusSnapshotForCli(args, { config: loaded.config })
 			const alerts = evaluateTelegramAlerts(built.snapshot, loaded.config.telegram)
 			let sent = 0
 			if (args.send === true && alerts.length > 0) {
@@ -550,22 +641,27 @@ export function createRootCommand() {
 					const loaded = await loadConfig({
 						configPath: typeof args.config === 'string' ? args.config : undefined,
 					})
-					const built = await buildStatusSnapshot({ config: loaded.config })
-					if (args['no-cache'] !== true) {
+					if (!cacheDisabled(args)) {
 						const cache = await ScribaCache.open({
-							cacheDir:
-								typeof args['cache-dir'] === 'string' ? args['cache-dir'] : loaded.config.cacheDir,
+							cacheDir: cacheDirArg(args, loaded.config),
 						})
-						cache.saveSnapshot('status', built.snapshot, built.snapshot.generatedAt)
-						if (built.scanStats.claude != null) {
-							cache.saveScanStats('claude', built.scanStats.claude, built.snapshot.generatedAt)
+						try {
+							const built = await buildStatusSnapshot({ config: loaded.config, cache })
+							cache.saveSnapshot('status', built.snapshot, built.snapshot.generatedAt)
+							if (built.scanStats.claude != null) {
+								cache.saveScanStats('claude', built.scanStats.claude, built.snapshot.generatedAt)
+							}
+							if (built.scanStats.codex != null) {
+								cache.saveScanStats('codex', built.scanStats.codex, built.snapshot.generatedAt)
+							}
+							await cache.writeJsonSnapshot('status', built.snapshot)
+							printOutput(args, built.snapshot, () => renderStatus(built.snapshot))
+						} finally {
+							cache.close()
 						}
-						if (built.scanStats.codex != null) {
-							cache.saveScanStats('codex', built.scanStats.codex, built.snapshot.generatedAt)
-						}
-						await cache.writeJsonSnapshot('status', built.snapshot)
-						cache.close()
+						return
 					}
+					const built = await buildStatusSnapshot({ config: loaded.config })
 					printOutput(args, built.snapshot, () => renderStatus(built.snapshot))
 				},
 			}),
