@@ -38,4 +38,30 @@ describe('CLI command surface', () => {
 	it('creates the citty root command', () => {
 		expect(createRootCommand()).toBeTypeOf('object')
 	})
+
+	it('defines help descriptions for every command', () => {
+		const missing = commandDescriptions(createRootCommand())
+
+		expect(missing).toEqual([])
+	})
 })
+
+function commandDescriptions(command: unknown, path: string[] = []): string[] {
+	if (command == null || typeof command !== 'object') {
+		return []
+	}
+	const record = command as {
+		meta?: { name?: string; description?: string }
+		subCommands?: Record<string, unknown>
+	}
+	const name = record.meta?.name ?? path.at(-1) ?? '<root>'
+	const nextPath = path.length === 0 ? [name] : [...path, name]
+	const missing =
+		typeof record.meta?.description === 'string' && record.meta.description.length > 0
+			? []
+			: [nextPath.join(' ')]
+	const childMissing = Object.values(record.subCommands ?? {}).flatMap((child) =>
+		commandDescriptions(child, nextPath),
+	)
+	return [...missing, ...childMissing]
+}

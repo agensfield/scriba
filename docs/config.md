@@ -54,4 +54,7 @@ Empty provider `paths` means Scriba uses provider defaults:
 and can be rebuilt from local logs plus provider APIs. `scriba cache status`
 shows cache size, schema version, WAL state, snapshots, scan stats, and cached
 file-event counts. `scriba cache prune` removes file-event rows for deleted log
-files, and `scriba cache vacuum` compacts the SQLite file.
+files, and `scriba cache vacuum` compacts the SQLite file after truncating WAL
+state and waiting for settled filesystem sizes. Vacuum reports signed
+`deltaBytes`, plus `reclaimedBytes` or `grewBytes`, because SQLite can
+occasionally rebuild into a slightly larger file.

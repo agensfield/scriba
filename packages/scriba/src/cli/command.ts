@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises'
 import { defineCommand } from 'citty'
 import { buildCcusageBenchmark } from '../bench/ccusage.ts'
-import { resetCache, ScribaCache } from '../cache/sqlite.ts'
+import { resetCache, ScribaCache, settledCacheDatabaseSizeBytes } from '../cache/sqlite.ts'
 import { loadConfig } from '../config/loader.ts'
 import type { ScribaConfig } from '../config/schema.ts'
 import { SCRIBA_PACKAGE_NAME } from '../constants.ts'
@@ -576,37 +576,37 @@ async function runCodexSessions(args: CliArgs) {
 
 const claudeSubCommands = {
 	summary: defineCommand({
-		meta: { name: 'summary' },
+		meta: { name: 'summary', description: 'Show total Claude Code token usage.' },
 		args: reportArgs,
 		run: ({ args }) => runClaudeSummary(args),
 	}),
 	daily: defineCommand({
-		meta: { name: 'daily' },
+		meta: { name: 'daily', description: 'Show Claude Code usage grouped by day.' },
 		args: reportArgs,
 		run: ({ args }) => runClaudeDaily(args),
 	}),
 	weekly: defineCommand({
-		meta: { name: 'weekly' },
+		meta: { name: 'weekly', description: 'Show Claude Code usage grouped by week.' },
 		args: reportArgs,
 		run: ({ args }) => runClaudeWeekly(args),
 	}),
 	monthly: defineCommand({
-		meta: { name: 'monthly' },
+		meta: { name: 'monthly', description: 'Show Claude Code usage grouped by month.' },
 		args: reportArgs,
 		run: ({ args }) => runClaudeMonthly(args),
 	}),
 	sessions: defineCommand({
-		meta: { name: 'sessions' },
+		meta: { name: 'sessions', description: 'Show Claude Code usage grouped by session.' },
 		args: reportArgs,
 		run: ({ args }) => runClaudeSessions(args),
 	}),
 	session: defineCommand({
-		meta: { name: 'session' },
+		meta: { name: 'session', description: 'Alias for Claude Code session usage.' },
 		args: reportArgs,
 		run: ({ args }) => runClaudeSessions(args),
 	}),
 	blocks: defineCommand({
-		meta: { name: 'blocks' },
+		meta: { name: 'blocks', description: 'Show Claude Code usage grouped by billing block.' },
 		args: reportArgs,
 		run: ({ args }) => runClaudeBlocks(args),
 	}),
@@ -614,32 +614,32 @@ const claudeSubCommands = {
 
 const codexSubCommands = {
 	summary: defineCommand({
-		meta: { name: 'summary' },
+		meta: { name: 'summary', description: 'Show total Codex token usage.' },
 		args: reportArgs,
 		run: ({ args }) => runCodexSummary(args),
 	}),
 	daily: defineCommand({
-		meta: { name: 'daily' },
+		meta: { name: 'daily', description: 'Show Codex usage grouped by day.' },
 		args: reportArgs,
 		run: ({ args }) => runCodexDaily(args),
 	}),
 	weekly: defineCommand({
-		meta: { name: 'weekly' },
+		meta: { name: 'weekly', description: 'Show Codex usage grouped by week.' },
 		args: reportArgs,
 		run: ({ args }) => runCodexWeekly(args),
 	}),
 	monthly: defineCommand({
-		meta: { name: 'monthly' },
+		meta: { name: 'monthly', description: 'Show Codex usage grouped by month.' },
 		args: reportArgs,
 		run: ({ args }) => runCodexMonthly(args),
 	}),
 	sessions: defineCommand({
-		meta: { name: 'sessions' },
+		meta: { name: 'sessions', description: 'Show Codex usage grouped by session.' },
 		args: reportArgs,
 		run: ({ args }) => runCodexSessions(args),
 	}),
 	session: defineCommand({
-		meta: { name: 'session' },
+		meta: { name: 'session', description: 'Alias for Codex session usage.' },
 		args: reportArgs,
 		run: ({ args }) => runCodexSessions(args),
 	}),
@@ -647,7 +647,7 @@ const codexSubCommands = {
 
 const cacheSubCommands = {
 	status: defineCommand({
-		meta: { name: 'status' },
+		meta: { name: 'status', description: 'Show cache location, size, snapshots, and WAL state.' },
 		args: globalArgs,
 		async run({ args }) {
 			const loaded = await loadConfig({
@@ -661,7 +661,7 @@ const cacheSubCommands = {
 		},
 	}),
 	reset: defineCommand({
-		meta: { name: 'reset' },
+		meta: { name: 'reset', description: 'Delete Scriba derived cache files.' },
 		args: globalArgs,
 		async run({ args }) {
 			const loaded = await loadConfig({
@@ -674,7 +674,7 @@ const cacheSubCommands = {
 		},
 	}),
 	prune: defineCommand({
-		meta: { name: 'prune' },
+		meta: { name: 'prune', description: 'Remove cached file events for deleted usage logs.' },
 		args: globalArgs,
 		async run({ args }) {
 			const loaded = await loadCliConfig(args)
@@ -689,19 +689,29 @@ const cacheSubCommands = {
 		},
 	}),
 	vacuum: defineCommand({
-		meta: { name: 'vacuum' },
+		meta: { name: 'vacuum', description: 'Compact the cache database and truncate WAL files.' },
 		args: globalArgs,
 		async run({ args }) {
 			const loaded = await loadCliConfig(args)
 			const cache = await ScribaCache.open({ cacheDir: cacheDirArg(args, loaded.config) })
+			let result: ReturnType<ScribaCache['vacuum']>
+			let databasePath: string
 			try {
-				const before = cache.status().sizeBytes
-				cache.vacuum()
-				const after = cache.status().sizeBytes
-				printJson({ ok: true, beforeBytes: before, afterBytes: after })
+				result = cache.vacuum()
+				databasePath = cache.databasePath
 			} finally {
 				cache.close()
 			}
+			const afterBytes = await settledCacheDatabaseSizeBytes(databasePath)
+			const deltaBytes = afterBytes - result.beforeBytes
+			printJson({
+				ok: true,
+				beforeBytes: result.beforeBytes,
+				afterBytes,
+				deltaBytes,
+				reclaimedBytes: Math.max(0, -deltaBytes),
+				grewBytes: Math.max(0, deltaBytes),
+			})
 		},
 	}),
 }

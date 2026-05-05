@@ -79,7 +79,10 @@ describe('ScribaCache', () => {
 
 		expect(cache.pruneFileEvents(new Set())).toBe(1)
 		expect(cache.status().fileEvents).toHaveLength(0)
-		cache.vacuum()
+		const vacuum = cache.vacuum()
+		expect(vacuum.deltaBytes).toBe(vacuum.afterBytes - vacuum.beforeBytes)
+		expect(vacuum.reclaimedBytes).toBe(Math.max(0, -vacuum.deltaBytes))
+		expect(vacuum.grewBytes).toBe(Math.max(0, vacuum.deltaBytes))
 		cache.close()
 		await resetCache({ cacheDir })
 	})

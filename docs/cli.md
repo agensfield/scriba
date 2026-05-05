@@ -33,6 +33,12 @@ Telegram, and agent reads that should not trigger a foreground scan. `--no-remot
 skips provider API probes. `--redact` removes paths, account identifiers, and
 emails from output before sharing.
 
+`cache vacuum` truncates WAL state before and after compaction, closes the cache,
+then waits briefly for settled filesystem sizes. Its JSON reports `beforeBytes`,
+`afterBytes`, signed `deltaBytes`, `reclaimedBytes`, and `grewBytes`; SQLite can
+occasionally rebuild into a slightly larger database file, so growth is explicit
+rather than hidden.
+
 Stable JSON shape example:
 
 ```json

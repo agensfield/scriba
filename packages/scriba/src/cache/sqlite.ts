@@ -34,6 +34,14 @@ export type CacheStatus = {
 	}
 }
 
+export type CacheVacuumResult = {
+	beforeBytes: number
+	afterBytes: number
+	deltaBytes: number
+	reclaimedBytes: number
+	grewBytes: number
+}
+
 export type CachedFileEvents<T> = {
 	path: string
 	size: number
@@ -197,7 +205,7 @@ export class ScribaCache {
 			cacheDir: this.cacheDir,
 			databasePath: this.databasePath,
 			schemaVersion,
-			sizeBytes: databaseSizeBytes(this.databasePath),
+			sizeBytes: cacheDatabaseSizeBytes(this.databasePath),
 			snapshots,
 			scanStats: scanStats.map((row) => ({
 				providerId: row.providerId,
@@ -238,8 +246,20 @@ export class ScribaCache {
 		return pruned
 	}
 
-	vacuum(): void {
+	vacuum(): CacheVacuumResult {
+		this.checkpointWal()
+		const beforeBytes = cacheDatabaseSizeBytes(this.databasePath)
 		this.db.exec('vacuum')
+		this.checkpointWal()
+		const afterBytes = cacheDatabaseSizeBytes(this.databasePath)
+		const deltaBytes = afterBytes - beforeBytes
+		return {
+			beforeBytes,
+			afterBytes,
+			deltaBytes,
+			reclaimedBytes: Math.max(0, -deltaBytes),
+			grewBytes: Math.max(0, deltaBytes),
+		}
 	}
 
 	async writeJsonSnapshot(name: string, snapshot: StatusSnapshot): Promise<string> {
@@ -267,6 +287,10 @@ export class ScribaCache {
 		this.db
 			.query('insert or replace into meta (key, value) values (?, ?)')
 			.run('schema_version', String(CACHE_SCHEMA_VERSION))
+	}
+
+	private checkpointWal(): void {
+		this.db.exec('pragma wal_checkpoint(truncate)')
 	}
 }
 
@@ -315,9 +339,27 @@ class LibsqlCacheDatabase implements CacheDatabase {
 	}
 }
 
-function databaseSizeBytes(databasePath: string): number {
+export function cacheDatabaseSizeBytes(databasePath: string): number {
 	const paths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]
 	return paths.reduce((sum, path) => sum + (existsSync(path) ? statSync(path).size : 0), 0)
+}
+
+export async function settledCacheDatabaseSizeBytes(
+	databasePath: string,
+	options: { attempts?: number; delayMs?: number } = {},
+): Promise<number> {
+	const attempts = options.attempts ?? 5
+	const delayMs = options.delayMs ?? 20
+	let size = cacheDatabaseSizeBytes(databasePath)
+	for (let attempt = 0; attempt < attempts; attempt += 1) {
+		await new Promise((resolve) => setTimeout(resolve, delayMs))
+		const nextSize = cacheDatabaseSizeBytes(databasePath)
+		if (nextSize === size) {
+			return nextSize
+		}
+		size = nextSize
+	}
+	return size
 }
 
 export async function resetCache(options: ScribaCacheOptions = {}): Promise<string> {
