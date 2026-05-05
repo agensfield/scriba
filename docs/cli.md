@@ -21,6 +21,22 @@ Remote status lines currently include Claude peak-hours/window metrics and
 Codex plan/window metrics. Standalone balances, such as Codex credits remaining,
 are represented as `amount` lines in JSON instead of fake progress bars.
 
+## Package Execution
+
+The published package builds to JavaScript in `dist` and exposes `scriba` as the
+package binary:
+
+```sh
+bunx @agensfield/scriba status
+npx @agensfield/scriba status
+pnpm dlx @agensfield/scriba status
+yarn dlx @agensfield/scriba status
+```
+
+Cache-backed commands use `bun:sqlite` under Bun and `node:sqlite` under Node
+24+. Older Node versions should run uncached commands with `--no-cache` or use
+Bun.
+
 ## Claude
 
 ```sh

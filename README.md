@@ -20,6 +20,7 @@ over the same core.
 
 ```sh
 bun install
+bun run build
 bun run gate
 bun run scriba status
 bun run scriba claude daily
@@ -31,6 +32,10 @@ bun run scriba bench ccusage --provider codex
 ```
 
 Human output is the default. Use `--json` for agents and automation.
+
+The npm package builds to `dist` and exposes the `scriba` binary for `bunx`,
+`npx`, `pnpm dlx`, and Yarn installs. Cache-backed commands run on Bun through
+`bun:sqlite` and on Node 24+ through `node:sqlite`.
 
 `scriba bench ccusage` is non-executing by default. Pass `--execute` only when
 you intentionally want to run the bounded reference baseline.

@@ -3,18 +3,23 @@
 	"version": "0.0.0-alpha.0",
 	"description": "Fast local usage tracking for Claude Code and Codex.",
 	"type": "module",
+	"main": "./dist/index.js",
 	"bin": {
-		"scriba": "./src/cli.ts"
+		"scriba": "./dist/cli.js"
 	},
 	"exports": {
-		".": "./src/index.ts"
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
 	},
+	"types": "./dist/index.d.ts",
 	"files": [
-		"src",
-		"docs",
-		"README.md"
+		"dist"
 	],
 	"scripts": {
+		"build": "node scripts/clean-dist.mjs && bun build src/cli.ts --target node --format esm --outfile dist/cli.js --minify && bun build src/index.ts --target node --format esm --outfile dist/index.js --minify && tsc -p tsconfig.json --outDir dist && node scripts/fix-build.mjs",
+		"prepack": "bun run build",
 		"lint": "biome check .",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"test": "vitest run --exclude 'src/**/*.bun.test.ts' && bun test ./src/cache/sqlite.bun.test.ts ./src/local/cached.bun.test.ts",
@@ -26,6 +31,7 @@
 		"zod": "^4.2.1"
 	},
 	"engines": {
-		"bun": ">=1.2.0"
+		"bun": ">=1.2.0",
+		"node": ">=24.0.0"
 	}
 }

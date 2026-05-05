@@ -38,6 +38,8 @@ Implemented alpha foundation:
 
 - Bun workspace with Biome, TypeScript, Vitest, and Bun SQLite tests.
 - `@agensfield/scriba` package and `scriba` CLI.
+- Dist-based package build for npm/Bun/pnpm/Yarn consumers, with Node 24+
+  `node:sqlite` cache support and Bun `bun:sqlite` support.
 - Config discovery and schema metadata.
 - Claude/Codex local JSONL scanners.
 - Daily, weekly, monthly, session, and Claude block report builders.
@@ -51,8 +53,7 @@ Implemented alpha foundation:
 
 Local token/cost reports:
 
-- Claude: daily, weekly, monthly, sessions, blocks, compact statusline-style
-  view.
+- Claude: daily, weekly, monthly, sessions, blocks, and compact status view.
 - Codex: daily, weekly, monthly, sessions.
 - Common rollups: today, yesterday, last 30 days, models, cache tokens, costs,
   sessions/projects where available.
@@ -76,6 +77,9 @@ Remote/window metrics borrowed from OpenUsage/CodexBar references:
 - No `ccusage` subprocess dependency in the normal core path.
 - CLI output is agent-grade: JSON, predictable schema, source provenance,
   freshness, auth/cache/error state.
+- Package execution is ecosystem-compatible: the default binary is built JS for
+  npm/pnpm/Yarn/Bun installs, while cache features stay fast on Bun and work on
+  Node 24+ through `node:sqlite`.
 - Cache deletion is safe: `scriba cache reset` can delete derived state and the
   next scan rebuilds from source logs.
 
@@ -85,8 +89,7 @@ Remote/window metrics borrowed from OpenUsage/CodexBar references:
 
 - Claude loader streams JSONL lines but still accumulates all parsed entries
   before grouping.
-- Claude reports include daily, weekly, monthly, sessions, blocks, and
-  statusline.
+- Claude reports include daily, weekly, monthly, sessions, and blocks.
 - Codex loader reads each JSONL file fully, splits into lines, accumulates all
   events, then sorts.
 - Codex local reports are daily, monthly, and sessions.
