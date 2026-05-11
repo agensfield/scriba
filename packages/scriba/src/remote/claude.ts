@@ -151,8 +151,8 @@ export async function probeClaudeUsage(
 	const parsed = usageSchema.parse(await resp.json())
 	const lines: MetricLine[] = []
 	lines.push(claudePeakHoursLine(now))
-	pushWindow(lines, 'Session', parsed.five_hour)
-	pushWindow(lines, 'Weekly', parsed.seven_day)
+	pushWindow(lines, '5h limit', parsed.five_hour)
+	pushWindow(lines, 'Weekly limit', parsed.seven_day)
 	pushWindow(lines, 'OAuth Apps', parsed.seven_day_oauth_apps)
 	pushWindow(lines, 'Sonnet', parsed.seven_day_sonnet ?? parsed.seven_day_opus)
 	pushWindow(
@@ -242,6 +242,7 @@ function durationLabel(minutes: number): string {
 }
 
 async function loadClaudeAuth(options: ClaudeProbeOptions) {
+	let credentialError: { ok: false; error: string; source?: string | undefined } | null = null
 	const paths = options.credentialPaths ?? claudeCredentialPaths(options.env)
 	for (const path of paths) {
 		if (!existsSync(path)) {
@@ -260,6 +261,10 @@ async function loadClaudeAuth(options: ClaudeProbeOptions) {
 			},
 		)
 		if (auth != null) {
+			if (!auth.ok) {
+				credentialError = auth
+				continue
+			}
 			return auth
 		}
 	}
@@ -282,8 +287,15 @@ async function loadClaudeAuth(options: ClaudeProbeOptions) {
 			},
 		)
 		if (auth != null) {
+			if (!auth.ok) {
+				credentialError = auth
+				continue
+			}
 			return auth
 		}
+	}
+	if (credentialError != null) {
+		return credentialError
 	}
 	return { ok: false as const, error: 'Not logged in. Run `claude` to authenticate.' }
 }
@@ -309,6 +321,11 @@ async function resolveClaudeCredentials(
 				accessToken: refreshed.claudeAiOauth.accessToken ?? accessToken,
 				source,
 			}
+		}
+		return {
+			ok: false as const,
+			error: 'Claude OAuth credentials found but refresh failed. Run `claude` to re-authenticate.',
+			source,
 		}
 	}
 	return { ok: true as const, accessToken, source }

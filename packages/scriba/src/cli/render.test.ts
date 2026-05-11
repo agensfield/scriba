@@ -17,10 +17,11 @@ describe('human renderers', () => {
 						{ type: 'badge', label: 'Plan', text: 'prolite' },
 						{
 							type: 'progress',
-							label: 'Session',
+							label: '5h limit',
 							used: 18,
 							limit: 100,
 							format: { kind: 'percent' },
+							resetsAt: '2099-05-05T18:00:00.000Z',
 						},
 						{ type: 'text', label: 'Today', value: '23,135,924' },
 					],
@@ -29,9 +30,10 @@ describe('human renderers', () => {
 		})
 
 		expect(rendered).toContain('Codex')
-		expect(rendered).toContain('Session')
+		expect(rendered).toContain('5h limit')
 		expect(rendered).toContain('18%')
-		expect(rendered).toContain('used 18% of 100%')
+		expect(rendered).toContain('resets in')
+		expect(rendered).not.toContain('used 18% of 100%')
 		expect(rendered).toContain('▰▰▰▰')
 		expect(rendered).not.toContain('░')
 	})

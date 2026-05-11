@@ -34,10 +34,6 @@ import {
 	renderTelegram,
 } from './render.ts'
 
-function notImplemented(command: string): never {
-	throw new Error(`${command} is not implemented yet`)
-}
-
 function printJson(value: unknown) {
 	console.log(JSON.stringify(value, null, 2))
 }
@@ -373,6 +369,46 @@ async function runCodexSummary(args: CliArgs) {
 				claude: { ...loaded.config.providers.claude, enabled: false },
 			},
 		},
+	})
+	printOutput(args, built.snapshot, (snapshot) => renderStatus(snapshot))
+}
+
+async function runStatus(args: CliArgs) {
+	const loaded = await loadConfig({
+		configPath: typeof args.config === 'string' ? args.config : undefined,
+	})
+	if (!cacheDisabled(args)) {
+		const cache = await ScribaCache.open({
+			cacheDir: cacheDirArg(args, loaded.config),
+		})
+		try {
+			const built =
+				args.fast === true
+					? {
+							snapshot: cache.loadSnapshot<StatusSnapshot>('status'),
+							scanStats: { claude: null, codex: null },
+							fromCache: true,
+						}
+					: await buildStatusSnapshot({
+							config: loaded.config,
+							cache,
+							...remoteOption(args),
+						})
+			if (built.snapshot == null) {
+				throw new Error('No cached status snapshot found. Run `scriba status` first.')
+			}
+			if (!('fromCache' in built)) {
+				await saveBuiltStatus(cache, built)
+			}
+			printOutput(args, built.snapshot, (snapshot) => renderStatus(snapshot))
+		} finally {
+			cache.close()
+		}
+		return
+	}
+	const built = await buildStatusSnapshot({
+		config: loaded.config,
+		...remoteOption(args),
 	})
 	printOutput(args, built.snapshot, (snapshot) => renderStatus(snapshot))
 }
@@ -832,45 +868,7 @@ export function createRootCommand() {
 					description: 'Show the composed Scriba status snapshot.',
 				},
 				args: globalArgs,
-				async run({ args }) {
-					const loaded = await loadConfig({
-						configPath: typeof args.config === 'string' ? args.config : undefined,
-					})
-					if (!cacheDisabled(args)) {
-						const cache = await ScribaCache.open({
-							cacheDir: cacheDirArg(args, loaded.config),
-						})
-						try {
-							const built =
-								args.fast === true
-									? {
-											snapshot: cache.loadSnapshot<StatusSnapshot>('status'),
-											scanStats: { claude: null, codex: null },
-											fromCache: true,
-										}
-									: await buildStatusSnapshot({
-											config: loaded.config,
-											cache,
-											...remoteOption(args),
-										})
-							if (built.snapshot == null) {
-								throw new Error('No cached status snapshot found. Run `scriba status` first.')
-							}
-							if (!('fromCache' in built)) {
-								await saveBuiltStatus(cache, built)
-							}
-							printOutput(args, built.snapshot, (snapshot) => renderStatus(snapshot))
-						} finally {
-							cache.close()
-						}
-						return
-					}
-					const built = await buildStatusSnapshot({
-						config: loaded.config,
-						...remoteOption(args),
-					})
-					printOutput(args, built.snapshot, (snapshot) => renderStatus(snapshot))
-				},
+				run: ({ args }) => runStatus(args),
 			}),
 			claude: defineCommand({
 				meta: {
@@ -917,9 +915,9 @@ export function createRootCommand() {
 				subCommands: telegramSubCommands,
 			}),
 		},
-		run({ rawArgs }) {
+		run({ rawArgs, args }) {
 			if (rawArgs.length === 0) {
-				notImplemented('status')
+				return runStatus(args)
 			}
 		},
 	})

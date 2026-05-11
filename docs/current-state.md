@@ -63,10 +63,10 @@ Local token/cost reports:
 
 Remote/window metrics borrowed from OpenUsage/CodexBar references:
 
-- Claude: Peak Hours, Session, Weekly, OAuth Apps, Sonnet, Claude Design,
-  Claude Routines, Extra Claude window, Extra usage spent.
-- Codex: Plan, Session, Weekly, Spark, Spark Weekly, Reviews, Review Weekly,
-  Credits left.
+- Claude: Peak Hours, 5h limit, Weekly limit, OAuth Apps, Sonnet, Claude
+  Design, Claude Routines, Extra Claude window, Extra usage spent.
+- Codex: Plan, 5h limit, Weekly limit, Spark 5h, Spark weekly, Review 5h,
+  Review weekly, Credits left.
 
 ## Invariants
 

@@ -34,8 +34,8 @@ describe('remote provider probes', () => {
 		})
 		expect(result.lines.map((line) => line.label)).toEqual([
 			'Peak Hours',
-			'Session',
-			'Weekly',
+			'5h limit',
+			'Weekly limit',
 			'OAuth Apps',
 			'Sonnet',
 			'Claude Design',
@@ -69,7 +69,7 @@ describe('remote provider probes', () => {
 			source: 'keychain:Claude Code-credentials',
 		})
 		expect(seenHeaders).toEqual(['Bearer keychain-token'])
-		expect(result.lines.find((line) => line.label === 'Session')).toBeDefined()
+		expect(result.lines.find((line) => line.label === '5h limit')).toBeDefined()
 	})
 
 	it('accepts hex-encoded Claude keychain credentials', async () => {
@@ -88,7 +88,7 @@ describe('remote provider probes', () => {
 		})
 
 		expect(result.authState.ok).toBe(true)
-		expect(result.lines.find((line) => line.label === 'Session')).toBeDefined()
+		expect(result.lines.find((line) => line.label === '5h limit')).toBeDefined()
 	})
 
 	it('uses Claude config-dir hashed keychain service before legacy service', () => {
@@ -146,12 +146,12 @@ describe('remote provider probes', () => {
 		})
 		expect(result.lines.map((line) => line.label)).toEqual([
 			'Plan',
-			'Session',
-			'Weekly',
-			'Spark Weekly',
-			'Spark',
-			'Reviews',
-			'Review Weekly',
+			'5h limit',
+			'Weekly limit',
+			'Spark weekly',
+			'Spark 5h',
+			'Review 5h',
+			'Review weekly',
 			'Credits left',
 		])
 		expect(result.lines.find((line) => line.label === 'Credits left')).toMatchObject({

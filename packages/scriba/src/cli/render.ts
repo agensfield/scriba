@@ -189,7 +189,8 @@ function renderMetricLine(line: MetricLine): string {
 		return `${label(line.label)} ${badge(line.text)}`
 	}
 	const percent = line.limit === 0 ? 0 : Math.round((line.used / line.limit) * 100)
-	return `${label(line.label)} ${bar(percent)} ${percentValue(percent)} ${muted(`used ${formatMetricValue(line.used, line.format)} of ${formatMetricValue(line.limit, line.format)}`)}`
+	const details = progressDetails(line)
+	return `${label(line.label)} ${bar(percent)} ${percentValue(percent)} ${muted(`used${details.length > 0 ? ` · ${details}` : ''}`)}`
 }
 
 function formatMetricValue(value: number, format: MetricFormat): string {
@@ -296,7 +297,12 @@ function duration(ms: number): string {
 		return `${minutes}m`
 	}
 	const hours = Math.round(minutes / 60)
-	return `${hours}h`
+	if (hours < 24) {
+		return `${hours}h`
+	}
+	const days = Math.floor(hours / 24)
+	const remainderHours = hours % 24
+	return remainderHours === 0 ? `${days}d` : `${days}d ${remainderHours}h`
 }
 
 function bar(percent: number): string {
@@ -311,6 +317,47 @@ function percentValue(percent: number): string {
 	const color =
 		percent >= 90 ? ansis.redBright : percent >= 70 ? ansis.yellowBright : ansis.whiteBright
 	return color.bold(`${percent}%`)
+}
+
+function progressDetails(line: Extract<MetricLine, { type: 'progress' }>): string {
+	const parts = []
+	if (line.format.kind !== 'percent') {
+		parts.push(
+			`${formatMetricValue(line.used, line.format)} of ${formatMetricValue(line.limit, line.format)}`,
+		)
+	}
+	if (line.resetsAt != null) {
+		parts.push(resetLabel(line.resetsAt))
+	}
+	return parts.join(' · ')
+}
+
+function resetLabel(resetsAt: string): string {
+	const resetMs = new Date(resetsAt).getTime()
+	if (!Number.isFinite(resetMs)) {
+		return `resets ${resetsAt}`
+	}
+	const deltaMs = resetMs - Date.now()
+	const absolute = resetTimeLabel(new Date(resetMs))
+	if (deltaMs <= 0) {
+		return `reset due ${absolute}`
+	}
+	return `resets in ${duration(deltaMs)} (${absolute})`
+}
+
+function resetTimeLabel(date: Date): string {
+	const parts = new Intl.DateTimeFormat(undefined, {
+		month: 'short',
+		day: 'numeric',
+		hour: '2-digit',
+		minute: '2-digit',
+		hourCycle: 'h23',
+	}).formatToParts(date)
+	const month = parts.find((part) => part.type === 'month')?.value ?? ''
+	const day = parts.find((part) => part.type === 'day')?.value ?? ''
+	const hour = parts.find((part) => part.type === 'hour')?.value ?? ''
+	const minute = parts.find((part) => part.type === 'minute')?.value ?? ''
+	return `${month} ${day} ${hour}:${minute}`.trim()
 }
 
 function strip(value: string): string {

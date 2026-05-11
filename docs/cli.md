@@ -6,6 +6,7 @@ is the default; pass `--json` for the machine-readable agent contract.
 ## Root
 
 ```sh
+bun run scriba
 bun run scriba doctor
 bun run scriba doctor --no-remote --json
 bun run scriba status
@@ -20,9 +21,9 @@ bun run scriba cache vacuum
 bun run scriba telegram alerts
 ```
 
-`status` composes local log summaries and remote provider-window probes when
-auth is available. It writes a derived JSON snapshot and SQLite scan stats
-unless `--no-cache` is passed.
+Bare `scriba` is equivalent to `scriba status`. `status` composes local log
+summaries and remote provider-window probes when auth is available. It writes a
+derived JSON snapshot and SQLite scan stats unless `--no-cache` is passed.
 
 `doctor` checks local source directories, auth files, remote reachability, cache
 schema/WAL state, cache size, and latest snapshot age. It reports `ok`,
@@ -61,9 +62,12 @@ Stable JSON shape example:
 }
 ```
 
-Remote status lines currently include Claude peak-hours/window metrics and
-Codex plan/window metrics. Standalone balances, such as Codex credits remaining,
-are represented as `amount` lines in JSON instead of fake progress bars.
+Remote status lines currently include Claude peak-hours/window metrics and Codex
+plan/window metrics. Five-hour windows are labeled `5h limit`; weekly windows
+are labeled `Weekly limit`. Human output shows percentage bars as used capacity
+and includes reset timing when the provider API returns it. Standalone balances,
+such as Codex credits remaining, are represented as `amount` lines in JSON
+instead of fake progress bars.
 
 ## Package Execution
 

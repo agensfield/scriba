@@ -64,10 +64,14 @@ export class ScribaCache {
 		this.cacheDir = resolveCacheDir(options.cacheDir, options.env)
 		this.databasePath = join(this.cacheDir, 'scriba.sqlite')
 		this.db = db
-		this.db.exec(`
-			pragma journal_mode = wal;
-			pragma busy_timeout = 5000;
-		`)
+		this.db.exec('pragma busy_timeout = 5000;')
+		try {
+			this.db.exec('pragma journal_mode = wal;')
+		} catch (error) {
+			if (!isSqliteBusy(error)) {
+				throw error
+			}
+		}
 		this.db.exec(`
 			create table if not exists snapshots (
 				name text primary key,
@@ -360,6 +364,16 @@ export async function settledCacheDatabaseSizeBytes(
 		size = nextSize
 	}
 	return size
+}
+
+function isSqliteBusy(error: unknown): boolean {
+	return (
+		typeof error === 'object' &&
+		error != null &&
+		'code' in error &&
+		typeof error.code === 'string' &&
+		error.code.startsWith('SQLITE_BUSY')
+	)
 }
 
 export async function resetCache(options: ScribaCacheOptions = {}): Promise<string> {

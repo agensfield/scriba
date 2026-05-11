@@ -113,20 +113,20 @@ export async function probeCodexUsage(options: CodexProbeOptions = {}): Promise<
 		lines.push({ type: 'badge', label: 'Plan', text: parsed.plan_type })
 	}
 	if (primary != null) {
-		lines.push(progressLine('Session', primary))
+		lines.push(progressLine('5h limit', primary))
 	}
 	if (secondary != null) {
-		lines.push(progressLine('Weekly', secondary))
-		lines.push(progressLine('Spark Weekly', secondary))
+		lines.push(progressLine('Weekly limit', secondary))
+		lines.push(progressLine('Spark weekly', secondary))
 	}
 	if (primary != null) {
-		lines.push(progressLine('Spark', primary))
+		lines.push(progressLine('Spark 5h', primary))
 	}
 	if (reviews != null) {
-		lines.push(progressLine('Reviews', reviews))
+		lines.push(progressLine('Review 5h', reviews))
 	}
 	if (weeklyReviews != null) {
-		lines.push(progressLine('Review Weekly', weeklyReviews))
+		lines.push(progressLine('Review weekly', weeklyReviews))
 	}
 	if (parsed.credits?.has_credits === true) {
 		const balance = Number(parsed.credits.balance ?? 0)
