@@ -28,6 +28,15 @@ struct WeeklyLimitResetEvent: Equatable {
         "🎉 Tibo just reset limits! 🎊\n\(message)"
     }
 
+    var emissionKey: String {
+        [
+            providerID,
+            label.lowercased(),
+            previousResetAt.timeIntervalSince1970.description,
+            currentResetAt?.timeIntervalSince1970.description ?? "unknown",
+        ].joined(separator: ":")
+    }
+
     private static func percent(_ value: Double) -> String {
         "\(Int(value.rounded()))%"
     }
@@ -187,22 +196,33 @@ struct WeeklyLimitObservation: Codable, Equatable {
 final class WeeklyResetMonitor {
     private let defaults: UserDefaults
     private let storageKey = "ScribaBar.WeeklyResetBaselines"
+    private let emittedStorageKey = "ScribaBar.WeeklyResetEmittedEvents"
     private var detector: WeeklyResetDetector
+    private var emittedKeys: Set<String>
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.detector = WeeklyResetDetector(baselines: Self.loadBaselines(from: defaults, key: storageKey))
+        self.emittedKeys = Self.loadEmittedKeys(from: defaults, key: emittedStorageKey)
     }
 
     func observe(snapshot: StatusSnapshot, now: Date = Date()) -> [WeeklyLimitResetEvent] {
-        let events = detector.observe(snapshot: snapshot, now: now)
+        let events = detector.observe(snapshot: snapshot, now: now).filter { event in
+            emittedKeys.insert(event.emissionKey).inserted
+        }
         saveBaselines(detector.snapshotBaselines)
+        saveEmittedKeys(emittedKeys)
         return events
     }
 
     private func saveBaselines(_ baselines: [String: WeeklyLimitObservation]) {
         guard let data = try? JSONEncoder().encode(baselines) else { return }
         defaults.set(data, forKey: storageKey)
+    }
+
+    private func saveEmittedKeys(_ keys: Set<String>) {
+        let sortedKeys = Array(keys).sorted().suffix(100)
+        defaults.set(Array(sortedKeys), forKey: emittedStorageKey)
     }
 
     private static func loadBaselines(
@@ -216,5 +236,13 @@ final class WeeklyResetMonitor {
             return [:]
         }
         return baselines
+    }
+
+    private static func loadEmittedKeys(
+        from defaults: UserDefaults,
+        key: String)
+        -> Set<String>
+    {
+        Set(defaults.stringArray(forKey: key) ?? [])
     }
 }

@@ -74,15 +74,30 @@ enum RefreshCadence: String, CaseIterable, Identifiable {
     var nanoseconds: UInt64 {
         switch self {
         case .oneMinute:
-            60 * 1_000_000_000
+            UInt64(seconds * 1_000_000_000)
         case .twoMinutes:
-            2 * 60 * 1_000_000_000
+            UInt64(seconds * 1_000_000_000)
         case .fiveMinutes:
-            5 * 60 * 1_000_000_000
+            UInt64(seconds * 1_000_000_000)
         case .tenMinutes:
-            10 * 60 * 1_000_000_000
+            UInt64(seconds * 1_000_000_000)
         case .fifteenMinutes:
-            15 * 60 * 1_000_000_000
+            UInt64(seconds * 1_000_000_000)
+        }
+    }
+
+    var seconds: TimeInterval {
+        switch self {
+        case .oneMinute:
+            60
+        case .twoMinutes:
+            2 * 60
+        case .fiveMinutes:
+            5 * 60
+        case .tenMinutes:
+            10 * 60
+        case .fifteenMinutes:
+            15 * 60
         }
     }
 }

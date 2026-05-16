@@ -107,6 +107,29 @@ struct WeeklyResetDetectorTests {
         #expect(events.isEmpty)
     }
 
+    @Test("monitor does not emit the same reset twice")
+    func monitorDeduplicatesResetEvents() {
+        let suiteName = "ScribaBarWeeklyResetMonitorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let monitor = WeeklyResetMonitor(defaults: defaults)
+
+        _ = monitor.observe(
+            snapshot: snapshot(weeklyUsed: 82, resetsAt: "2026-05-19T07:10:35.000Z"),
+            now: date("2026-05-16T10:00:00.000Z"))
+        let resetSnapshot = snapshot(weeklyUsed: 2, resetsAt: "2026-05-23T10:00:00.000Z")
+
+        let first = monitor.observe(
+            snapshot: resetSnapshot,
+            now: date("2026-05-16T12:00:00.000Z"))
+        let second = monitor.observe(
+            snapshot: resetSnapshot,
+            now: date("2026-05-16T12:01:00.000Z"))
+
+        #expect(first.count == 1)
+        #expect(second.isEmpty)
+    }
+
     private func snapshot(weeklyUsed: Double, resetsAt: String) -> StatusSnapshot {
         StatusSnapshot(
             schemaVersion: "scriba.alpha.v1",

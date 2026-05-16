@@ -52,6 +52,7 @@ final class ScribaBarModel: ObservableObject {
     private let usageHistoryStore: UsageHistoryStore
     private let weeklyResetMonitor = WeeklyResetMonitor()
     private let userDefaults: UserDefaults
+    private let minimumCachedSnapshotFreshness: TimeInterval = 5 * 60
 
     init(usageHistoryStore: UsageHistoryStore = UsageHistoryStore(), userDefaults: UserDefaults = .standard) {
         self.usageHistoryStore = usageHistoryStore
@@ -104,7 +105,7 @@ final class ScribaBarModel: ObservableObject {
 
         do {
             let snapshot = try await client.status(arguments: ["status", "--json"])
-            await apply(snapshot: snapshot)
+            await apply(snapshot: snapshot, detectsResetEvents: true)
         } catch {
             if snapshot == nil {
                 state = .failed(error.localizedDescription)
@@ -216,9 +217,12 @@ final class ScribaBarModel: ObservableObject {
     private func loadFastSnapshot(client: ScribaCLIClient) async {
         do {
             let snapshot = try await client.status(arguments: ["status", "--fast", "--json"])
-            await apply(snapshot: snapshot)
+            guard isFreshCachedSnapshot(snapshot) else { return }
+            await apply(snapshot: snapshot, detectsResetEvents: false)
         } catch {
-            state = .failed(error.localizedDescription)
+            if snapshot == nil {
+                state = .loading
+            }
         }
     }
 
@@ -233,7 +237,7 @@ final class ScribaBarModel: ObservableObject {
         }
     }
 
-    private func apply(snapshot: StatusSnapshot) async {
+    private func apply(snapshot: StatusSnapshot, detectsResetEvents: Bool) async {
         self.snapshot = snapshot
         if selectedProviderID != "overview",
            !snapshot.providers.contains(where: { $0.providerId == selectedProviderID })
@@ -244,9 +248,16 @@ final class ScribaBarModel: ObservableObject {
         state = .ready
         usageHistoryByProvider = usageHistoryStore.observe(snapshot: snapshot, now: lastUpdated ?? Date())
         onSnapshotChanged?(snapshot)
+        guard detectsResetEvents else { return }
         for event in weeklyResetMonitor.observe(snapshot: snapshot) {
             onWeeklyLimitResetEarly?(event)
         }
+    }
+
+    private func isFreshCachedSnapshot(_ snapshot: StatusSnapshot) -> Bool {
+        guard let generatedDate = snapshot.generatedDate else { return false }
+        let maximumAge = max(minimumCachedSnapshotFreshness, refreshCadence.seconds * 2)
+        return Date().timeIntervalSince(generatedDate) <= maximumAge
     }
 
     private func startPeriodicRefresh() {
