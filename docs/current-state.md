@@ -1,6 +1,6 @@
 # Scriba Current State
 
-Date: 2026-05-05
+Date: 2026-05-16
 
 ## Project Shape
 
@@ -15,8 +15,8 @@ class of usage answers while staying resource-sane.
 ## Alpha Decisions
 
 - The repo is a Bun monorepo from day one.
-- Alpha code lives in `packages/scriba`; desktop/Tauri stays as a placeholder
-  consumer until the core stabilizes.
+- Alpha core lives in `packages/scriba`; the macOS menu bar app stays a thin
+  native consumer over the same CLI/status contract.
 - Library and CLI stay together until there is real package-boundary pain.
 - Source of truth remains external: Claude/Codex logs and provider APIs.
 - Scriba stores only read-only derived state.
@@ -24,7 +24,7 @@ class of usage answers while staying resource-sane.
   snapshots for app, CLI status, Telegram, and agent reads.
 - Implement alpha core in TypeScript/Bun for package importability and JS
   ecosystem use.
-- Use Tauri for the menu bar app.
+- Use Swift/AppKit/SwiftUI for the macOS menu bar app.
 - Expose a semi-public adapter interface in alpha, marked unstable.
 - Ship `@agensfield/scriba` plus the `scriba` binary.
 - Support both a composed `scriba status` command and provider-specific
@@ -53,6 +53,14 @@ Implemented alpha foundation:
 - Light `ccusage` benchmark harness.
 - Provider descriptor layer for labels, default paths, auth hints, reports, and
   remote probes.
+- Native Swift/AppKit menu bar shell in `apps/macos`, using the TypeScript CLI
+  as its data engine and preserving Scriba core ownership in `packages/scriba`.
+- Native usage-history submenu for the macOS app: each successful status
+  refresh records local provider progress samples, and the menu exposes a
+  hoverable history chart/details surface.
+- macOS weekly-reset watcher: the menu bar app persists weekly limit baselines,
+  refreshes every 10 minutes, and sends a local notification when a weekly
+  provider limit appears to reset before its previous reset time.
 
 Local token/cost reports:
 
@@ -87,6 +95,27 @@ Remote/window metrics borrowed from OpenUsage/CodexBar references:
   runtime-specific SQLite module.
 - `scriba status --fast` reads only the cached status snapshot, and `--no-remote`
   skips provider API probes.
+- The macOS app uses `status --fast --json` for first paint, then full
+  `status --json` refreshes in the background, so launch stays responsive while
+  limit/reset notifications still use fresh provider state.
+- macOS usage history is derived from the same status refreshes and stored
+  locally in `UserDefaults`; it deduplicates unchanged samples inside the
+  refresh window and keeps a bounded recent history per provider.
+- macOS packaging builds the TypeScript CLI before staging the app, writes
+  package/git metadata into `Info.plist`, signs helper/native binaries before
+  signing the app, strips xattrs/AppleDouble files, and smokes the bundled
+  helper under a stripped LaunchServices-like `PATH`. The fallback helper is a
+  native shim named `scriba` and includes a bundled Bun runtime, so it does not
+  require a user-installed Node/Bun runtime when no acceptable system `scriba`
+  is present.
+- macOS distribution has a local zip artifact path: `package_zip.sh` validates
+  the staged app, zips with `ditto --norsrc`, writes a `.sha256`, extracts to a
+  temp dir, verifies the extracted app signature, and smokes the extracted
+  bundled helper.
+- macOS/runtime temp hygiene is part of shippability: resolver subprocess
+  output dirs are removed after each run, dist extraction dirs are removed on
+  exit, package smoke temp consumers are removed on success/failure, and Swift
+  resolver tests clean their fake app bundles.
 - `--redact` redacts local paths, account identifiers, and emails from JSON and
   human output.
 - Cache deletion is safe: `scriba cache reset` can delete derived state and the
@@ -132,7 +161,15 @@ Current benchmark evidence:
   cost history.
 - Schedules slow cost scans outside the foreground refresh group.
 - Uses a single central store plus provider descriptors, a pattern worth
-  adapting for the Tauri app state.
+  adapting for the native macOS app state.
+- Its polished menu comes from a real `NSMenu`, AppKit-backed menu rows,
+  vibrant hosted SwiftUI cards, and restrained blue accents. ScribaBar now uses
+  the same broad architecture; live visual polish still has to be judged from
+  real menu screenshots, not static SwiftUI preview renders.
+- CodexBar's shippability scripts are useful beyond signing/notarization:
+  avoid stale running bundles, make packaging fail on missing resources, seed
+  runtime paths for LaunchServices-launched apps, sign helpers before the app,
+  and validate the newly packaged app is the one that stayed running.
 - Codex OAuth usage API fields observed in the ref: `plan_type`,
   `rate_limit.primary_window`, `rate_limit.secondary_window`,
   `code_review_rate_limit`, and `credits.balance`. Real local probe on
@@ -149,7 +186,8 @@ Current benchmark evidence:
 
 ## Open Questions
 
-- Native packaging implications of `libsql` for the future Tauri app.
+- Whether ad-hoc signed `.app` distribution is enough for alpha users before
+  adding notarization/Sparkle.
 - Whether to split CLI/Telegram/desktop into separate packages after first npm
   publish pressure, or keep the single package longer.
 - Public command names once table output settles.

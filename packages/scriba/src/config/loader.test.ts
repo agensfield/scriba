@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { withTempDir } from '../test/temp.ts'
 import { discoverConfigPaths, loadConfig } from './loader.ts'
 
 describe('config loader', () => {
@@ -26,19 +27,16 @@ describe('config loader', () => {
 	})
 
 	it('loads a project config file', async () => {
-		const cwd = await usingTempDir()
-		await mkdir(join(cwd, '.scriba'), { recursive: true })
-		await writeFile(
-			join(cwd, '.scriba', 'config.json'),
-			JSON.stringify({ locale: 'tr-TR', providers: { codex: { enabled: false } } }),
-		)
+		await withTempDir('scriba-config-', async (cwd) => {
+			await mkdir(join(cwd, '.scriba'), { recursive: true })
+			await writeFile(
+				join(cwd, '.scriba', 'config.json'),
+				JSON.stringify({ locale: 'tr-TR', providers: { codex: { enabled: false } } }),
+			)
 
-		const loaded = await loadConfig({ cwd, env: {} })
-		expect(loaded.config.locale).toBe('tr-TR')
-		expect(loaded.config.providers.codex.enabled).toBe(false)
+			const loaded = await loadConfig({ cwd, env: {} })
+			expect(loaded.config.locale).toBe('tr-TR')
+			expect(loaded.config.providers.codex.enabled).toBe(false)
+		})
 	})
 })
-
-async function usingTempDir(): Promise<string> {
-	return await import('node:fs/promises').then((fs) => fs.mkdtemp('/tmp/scriba-config-'))
-}

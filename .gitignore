@@ -2,3 +2,7 @@ node_modules/
 .DS_Store
 dist/
 coverage/
+.bun-build
+.*.bun-build
+apps/macos/.build/
+apps/macos/apps/

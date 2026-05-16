@@ -11,7 +11,8 @@ over the same core.
 
 - `@agensfield/scriba` importable TypeScript package.
 - `scriba` CLI for humans and agents.
-- Tauri menu bar app as a future consumer, not owner, of usage logic.
+- Native macOS menu bar app as a consumer, not owner, of usage logic, with
+  local usage-history samples and early weekly-reset notifications.
 - Telegram alerts first; queryable bot commands later.
 - Read-only derived cache/index. Claude/Codex logs and provider APIs remain
   source of truth.
@@ -22,6 +23,11 @@ over the same core.
 bun install
 bun run build
 bun run gate
+bun run macos:build
+bun run macos:test
+bun run macos:package
+bun run macos:dist
+bun run macos:run
 bun run scriba doctor
 bun run scriba status
 bun run scriba status --fast
