@@ -144,6 +144,15 @@ final class ScribaBarModel: ObservableObject {
         isSavingTelegram = true
         defer { isSavingTelegram = false }
 
+        do {
+            try await persistTelegramSettings(client: client)
+            telegramResult = DoctorResult(title: "Telegram Config", message: "Saved \(telegramSettings.path).")
+        } catch {
+            telegramResult = DoctorResult(title: "Telegram Config Failed", message: error.localizedDescription)
+        }
+    }
+
+    private func persistTelegramSettings(client: ScribaCLIClient) async throws {
         var args = [
             "config", "telegram", "--json",
             telegramSettings.enabled ? "--enable" : "--disable",
@@ -157,14 +166,9 @@ final class ScribaBarModel: ObservableObject {
             args.append(contentsOf: ["--bot-token", telegramBotTokenInput])
         }
 
-        do {
-            let output = try await client.text(arguments: args)
-            telegramSettings = try Self.decodeTelegramSettings(output)
-            telegramBotTokenInput = ""
-            telegramResult = DoctorResult(title: "Telegram Config", message: "Saved \(telegramSettings.path).")
-        } catch {
-            telegramResult = DoctorResult(title: "Telegram Config Failed", message: error.localizedDescription)
-        }
+        let output = try await client.text(arguments: args)
+        telegramSettings = try Self.decodeTelegramSettings(output)
+        telegramBotTokenInput = ""
     }
 
     func runTelegramAlerts(send: Bool) async {
@@ -180,6 +184,7 @@ final class ScribaBarModel: ObservableObject {
             args.append("--send")
         }
         do {
+            try await persistTelegramSettings(client: client)
             let output = try await client.text(arguments: args)
             telegramResult = DoctorResult(
                 title: send ? "Telegram Send" : "Telegram Alerts",

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/agensfield/scriba/internal/config"
 	"github.com/agensfield/scriba/internal/model"
@@ -50,15 +52,17 @@ func Evaluate(snapshot model.StatusSnapshot, cfg config.TelegramConfig) []Alert 
 
 func Send(botToken, chatID string, alerts []Alert) (int, error) {
 	sent := 0
+	client := &http.Client{Timeout: 10 * time.Second}
 	for _, alert := range alerts {
 		body, _ := json.Marshal(map[string]string{"chat_id": chatID, "text": alert.Message})
-		resp, err := http.Post("https://api.telegram.org/bot"+botToken+"/sendMessage", "application/json", bytes.NewReader(body))
+		resp, err := client.Post("https://api.telegram.org/bot"+botToken+"/sendMessage", "application/json", bytes.NewReader(body))
 		if err != nil {
 			return sent, err
 		}
+		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return sent, fmt.Errorf("telegram send failed: %d", resp.StatusCode)
+			return sent, fmt.Errorf("telegram send failed: %d %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
 		}
 		sent++
 	}

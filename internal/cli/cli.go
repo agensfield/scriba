@@ -44,6 +44,7 @@ type options struct {
 	send            bool
 	enable          bool
 	disable         bool
+	refresh         bool
 	includeErrors   bool
 	noIncludeErrors bool
 	provider        string
@@ -139,7 +140,7 @@ func dispatch(args []string) error {
 		if args[1] == "alerts" {
 			opts, _, err := parse(args[2:], flagSpec{
 				Use:   "scriba telegram alerts [flags]",
-				Flags: []string{"json", "config", "no-remote", "redact", "send"},
+				Flags: []string{"json", "config", "cache-dir", "no-remote", "redact", "send", "refresh"},
 			})
 			if err != nil {
 				return err
@@ -202,6 +203,7 @@ var flagHelp = map[string]flagMeta{
 	"send":              {Name: "send", Usage: "send alerts"},
 	"enable":            {Name: "enable", Usage: "enable feature"},
 	"disable":           {Name: "disable", Usage: "disable feature"},
+	"refresh":           {Name: "refresh", Usage: "refresh status before evaluating alerts"},
 	"bot-token":         {Name: "bot-token", Value: "token", Usage: "telegram bot token"},
 	"bot-token-env":     {Name: "bot-token-env", Value: "env", Usage: "telegram bot token environment variable"},
 	"chat-id":           {Name: "chat-id", Value: "id", Usage: "telegram chat id"},
@@ -255,6 +257,8 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.BoolVar(&opts.enable, name, false, flagHelp[name].Usage)
 		case "disable":
 			fs.BoolVar(&opts.disable, name, false, flagHelp[name].Usage)
+		case "refresh":
+			fs.BoolVar(&opts.refresh, name, false, flagHelp[name].Usage)
 		case "include-errors":
 			fs.BoolVar(&opts.includeErrors, name, false, flagHelp[name].Usage)
 		case "no-include-errors":
@@ -596,11 +600,11 @@ func runTelegram(opts options) error {
 	if err != nil {
 		return err
 	}
-	built, err := status.Build(cfg, nil, !opts.noRemote)
+	snapshot, err := telegramSnapshot(cfg, opts)
 	if err != nil {
 		return err
 	}
-	alerts := telegram.Evaluate(built.Snapshot, cfg.Telegram)
+	alerts := telegram.Evaluate(snapshot, cfg.Telegram)
 	sent := 0
 	if opts.send && len(alerts) > 0 {
 		token := cfg.Telegram.BotToken
@@ -618,7 +622,28 @@ func runTelegram(opts options) error {
 			return err
 		}
 	}
-	return output(opts, map[string]any{"generatedAt": built.Snapshot.GeneratedAt, "enabled": cfg.Telegram.Enabled, "alerts": alerts, "sent": sent}, fmt.Sprintf("%d telegram alerts", len(alerts)))
+	return output(opts, map[string]any{"generatedAt": snapshot.GeneratedAt, "enabled": cfg.Telegram.Enabled, "alerts": alerts, "sent": sent}, fmt.Sprintf("%d telegram alerts", len(alerts)))
+}
+
+func telegramSnapshot(cfg config.Config, opts options) (model.StatusSnapshot, error) {
+	c, err := cache.Open(cfg.CacheDir)
+	if err != nil {
+		return model.StatusSnapshot{}, err
+	}
+	defer func() { _ = c.Close() }()
+	if !opts.refresh {
+		if snapshot, err := c.LoadStatusSnapshot(); err == nil && snapshot != nil {
+			return *snapshot, nil
+		}
+	}
+	built, err := status.Build(cfg, c, !opts.noRemote)
+	if err != nil {
+		return model.StatusSnapshot{}, err
+	}
+	if err := status.Save(c, built); err != nil {
+		return model.StatusSnapshot{}, err
+	}
+	return built.Snapshot, nil
 }
 
 func runTelegramReset(opts options) error {
