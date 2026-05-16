@@ -205,7 +205,7 @@ func runDoctor(opts options) error {
 	if err != nil {
 		return err
 	}
-	return output(opts, payload, render.Doctor(payload.State))
+	return output(opts, payload, render.DoctorPayload(payload))
 }
 
 func runReport(provider, command string, opts options) error {

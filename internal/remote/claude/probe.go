@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -62,7 +64,7 @@ func KeychainServices() []string {
 }
 
 func KeychainServiceExists(service string) bool {
-	if runtimeGOOS() != "darwin" {
+	if runtime.GOOS != "darwin" {
 		return false
 	}
 	cmd := exec.Command("security", "find-generic-password", "-s", service) // #nosec G204 -- Service is selected from Claude Code keychain candidates.
@@ -120,6 +122,7 @@ func Probe(includeHTTP bool) (remote.ProbeResult, error) {
 }
 
 func loadAuth() remote.AuthState {
+	var credentialError *remote.AuthState
 	for _, path := range CredentialPaths() {
 		data, err := os.ReadFile(path) // #nosec G304 -- Claude credential path is resolved from CLAUDE_CONFIG_DIR/default auth locations.
 		if err != nil {
@@ -131,7 +134,9 @@ func loadAuth() remote.AuthState {
 		}
 		auth, err := resolve(parsed.ClaudeAIOAuth)
 		if err != nil {
-			return remote.AuthState{OK: false, Error: err.Error(), Source: "file:" + path}
+			next := remote.AuthState{OK: false, Error: err.Error(), Source: "file:" + path}
+			credentialError = &next
+			continue
 		}
 		if auth.AccessToken != parsed.ClaudeAIOAuth.AccessToken {
 			parsed.ClaudeAIOAuth = auth
@@ -152,23 +157,32 @@ func loadAuth() remote.AuthState {
 		}
 		auth, err := resolve(parsed.ClaudeAIOAuth)
 		if err != nil {
-			return remote.AuthState{OK: false, Error: err.Error(), Source: "keychain:" + service}
+			next := remote.AuthState{OK: false, Error: err.Error(), Source: "keychain:" + service}
+			credentialError = &next
+			continue
+		}
+		if auth.AccessToken != parsed.ClaudeAIOAuth.AccessToken {
+			parsed.ClaudeAIOAuth = auth
+			writeKeychain(service, string(pretty(parsed)))
 		}
 		return remote.AuthState{OK: true, AccessToken: auth.AccessToken, Source: "keychain:" + service}
+	}
+	if credentialError != nil {
+		return *credentialError
 	}
 	return remote.AuthState{OK: false, Error: "not logged in; run `claude` to authenticate"}
 }
 
 func resolve(auth oauth) (oauth, error) {
-	if auth.AccessToken == "" || auth.RefreshToken == "" {
+	if auth.AccessToken == "" {
 		return auth, fmt.Errorf("not logged in; run `claude` to authenticate")
 	}
-	if auth.ExpiresAt > 0 && time.Now().Add(5*time.Minute).UnixMilli() < auth.ExpiresAt {
+	if auth.RefreshToken == "" || auth.ExpiresAt > 0 && time.Now().Add(5*time.Minute).UnixMilli() < auth.ExpiresAt {
 		return auth, nil
 	}
 	next, err := refresh(auth)
 	if err != nil {
-		return auth, fmt.Errorf("claude OAuth credentials found but refresh failed; run `claude` to re-authenticate")
+		return auth, fmt.Errorf("claude OAuth credentials found but refresh failed: %v", err)
 	}
 	return next, nil
 }
@@ -182,6 +196,20 @@ func refresh(auth oauth) (oauth, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		var payload struct {
+			Error struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		if payload.Error.Message != "" {
+			return auth, fmt.Errorf("refresh failed: %d %s: %s", resp.StatusCode, payload.Error.Type, payload.Error.Message)
+		}
+		if text := strings.TrimSpace(string(body)); text != "" {
+			return auth, fmt.Errorf("refresh failed: %d %s", resp.StatusCode, text)
+		}
 		return auth, fmt.Errorf("refresh failed: %d", resp.StatusCode)
 	}
 	var payload map[string]any
@@ -201,9 +229,26 @@ func refresh(auth oauth) (oauth, error) {
 }
 
 func readKeychain(service string) (string, bool) {
+	if runtime.GOOS != "darwin" {
+		return "", false
+	}
+	if user := strings.TrimSpace(os.Getenv("USER")); user != "" {
+		cmd := exec.Command("security", "find-generic-password", "-a", user, "-s", service, "-w") // #nosec G204,G702 -- Arguments are passed without shell; service is a Claude Code candidate and USER scopes the same local keychain lookup Claude Code uses.
+		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) != "" {
+			return strings.TrimSpace(string(out)), true
+		}
+	}
 	cmd := exec.Command("security", "find-generic-password", "-s", service, "-w") // #nosec G204 -- Service is selected from Claude Code keychain candidates.
 	out, err := cmd.Output()
-	return string(out), err == nil
+	return strings.TrimSpace(string(out)), err == nil && strings.TrimSpace(string(out)) != ""
+}
+
+func writeKeychain(service string, payload string) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	cmd := exec.Command("security", "add-generic-password", "-U", "-s", service, "-w", payload) // #nosec G204 -- Service is selected from Claude Code keychain candidates.
+	_ = cmd.Run()
 }
 
 func pushWindow(lines *[]model.MetricLine, label string, value any) {
@@ -262,16 +307,6 @@ func oauthFileSuffix() string {
 		return ""
 	}
 	return "-" + configured
-}
-
-func runtimeGOOS() string {
-	if os.PathSeparator == '/' && strings.Contains(strings.ToLower(os.Getenv("OSTYPE")), "darwin") {
-		return "darwin"
-	}
-	if _, err := os.Stat("/System/Library/CoreServices/SystemVersion.plist"); err == nil {
-		return "darwin"
-	}
-	return ""
 }
 
 func pretty(value any) []byte {
