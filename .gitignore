@@ -1,8 +1,5 @@
-node_modules/
 .DS_Store
-dist/
-coverage/
-.bun-build
-.*.bun-build
+node_modules/
+.build/
+bin/
 apps/macos/.build/
-apps/macos/apps/

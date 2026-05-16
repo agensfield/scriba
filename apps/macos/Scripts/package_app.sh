@@ -57,13 +57,11 @@ resolve_codesign_args() {
 
 resolve_codesign_args
 
-bun --filter @agensfield/scriba build
-MARKETING_VERSION=$(bun -e "console.log(JSON.parse(await Bun.file('$ROOT/packages/scriba/package.json').text()).version)")
+MARKETING_VERSION=$(awk '/Version = / { gsub(/"/, "", $3); print $3; exit }' "$ROOT/internal/buildinfo/buildinfo.go")
 BUILD_NUMBER=$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo "1")
 GIT_COMMIT=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 swift build --package-path "$APP_ROOT" -c "$CONF" --product ScribaBar
-swift build --package-path "$APP_ROOT" -c "$CONF" --product ScribaCLIShim
 
 BIN_DIR=$(swift build --package-path "$APP_ROOT" -c "$CONF" --product ScribaBar --show-bin-path)
 rm -rf "$APP_STAGE"
@@ -72,23 +70,12 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 cp "$BIN_DIR/ScribaBar" "$APP/Contents/MacOS/ScribaBar"
 chmod +x "$APP/Contents/MacOS/ScribaBar"
 
-if [[ -f "$ROOT/packages/scriba/dist/cli.js" ]]; then
-  cp "$BIN_DIR/ScribaCLIShim" "$APP/Contents/Helpers/scriba"
-  chmod +x "$APP/Contents/Helpers/scriba"
-  mkdir -p "$APP/Contents/Resources/ScribaCLI"
-  cp "$ROOT/packages/scriba/dist/cli.js" "$APP/Contents/Resources/ScribaCLI/scriba-cli.js"
-  LIBSQL_ENTRY=$(node -p "require.resolve('libsql', { paths: ['$ROOT/packages/scriba'] })")
-  LIBSQL_NODE_MODULES=$(cd "$(dirname "$LIBSQL_ENTRY")/.." && pwd -P)
-  mkdir -p "$APP/Contents/Resources/ScribaCLI/node_modules"
-  cp -R -L "$LIBSQL_NODE_MODULES/." "$APP/Contents/Resources/ScribaCLI/node_modules/"
-  BUN_BIN=$(command -v bun)
-  cp -L "$BUN_BIN" "$APP/Contents/Helpers/bun"
-  chmod +x "$APP/Contents/Helpers/bun"
-  env -i HOME="${HOME:-}" PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$APP/Contents/Helpers/scriba" --version >/dev/null
-else
-  echo "ERROR: Missing packages/scriba/dist/cli.js after build." >&2
-  exit 1
-fi
+GOOS=darwin GOARCH=arm64 go build \
+  -ldflags "-X github.com/agensfield/scriba/internal/buildinfo.Version=${MARKETING_VERSION} -X github.com/agensfield/scriba/internal/buildinfo.Commit=${GIT_COMMIT}" \
+  -o "$APP/Contents/Helpers/scriba" \
+  "$ROOT/cmd/scriba"
+chmod +x "$APP/Contents/Helpers/scriba"
+env -i HOME="${HOME:-}" PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$APP/Contents/Helpers/scriba" --version >/dev/null
 
 "$APP_ROOT/Scripts/build_icon.sh" "$APP/Contents/Resources/AppIcon.icns"
 
@@ -118,9 +105,6 @@ find "$APP" -name '._*' -delete
 while IFS= read -r -d '' helper; do
   codesign "${CODESIGN_ARGS[@]}" "$helper"
 done < <(find "$APP/Contents/Helpers" -type f \( -perm -111 -o -name '*.node' \) -print0)
-while IFS= read -r -d '' nativeModule; do
-  codesign "${CODESIGN_ARGS[@]}" "$nativeModule"
-done < <(find "$APP/Contents/Resources/ScribaCLI" -type f -name '*.node' -print0)
 codesign "${CODESIGN_ARGS[@]}" "$APP/Contents/MacOS/ScribaBar"
 codesign "${CODESIGN_ARGS[@]}" "$APP"
 

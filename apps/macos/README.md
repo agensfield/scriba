@@ -20,16 +20,13 @@ SCRIBABAR_OPEN_MENU=1 open -n apps/macos/.build/package/ScribaBar.app
 ```
 
 `ScribaBar` prefers a validated system `scriba` when its version is greater than
-or equal to the bundled helper. Otherwise it falls back to the bundled helper at
-`ScribaBar.app/Contents/Helpers/scriba`.
+or equal to the bundled helper. Otherwise it falls back to the bundled native Go
+helper at `ScribaBar.app/Contents/Helpers/scriba`.
 
-The package script builds the TypeScript CLI before staging the app, writes
-bundle metadata from the package version/git state, strips extended attributes,
+The package script builds the Go `scriba` CLI before staging the app, writes
+bundle metadata from the build version/git state, strips extended attributes,
 signs helper/native binaries before the app, and smokes the bundled helper with
-a stripped `PATH`. The helper is a small native shim named `scriba`; it prefers
-the bundled Bun runtime and still seeds common Homebrew/Bun/Node locations
-because a LaunchServices-launched menu bar app does not inherit an interactive
-shell environment.
+a stripped `PATH`. No Bun, Node, JS resources, or shim are bundled.
 
 `package_zip.sh` creates
 `apps/macos/.build/artifacts/ScribaBar-macos-<arch>-<version>.zip` plus a

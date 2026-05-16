@@ -13,12 +13,6 @@ let package = Package(
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
-        .executableTarget(
-            name: "ScribaCLIShim",
-            path: "Sources/ScribaCLIShim",
-            swiftSettings: [
-                .enableUpcomingFeature("StrictConcurrency"),
-            ]),
         .testTarget(
             name: "ScribaBarTests",
             dependencies: ["ScribaBar"],
