@@ -189,6 +189,21 @@ final class ScribaBarModel: ObservableObject {
         }
     }
 
+    func sendTelegramReset(event: WeeklyLimitResetEvent) async {
+        guard let client else { return }
+        let args = [
+            "telegram", "reset", "--json", "--send",
+            "--provider", event.providerID,
+            "--label", event.label,
+            "--message", event.telegramMessage,
+        ]
+        do {
+            _ = try await client.text(arguments: args)
+        } catch {
+            telegramResult = DoctorResult(title: "Telegram Reset Failed", message: error.localizedDescription)
+        }
+    }
+
     func usageHistory(for providerID: String) -> [UsageHistoryEntry] {
         usageHistoryByProvider[providerID] ?? []
     }
@@ -207,7 +222,9 @@ final class ScribaBarModel: ObservableObject {
             let output = try await client.text(arguments: ["config", "telegram", "--json"])
             telegramSettings = try Self.decodeTelegramSettings(output)
         } catch {
-            telegramResult = DoctorResult(title: "Telegram Config Failed", message: error.localizedDescription)
+            telegramResult = DoctorResult(
+                title: "Telegram Config Unavailable",
+                message: "The resolved Scriba CLI does not support menubar Telegram settings yet. Rebuild or relaunch ScribaBar so it picks up the bundled helper.")
         }
     }
 

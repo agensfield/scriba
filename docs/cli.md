@@ -24,6 +24,7 @@ scriba cache reset
 scriba cache prune
 scriba cache vacuum
 scriba telegram alerts
+scriba telegram reset --send --provider codex --label weekly --message "🎉 Tibo just reset limits! 🎊"
 ```
 
 Bare `scriba` is equivalent to `scriba status`.
@@ -44,6 +45,10 @@ Telegram, and agent reads that should not trigger a foreground scan.
 `scriba config telegram` edits the same config file used by the macOS menu bar
 settings window. Bot tokens can be stored in the config for app use, or supplied
 through `telegram.botTokenEnv` for terminal-only workflows.
+
+`scriba telegram reset` is the small one-shot send path used by ScribaBar when a
+reset heuristic fires. It reads the same Telegram config and only sends when
+Telegram is enabled.
 
 ## Reports
 

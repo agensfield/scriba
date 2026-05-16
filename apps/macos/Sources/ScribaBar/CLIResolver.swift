@@ -82,6 +82,7 @@ struct CLIResolver {
 
     private func isSystem(_ info: CLIInfo, acceptableAgainst bundled: CLIInfo?) -> Bool {
         guard info.source == .system || info.source == .cachedSystem else { return false }
+        guard supportsMenuBarConfig(info.url) else { return false }
         guard let bundled else { return true }
         return info.version >= bundled.version
     }
@@ -152,6 +153,11 @@ struct CLIResolver {
         let result = runner.run(url: url, arguments: ["--version"], timeout: 1.5)
         guard result.exitCode == 0 else { return nil }
         return SemanticVersion(result.stdout)
+    }
+
+    private func supportsMenuBarConfig(_ url: URL) -> Bool {
+        let result = runner.run(url: url, arguments: ["config", "path"], timeout: 1.5)
+        return result.exitCode == 0
     }
 
     private func isExecutable(_ url: URL) -> Bool {

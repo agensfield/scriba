@@ -47,6 +47,8 @@ type options struct {
 	includeErrors   bool
 	noIncludeErrors bool
 	provider        string
+	label           string
+	message         string
 	execute         bool
 	out             string
 }
@@ -131,17 +133,30 @@ func dispatch(args []string) error {
 		}
 		return runCache(args[1], opts)
 	case "telegram":
-		if len(args) < 2 || args[1] != "alerts" {
+		if len(args) < 2 {
 			return fmt.Errorf("unknown telegram command")
 		}
-		opts, _, err := parse(args[2:], flagSpec{
-			Use:   "scriba telegram alerts [flags]",
-			Flags: []string{"json", "config", "no-remote", "redact", "send"},
-		})
-		if err != nil {
-			return err
+		if args[1] == "alerts" {
+			opts, _, err := parse(args[2:], flagSpec{
+				Use:   "scriba telegram alerts [flags]",
+				Flags: []string{"json", "config", "no-remote", "redact", "send"},
+			})
+			if err != nil {
+				return err
+			}
+			return runTelegram(opts)
 		}
-		return runTelegram(opts)
+		if args[1] == "reset" {
+			opts, _, err := parse(args[2:], flagSpec{
+				Use:   "scriba telegram reset [flags]",
+				Flags: []string{"json", "config", "redact", "send", "provider", "label", "message"},
+			})
+			if err != nil {
+				return err
+			}
+			return runTelegramReset(opts)
+		}
+		return fmt.Errorf("unknown telegram command")
 	case "bench":
 		if len(args) < 2 || args[1] != "ccusage" {
 			return fmt.Errorf("unknown bench command")
@@ -195,6 +210,8 @@ var flagHelp = map[string]flagMeta{
 	"include-errors":    {Name: "include-errors", Usage: "include provider errors in telegram alerts"},
 	"no-include-errors": {Name: "no-include-errors", Usage: "exclude provider errors from telegram alerts"},
 	"provider":          {Name: "provider", Value: "name", Usage: "benchmark provider", Default: "all"},
+	"label":             {Name: "label", Value: "text", Usage: "alert label"},
+	"message":           {Name: "message", Value: "text", Usage: "telegram message"},
 	"execute":           {Name: "execute", Usage: "execute benchmark"},
 	"out":               {Name: "out", Value: "path", Usage: "output path"},
 }
@@ -244,6 +261,10 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.BoolVar(&opts.noIncludeErrors, name, false, flagHelp[name].Usage)
 		case "provider":
 			fs.StringVar(&opts.provider, name, "all", flagHelp[name].Usage)
+		case "label":
+			fs.StringVar(&opts.label, name, "", flagHelp[name].Usage)
+		case "message":
+			fs.StringVar(&opts.message, name, "", flagHelp[name].Usage)
 		case "execute":
 			fs.BoolVar(&opts.execute, name, false, flagHelp[name].Usage)
 		case "out":
@@ -600,6 +621,41 @@ func runTelegram(opts options) error {
 	return output(opts, map[string]any{"generatedAt": built.Snapshot.GeneratedAt, "enabled": cfg.Telegram.Enabled, "alerts": alerts, "sent": sent}, fmt.Sprintf("%d telegram alerts", len(alerts)))
 }
 
+func runTelegramReset(opts options) error {
+	cfg, err := load(opts)
+	if err != nil {
+		return err
+	}
+	message := strings.TrimSpace(opts.message)
+	if message == "" {
+		return fmt.Errorf("missing --message for telegram reset")
+	}
+	alert := telegram.Alert{
+		ProviderID: opts.provider,
+		Label:      opts.label,
+		Severity:   "reset",
+		Message:    message,
+	}
+	sent := 0
+	if opts.send && cfg.Telegram.Enabled {
+		token := cfg.Telegram.BotToken
+		if token == "" {
+			token = os.Getenv(cfg.Telegram.BotTokenEnv)
+		}
+		if token == "" {
+			return fmt.Errorf("missing Telegram bot token; set telegram.botToken or env %s", cfg.Telegram.BotTokenEnv)
+		}
+		if cfg.Telegram.ChatID == "" {
+			return fmt.Errorf("missing telegram.chatId in Scriba config")
+		}
+		sent, err = telegram.Send(token, cfg.Telegram.ChatID, []telegram.Alert{alert})
+		if err != nil {
+			return err
+		}
+	}
+	return output(opts, map[string]any{"enabled": cfg.Telegram.Enabled, "alert": alert, "sent": sent}, "telegram reset alert")
+}
+
 func runBench(opts options) error {
 	payload := bench.Build(opts.provider, opts.execute)
 	if opts.out != "" {
@@ -667,7 +723,7 @@ func commands() map[string][]string {
 		"config":   {"path", "show", "init", "telegram"},
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
-		"telegram": {"alerts"},
+		"telegram": {"alerts", "reset"},
 	}
 }
 
@@ -681,7 +737,7 @@ Commands:
   scriba codex daily|weekly|monthly|sessions
   scriba config path|show|init|telegram
   scriba cache status|reset|prune|vacuum
-  scriba telegram alerts
+  scriba telegram alerts|reset
   scriba bench ccusage
 `
 }

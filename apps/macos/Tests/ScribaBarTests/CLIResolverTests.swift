@@ -63,6 +63,19 @@ struct CLIResolverTests {
         #expect(resolved?.url.path == cached.path)
         #expect(resolved?.source == .cachedSystem)
     }
+
+    @Test("ignores system CLI without config command support")
+    func ignoresSystemCLIWithoutConfigSupport() async throws {
+        let fixture = try ResolverFixture()
+        defer { fixture.cleanup() }
+        let bundled = try fixture.writeBundled(version: "1.0.0")
+        _ = try fixture.writeSystem(version: "1.0.0", supportsConfig: false)
+
+        let resolved = await fixture.resolver().resolve()
+
+        #expect(resolved?.url.path == bundled.path)
+        #expect(resolved?.source == .bundled)
+    }
 }
 
 private struct ResolverFixture {
@@ -113,17 +126,22 @@ private struct ResolverFixture {
     }
 
     @discardableResult
-    func writeSystem(version: String) throws -> URL {
-        try writeExecutable(at: systemBinURL.appendingPathComponent("scriba"), version: version)
+    func writeSystem(version: String, supportsConfig: Bool = true) throws -> URL {
+        try writeExecutable(at: systemBinURL.appendingPathComponent("scriba"), version: version, supportsConfig: supportsConfig)
     }
 
     @discardableResult
-    func writeExecutable(at url: URL, version: String) throws -> URL {
+    func writeExecutable(at url: URL, version: String, supportsConfig: Bool = true) throws -> URL {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
+        let configCase = supportsConfig
+            ? "if [ \"$1\" = \"config\" ] && [ \"$2\" = \"path\" ]; then printf '%s\\n' '/tmp/scriba-config.json'; exit 0; fi"
+            : "if [ \"$1\" = \"config\" ]; then printf '%s\\n' 'unknown command: config' >&2; exit 1; fi"
         try """
         #!/bin/sh
+        if [ "$1" = "--version" ]; then printf '%s\\n' '\(version)'; exit 0; fi
+        \(configCase)
         printf '%s\\n' '\(version)'
         """.write(to: url, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)

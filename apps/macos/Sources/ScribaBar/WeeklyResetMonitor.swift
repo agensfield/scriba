@@ -24,6 +24,10 @@ struct WeeklyLimitResetEvent: Equatable {
         return "\(providerName) \(label) dropped from \(previous) to \(current) before \(expected). Go be irresponsible."
     }
 
+    var telegramMessage: String {
+        "🎉 Tibo just reset limits! 🎊\n\(message)"
+    }
+
     private static func percent(_ value: Double) -> String {
         "\(Int(value.rounded()))%"
     }
