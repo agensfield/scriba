@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/agensfield/scriba/internal/doctor"
 	"github.com/agensfield/scriba/internal/model"
@@ -108,7 +109,7 @@ func MetricLine(line model.MetricLine) string {
 		percent := int(math.Round(used / limit * 100))
 		details := "used"
 		if line.ResetsAt != "" {
-			details += " · resets " + line.ResetsAt
+			details += " · " + resetLabel(line.ResetsAt)
 		}
 		return fmt.Sprintf("%s %s %s %s", label(line.Label), bar(percent), percentValue(percent), muted(details))
 	default:
@@ -181,9 +182,15 @@ func bar(percent int) string {
 	if percent > 100 {
 		percent = 100
 	}
-	width := 18
-	filled := int(math.Round(float64(percent) / 100 * float64(width)))
-	return "[" + green(strings.Repeat("█", filled)) + strings.Repeat("░", width-filled) + "]"
+	width := 20
+	filled := int(math.Round(float64(percent) / 5))
+	color := green
+	if percent >= 90 {
+		color = red
+	} else if percent >= 70 {
+		color = yellow
+	}
+	return color(strings.Repeat("▰", filled)) + strings.Repeat("▱", width-filled)
 }
 
 func percentValue(percent int) string {
@@ -193,7 +200,7 @@ func percentValue(percent int) string {
 	if percent >= 70 {
 		return yellow(fmt.Sprintf("%d%%", percent))
 	}
-	return green(fmt.Sprintf("%d%%", percent))
+	return value(fmt.Sprintf("%d%%", percent))
 }
 
 func compact(value float64) string {
@@ -225,17 +232,38 @@ func formatBytes(value int64) string {
 }
 
 func duration(ms int64) string {
-	seconds := ms / 1000
+	seconds := int64(math.Round(float64(ms) / 1000))
 	if seconds < 60 {
 		return fmt.Sprintf("%ds", seconds)
 	}
-	minutes := seconds / 60
+	minutes := int64(math.Round(float64(seconds) / 60))
 	if minutes < 60 {
 		return fmt.Sprintf("%dm", minutes)
 	}
-	hours := minutes / 60
-	if hours < 48 {
+	hours := int64(math.Round(float64(minutes) / 60))
+	if hours < 24 {
 		return fmt.Sprintf("%dh", hours)
 	}
-	return fmt.Sprintf("%dd", hours/24)
+	days := hours / 24
+	remainder := hours % 24
+	if remainder == 0 {
+		return fmt.Sprintf("%dd", days)
+	}
+	return fmt.Sprintf("%dd %dh", days, remainder)
+}
+
+func resetLabel(resetsAt string) string {
+	reset, err := time.Parse(time.RFC3339Nano, resetsAt)
+	if err != nil {
+		reset, err = time.Parse(time.RFC3339, resetsAt)
+	}
+	if err != nil {
+		return "resets " + resetsAt
+	}
+	absolute := reset.Local().Format("Jan 2 15:04")
+	delta := time.Until(reset)
+	if delta <= 0 {
+		return "reset due " + absolute
+	}
+	return "resets in " + duration(delta.Milliseconds()) + " (" + absolute + ")"
 }
