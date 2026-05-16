@@ -42,13 +42,15 @@ apps/macos/Scripts/package_zip.sh release
 
 Human output is the default. Use `--json` for agents and automation.
 
-The root `Makefile` wraps the common local loops:
+The root `justfile` wraps the common local loops:
 
 ```sh
-make check
-make macos-start
-make macos-package
-make macos-release
+just
+just check
+just macos-start
+just macos-package
+just macos-launch
+just macos-release
 ```
 
 ## Docs
