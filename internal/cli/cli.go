@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -50,6 +51,9 @@ func Run(args []string) int {
 		args = []string{"status"}
 	}
 	if err := dispatch(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -59,13 +63,19 @@ func Run(args []string) int {
 func dispatch(args []string) error {
 	switch args[0] {
 	case "doctor":
-		opts, _, err := parse(args[1:], false)
+		opts, _, err := parse(args[1:], flagSpec{
+			Use:   "scriba doctor [flags]",
+			Flags: []string{"json", "config", "cache-dir", "no-remote", "redact"},
+		})
 		if err != nil {
 			return err
 		}
 		return runDoctor(opts)
 	case "status":
-		opts, _, err := parse(args[1:], false)
+		opts, _, err := parse(args[1:], flagSpec{
+			Use:   "scriba status [flags]",
+			Flags: []string{"json", "config", "cache-dir", "no-cache", "no-remote", "fast", "redact"},
+		})
 		if err != nil {
 			return err
 		}
@@ -74,7 +84,10 @@ func dispatch(args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("missing %s report command", args[0])
 		}
-		opts, _, err := parse(args[2:], true)
+		opts, _, err := parse(args[2:], flagSpec{
+			Use:   fmt.Sprintf("scriba %s %s [flags]", args[0], args[1]),
+			Flags: []string{"json", "config", "cache-dir", "no-cache", "redact", "since", "until"},
+		})
 		if err != nil {
 			return err
 		}
@@ -85,7 +98,10 @@ func dispatch(args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("missing cache command")
 		}
-		opts, _, err := parse(args[2:], false)
+		opts, _, err := parse(args[2:], flagSpec{
+			Use:   fmt.Sprintf("scriba cache %s [flags]", args[1]),
+			Flags: []string{"config", "cache-dir", "redact"},
+		})
 		if err != nil {
 			return err
 		}
@@ -94,7 +110,10 @@ func dispatch(args []string) error {
 		if len(args) < 2 || args[1] != "alerts" {
 			return fmt.Errorf("unknown telegram command")
 		}
-		opts, _, err := parse(args[2:], false)
+		opts, _, err := parse(args[2:], flagSpec{
+			Use:   "scriba telegram alerts [flags]",
+			Flags: []string{"json", "config", "no-remote", "redact", "send"},
+		})
 		if err != nil {
 			return err
 		}
@@ -103,7 +122,10 @@ func dispatch(args []string) error {
 		if len(args) < 2 || args[1] != "ccusage" {
 			return fmt.Errorf("unknown bench command")
 		}
-		opts, _, err := parse(args[2:], false)
+		opts, _, err := parse(args[2:], flagSpec{
+			Use:   "scriba bench ccusage [flags]",
+			Flags: []string{"json", "redact", "provider", "execute", "out"},
+		})
 		if err != nil {
 			return err
 		}
@@ -116,27 +138,87 @@ func dispatch(args []string) error {
 	}
 }
 
-func parse(args []string, report bool) (options, []string, error) {
+type flagSpec struct {
+	Use   string
+	Flags []string
+}
+
+type flagMeta struct {
+	Name    string
+	Value   string
+	Usage   string
+	Default string
+}
+
+var flagHelp = map[string]flagMeta{
+	"json":      {Name: "json", Usage: "emit JSON"},
+	"config":    {Name: "config", Value: "path", Usage: "config path"},
+	"cache-dir": {Name: "cache-dir", Value: "dir", Usage: "cache dir"},
+	"no-cache":  {Name: "no-cache", Usage: "disable cache"},
+	"no-remote": {Name: "no-remote", Usage: "skip remote provider probes"},
+	"fast":      {Name: "fast", Usage: "read cached status only"},
+	"redact":    {Name: "redact", Usage: "redact output"},
+	"since":     {Name: "since", Value: "time", Usage: "start date or timestamp"},
+	"until":     {Name: "until", Value: "time", Usage: "end date or timestamp"},
+	"send":      {Name: "send", Usage: "send alerts"},
+	"provider":  {Name: "provider", Value: "name", Usage: "benchmark provider", Default: "all"},
+	"execute":   {Name: "execute", Usage: "execute benchmark"},
+	"out":       {Name: "out", Value: "path", Usage: "output path"},
+}
+
+func parse(args []string, spec flagSpec) (options, []string, error) {
 	opts := options{provider: "all"}
 	fs := flag.NewFlagSet("scriba", flag.ContinueOnError)
-	fs.BoolVar(&opts.jsonOut, "json", false, "emit JSON")
-	fs.StringVar(&opts.config, "config", "", "config path")
-	fs.StringVar(&opts.cacheDir, "cache-dir", "", "cache dir")
-	fs.BoolVar(&opts.noCache, "no-cache", false, "disable cache")
-	fs.BoolVar(&opts.noRemote, "no-remote", false, "skip remote")
-	fs.BoolVar(&opts.fast, "fast", false, "cached status only")
-	fs.BoolVar(&opts.redact, "redact", false, "redact output")
-	fs.BoolVar(&opts.send, "send", false, "send alerts")
-	fs.StringVar(&opts.provider, "provider", "all", "benchmark provider")
-	fs.BoolVar(&opts.execute, "execute", false, "execute benchmark")
-	fs.StringVar(&opts.out, "out", "", "output path")
-	if report {
-		fs.StringVar(&opts.since, "since", "", "since")
-		fs.StringVar(&opts.until, "until", "", "until")
+	for _, name := range spec.Flags {
+		switch name {
+		case "json":
+			fs.BoolVar(&opts.jsonOut, name, false, flagHelp[name].Usage)
+		case "config":
+			fs.StringVar(&opts.config, name, "", flagHelp[name].Usage)
+		case "cache-dir":
+			fs.StringVar(&opts.cacheDir, name, "", flagHelp[name].Usage)
+		case "no-cache":
+			fs.BoolVar(&opts.noCache, name, false, flagHelp[name].Usage)
+		case "no-remote":
+			fs.BoolVar(&opts.noRemote, name, false, flagHelp[name].Usage)
+		case "fast":
+			fs.BoolVar(&opts.fast, name, false, flagHelp[name].Usage)
+		case "redact":
+			fs.BoolVar(&opts.redact, name, false, flagHelp[name].Usage)
+		case "since":
+			fs.StringVar(&opts.since, name, "", flagHelp[name].Usage)
+		case "until":
+			fs.StringVar(&opts.until, name, "", flagHelp[name].Usage)
+		case "send":
+			fs.BoolVar(&opts.send, name, false, flagHelp[name].Usage)
+		case "provider":
+			fs.StringVar(&opts.provider, name, "all", flagHelp[name].Usage)
+		case "execute":
+			fs.BoolVar(&opts.execute, name, false, flagHelp[name].Usage)
+		case "out":
+			fs.StringVar(&opts.out, name, "", flagHelp[name].Usage)
+		}
 	}
-	fs.SetOutput(os.Stderr)
+	fs.SetOutput(os.Stdout)
+	fs.Usage = func() { printUsage(spec) }
 	err := fs.Parse(args)
 	return opts, fs.Args(), err
+}
+
+func printUsage(spec flagSpec) {
+	_, _ = fmt.Fprintf(os.Stdout, "Usage: %s\n\nFlags:\n", spec.Use)
+	for _, name := range spec.Flags {
+		meta := flagHelp[name]
+		flagName := "--" + meta.Name
+		if meta.Value != "" {
+			flagName += " " + meta.Value
+		}
+		line := fmt.Sprintf("  %-18s %s", flagName, meta.Usage)
+		if meta.Default != "" {
+			line += fmt.Sprintf(" (default %q)", meta.Default)
+		}
+		_, _ = fmt.Fprintln(os.Stdout, line)
+	}
 }
 
 func load(opts options) (config.Config, error) {
