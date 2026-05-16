@@ -14,6 +14,14 @@ Claude Code and Codex usage tracker.
 - JSON status snapshot supports `scriba status --fast`.
 - The macOS app resolves a system `scriba` when same/newer than the bundled
   helper, otherwise it uses the bundled native Go helper.
+- The macOS app exposes used/remaining display mode, menu bar text mode, and
+  refresh cadence settings.
+- Telegram alert config is shared between `scriba config telegram` and the
+  macOS settings window.
+- The app uses controlled native menu rows and macOS 26 glass button styles in
+  the settings window when available.
+- Packaging supports host-arch and universal app/helper builds. Debug builds use
+  a separate bundle identifier from release builds.
 
 ## Invariants
 

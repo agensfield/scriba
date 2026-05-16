@@ -36,10 +36,20 @@ go run ./cmd/scriba cache status
 go run ./cmd/scriba telegram alerts
 
 swift test --package-path apps/macos
+apps/macos/Scripts/compile_and_run.sh --test --open-menu
 apps/macos/Scripts/package_zip.sh release
 ```
 
 Human output is the default. Use `--json` for agents and automation.
+
+The root `Makefile` wraps the common local loops:
+
+```sh
+make check
+make macos-start
+make macos-package
+make macos-release
+```
 
 ## Docs
 

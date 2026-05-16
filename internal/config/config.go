@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 )
 
 type ProviderConfig struct {
@@ -20,6 +21,7 @@ type TelegramAlertsConfig struct {
 
 type TelegramConfig struct {
 	Enabled     bool                 `json:"enabled"`
+	BotToken    string               `json:"botToken,omitempty"`
 	BotTokenEnv string               `json:"botTokenEnv"`
 	ChatID      string               `json:"chatId,omitempty"`
 	Alerts      TelegramAlertsConfig `json:"alerts"`
@@ -55,10 +57,24 @@ func Default() Config {
 	return cfg
 }
 
+func DefaultPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "scriba", "config.json")
+}
+
 func Load(path string) (Config, error) {
 	cfg := Default()
 	if path == "" {
-		return cfg, nil
+		path = DefaultPath()
+		if path == "" {
+			return cfg, nil
+		}
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			return cfg, nil
+		}
 	}
 	data, err := os.ReadFile(path) // #nosec G304 -- Explicit --config path is user-controlled by design.
 	if err != nil {
@@ -83,6 +99,26 @@ func Load(path string) (Config, error) {
 		cfg.Telegram.Alerts.WeeklyPercent = 80
 	}
 	return cfg, nil
+}
+
+func Save(path string, cfg Config) error {
+	if path == "" {
+		path = DefaultPath()
+	}
+	if path == "" {
+		return errors.New("could not resolve config path")
+	}
+	if err := Validate(cfg); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
 func Validate(cfg Config) error {

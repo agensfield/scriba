@@ -41,14 +41,69 @@ struct MetricPresentation: Identifiable {
     let id: String
     let label: String
     let usedPercent: Double
+    let resetsAt: Date?
+    let periodDurationMs: Double?
     let resetText: String?
 
     var remainingPercent: Double {
-        100 - usedPercent
+        max(0, 100 - usedPercent)
     }
 
     var percentLabel: String {
-        "\(Int(usedPercent.rounded()))% used"
+        percentLabel(mode: .used)
+    }
+
+    func displayPercent(mode: UsagePercentMode) -> Double {
+        switch mode {
+        case .used:
+            usedPercent
+        case .remaining:
+            remainingPercent
+        }
+    }
+
+    func percentLabel(mode: UsagePercentMode) -> String {
+        "\(Int(displayPercent(mode: mode).rounded()))% \(mode.suffix)"
+    }
+
+    func paceText(now: Date = Date()) -> String? {
+        guard let resetsAt,
+              let periodDurationMs,
+              periodDurationMs > 0
+        else {
+            return nil
+        }
+
+        let windowSeconds = periodDurationMs / 1_000
+        let elapsedSeconds = windowSeconds - resetsAt.timeIntervalSince(now)
+        guard elapsedSeconds > windowSeconds * 0.03 else {
+            return nil
+        }
+
+        let expectedUsed = min(max((elapsedSeconds / windowSeconds) * 100, 0), 100)
+        let delta = usedPercent - expectedUsed
+        if abs(delta) < 3 {
+            return "on pace"
+        }
+        if delta > 0 {
+            return "\(Int(delta.rounded()))% fast"
+        }
+        return "\(Int(abs(delta).rounded()))% reserve"
+    }
+
+    func menuBarLabel(percentMode: UsagePercentMode, textMode: MenuBarTextMode) -> String {
+        let percent = "\(Int(displayPercent(mode: percentMode).rounded()))%"
+        let pace = paceText() ?? "steady"
+        switch textMode {
+        case .iconOnly:
+            return ""
+        case .percent:
+            return percent
+        case .pace:
+            return pace
+        case .both:
+            return "\(percent) \(pace)"
+        }
     }
 }
 
@@ -115,10 +170,13 @@ extension MetricPresentation {
         guard let used = line.used else { return nil }
         let limit = max(line.limit ?? 100, 1)
         let percent = min(max((used / limit) * 100, 0), 100)
+        let resetDate = line.resetsAt.flatMap(ScribaDateParser.date(from:))
         self.init(
             id: line.id,
             label: line.label,
             usedPercent: percent,
+            resetsAt: resetDate,
+            periodDurationMs: line.periodDurationMs,
             resetText: line.resetDescription)
     }
 }

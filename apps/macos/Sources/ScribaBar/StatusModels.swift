@@ -25,6 +25,7 @@ struct StatusLine: Decodable, Identifiable {
     let used: Double?
     let limit: Double?
     let resetsAt: String?
+    let periodDurationMs: Double?
 
     init(
         type: String,
@@ -33,7 +34,8 @@ struct StatusLine: Decodable, Identifiable {
         value: String?,
         used: Double?,
         limit: Double?,
-        resetsAt: String?)
+        resetsAt: String?,
+        periodDurationMs: Double?)
     {
         self.type = type
         self.label = label
@@ -42,6 +44,7 @@ struct StatusLine: Decodable, Identifiable {
         self.used = used
         self.limit = limit
         self.resetsAt = resetsAt
+        self.periodDurationMs = periodDurationMs
     }
 
     enum CodingKeys: String, CodingKey {
@@ -52,6 +55,7 @@ struct StatusLine: Decodable, Identifiable {
         case used
         case limit
         case resetsAt
+        case periodDurationMs
     }
 
     init(from decoder: Decoder) throws {
@@ -69,5 +73,6 @@ struct StatusLine: Decodable, Identifiable {
         used = try container.decodeIfPresent(Double.self, forKey: .used)
         limit = try container.decodeIfPresent(Double.self, forKey: .limit)
         resetsAt = try container.decodeIfPresent(String.self, forKey: .resetsAt)
+        periodDurationMs = try container.decodeIfPresent(Double.self, forKey: .periodDurationMs)
     }
 }

@@ -1,6 +1,7 @@
 # Scriba Configuration
 
-Scriba runs with defaults and accepts an optional JSON config via `--config`.
+Scriba runs with defaults, reads `~/.config/scriba/config.json` when it exists,
+and accepts an explicit JSON config via `--config`.
 
 ```json
 {
@@ -18,6 +19,7 @@ Scriba runs with defaults and accepts an optional JSON config via `--config`.
   },
   "telegram": {
     "enabled": false,
+    "botToken": "",
     "botTokenEnv": "SCRIBA_TELEGRAM_BOT_TOKEN",
     "chatId": "",
     "alerts": {
@@ -28,6 +30,22 @@ Scriba runs with defaults and accepts an optional JSON config via `--config`.
   }
 }
 ```
+
+Configure Telegram from the CLI:
+
+```sh
+scriba config path
+scriba config init
+scriba config telegram --enable --chat-id "$TELEGRAM_CHAT_ID" --bot-token-env SCRIBA_TELEGRAM_BOT_TOKEN
+scriba config telegram --enable --chat-id "$TELEGRAM_CHAT_ID" --bot-token "$TELEGRAM_BOT_TOKEN"
+scriba config telegram --session-percent 80 --weekly-percent 80 --include-errors
+scriba telegram alerts --json
+scriba telegram alerts --send
+```
+
+`telegram.botToken` is optional and is stored in the local config file with
+`0600` permissions. `telegram.botTokenEnv` remains supported for terminal
+workflows that prefer environment-owned secrets.
 
 Empty provider `paths` use defaults:
 

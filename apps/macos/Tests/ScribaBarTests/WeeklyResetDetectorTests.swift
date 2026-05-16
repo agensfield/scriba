@@ -28,8 +28,55 @@ struct WeeklyResetDetectorTests {
         #expect(events.count == 1)
         #expect(events.first?.providerID == "codex")
         #expect(events.first?.label == "Weekly limit")
+        #expect(events.first?.title == "Tibo just reset limits!")
         #expect(Int(events.first?.previousUsedPercent.rounded() ?? -1) == 28)
         #expect(Int(events.first?.currentUsedPercent.rounded() ?? -1) == 1)
+    }
+
+    @Test("alerts when 5h usage drops before the expected reset")
+    func detectsFiveHourEarlyUsageDrop() {
+        var detector = WeeklyResetDetector()
+        _ = detector.observe(
+            snapshot: snapshot(
+                label: "5h limit",
+                used: 41,
+                resetsAt: "2026-05-16T15:00:00.000Z",
+                periodDurationMs: 18_000_000),
+            now: date("2026-05-16T10:00:00.000Z"))
+
+        let events = detector.observe(
+            snapshot: snapshot(
+                label: "5h limit",
+                used: 2,
+                resetsAt: "2026-05-16T20:00:00.000Z",
+                periodDurationMs: 18_000_000),
+            now: date("2026-05-16T10:10:00.000Z"))
+
+        #expect(events.count == 1)
+        #expect(events.first?.providerID == "codex")
+        #expect(events.first?.label == "5h limit")
+    }
+
+    @Test("does not alert on small 5h drift")
+    func ignoresSmallFiveHourDrift() {
+        var detector = WeeklyResetDetector()
+        _ = detector.observe(
+            snapshot: snapshot(
+                label: "5h limit",
+                used: 18,
+                resetsAt: "2026-05-16T15:00:00.000Z",
+                periodDurationMs: 18_000_000),
+            now: date("2026-05-16T10:00:00.000Z"))
+
+        let events = detector.observe(
+            snapshot: snapshot(
+                label: "5h limit",
+                used: 14,
+                resetsAt: "2026-05-16T15:00:00.000Z",
+                periodDurationMs: 18_000_000),
+            now: date("2026-05-16T10:10:00.000Z"))
+
+        #expect(events.isEmpty)
     }
 
     @Test("does not alert after the expected reset time has already arrived")
@@ -77,7 +124,31 @@ struct WeeklyResetDetectorTests {
                             value: nil,
                             used: weeklyUsed,
                             limit: 100,
-                            resetsAt: resetsAt),
+                            resetsAt: resetsAt,
+                            periodDurationMs: 604_800_000),
+                    ]),
+            ])
+    }
+
+    private func snapshot(label: String, used: Double, resetsAt: String, periodDurationMs: Double) -> StatusSnapshot {
+        StatusSnapshot(
+            schemaVersion: "scriba.alpha.v1",
+            generatedAt: "2026-05-16T10:00:00.000Z",
+            providers: [
+                ProviderSnapshot(
+                    providerId: "codex",
+                    displayName: "Codex",
+                    state: "ok",
+                    lines: [
+                        StatusLine(
+                            type: "progress",
+                            label: label,
+                            text: nil,
+                            value: nil,
+                            used: used,
+                            limit: 100,
+                            resetsAt: resetsAt,
+                            periodDurationMs: periodDurationMs),
                     ]),
             ])
     }

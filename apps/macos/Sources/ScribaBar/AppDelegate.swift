@@ -5,13 +5,14 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private static let menuWidth: CGFloat = 310
-    private static let summaryHeight: CGFloat = 326
+    private static let summaryHeight: CGFloat = 368
     private static let historyMenuWidth: CGFloat = 390
     private static let historyMenuHeight: CGFloat = 208
 
     private var statusItem: NSStatusItem?
     private var model: ScribaBarModel?
     private var settingsWindow: NSWindow?
+    private let appLaunchedAt = Date()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -26,8 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = StatusItemIconRenderer.makeIcon(
-            primaryUsed: nil,
-            secondaryUsed: nil,
+            primaryPercent: nil,
+            secondaryPercent: nil,
             isStale: true)
         statusItem.button?.imagePosition = .imageLeading
         statusItem.button?.title = ""
@@ -47,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Task {
             await model.start()
         }
+        scheduleStatusItemVisibilityCheck()
 
         let environment = ProcessInfo.processInfo.environment
         if environment["SCRIBABAR_OPEN_MENU"] == "1" || environment["SCRIBABAR_OPEN_POPOVER"] == "1" {
@@ -257,7 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 310),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 620),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false)
@@ -299,23 +301,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard let snapshot else {
             button.title = ""
             button.image = StatusItemIconRenderer.makeIcon(
-                primaryUsed: nil,
-                secondaryUsed: nil,
+                primaryPercent: nil,
+                secondaryPercent: nil,
                 isStale: true)
             return
         }
 
         let overview = snapshot.overview
+        let primary = overview.codexFiveHour?.displayPercent(mode: model?.usagePercentMode ?? .used)
+        let secondary = overview.codexWeekly?.displayPercent(mode: model?.usagePercentMode ?? .used)
         button.image = StatusItemIconRenderer.makeIcon(
-            primaryUsed: overview.codexFiveHour?.usedPercent,
-            secondaryUsed: overview.codexWeekly?.usedPercent,
+            primaryPercent: primary,
+            secondaryPercent: secondary,
             isStale: false)
 
-        if let percent = overview.codexWeekly?.usedPercent {
-            button.title = "S \(Int(percent.rounded()))%"
-        } else {
-            button.title = "S"
+        let textMode = model?.menuBarTextMode ?? .iconOnly
+        let percentMode = model?.usagePercentMode ?? .used
+        button.title = overview.codexWeekly?.menuBarLabel(percentMode: percentMode, textMode: textMode) ?? ""
+        if !button.title.isEmpty {
+            button.title = " " + button.title
         }
+    }
+
+    private func scheduleStatusItemVisibilityCheck() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + MenuBarVisibilityWatcher.startupCheckDelay) { [weak self] in
+            self?.checkStatusItemVisibility()
+        }
+    }
+
+    private func checkStatusItemVisibility() {
+        guard let statusItem else { return }
+        let snapshot = MenuBarVisibilityWatcher.visibilitySnapshot(statusItem)
+        guard MenuBarVisibilityWatcher.shouldAttemptStartupRecovery(
+            appLaunchedAt: appLaunchedAt,
+            snapshot: snapshot)
+        else {
+            return
+        }
+
+        statusItem.isVisible = false
+        statusItem.isVisible = true
+
+        let recovered = MenuBarVisibilityWatcher.visibilitySnapshot(statusItem)
+        guard MenuBarVisibilityWatcher.isBlockedSnapshot(recovered),
+              MenuBarVisibilityWatcher.shouldShowGuidance(userDefaults: .standard)
+        else {
+            return
+        }
+        MenuBarVisibilityWatcher.presentGuidance(userDefaults: .standard)
     }
 }
 

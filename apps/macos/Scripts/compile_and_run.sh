@@ -14,6 +14,7 @@ WAIT_FOR_LOCK=0
 RUN_TESTS=0
 OPEN_MENU=0
 CONF=debug
+RELEASE_ARCHES=""
 
 log() { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -99,8 +100,10 @@ for arg in "$@"; do
     --open-menu|-m) OPEN_MENU=1 ;;
     --release) CONF=release ;;
     --debug) CONF=debug ;;
+    --release-universal) CONF=release; RELEASE_ARCHES="arm64 x86_64" ;;
+    --release-arches=*) CONF=release; RELEASE_ARCHES="${arg#*=}" ;;
     --help|-h)
-      log "Usage: $(basename "$0") [--wait] [--test] [--open-menu] [--debug|--release]"
+      log "Usage: $(basename "$0") [--wait] [--test] [--open-menu] [--debug|--release] [--release-universal] [--release-arches=\"arm64 x86_64\"]"
       exit 0
       ;;
     *) fail "unknown argument: $arg" ;;
@@ -114,7 +117,11 @@ kill_all_scribabar
 if [[ "$RUN_TESTS" == "1" ]]; then
   run_step "swift test" swift test --package-path "$APP_ROOT"
 fi
-run_step "package app" "$APP_ROOT/Scripts/package_app.sh" "$CONF"
+if [[ -n "$RELEASE_ARCHES" ]]; then
+  run_step "package app" env ARCHES="$RELEASE_ARCHES" "$APP_ROOT/Scripts/package_app.sh" "$CONF"
+else
+  run_step "package app" "$APP_ROOT/Scripts/package_app.sh" "$CONF"
+fi
 
 log "==> launch app"
 if [[ "$OPEN_MENU" == "1" ]]; then

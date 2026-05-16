@@ -67,7 +67,8 @@ struct UsageHistoryStoreTests {
                             value: nil,
                             used: fiveHourUsed,
                             limit: 100,
-                            resetsAt: "2026-05-16T12:46:31.000Z"),
+                            resetsAt: "2026-05-16T12:46:31.000Z",
+                            periodDurationMs: 18_000_000),
                         StatusLine(
                             type: "progress",
                             label: "Weekly limit",
@@ -75,7 +76,8 @@ struct UsageHistoryStoreTests {
                             value: nil,
                             used: weeklyUsed,
                             limit: 100,
-                            resetsAt: "2026-05-19T07:10:35.000Z"),
+                            resetsAt: "2026-05-19T07:10:35.000Z",
+                            periodDurationMs: 604_800_000),
                     ]),
             ])
     }

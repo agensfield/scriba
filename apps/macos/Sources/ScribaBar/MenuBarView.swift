@@ -4,14 +4,15 @@ import SwiftUI
 struct NativeMenuSurfaceView: View {
     @ObservedObject var model: ScribaBarModel
     private let width: CGFloat = 310
-    private let height: CGFloat = 326
+    private let height: CGFloat = 368
 
     private var presentations: [ProviderPresentation] {
         model.snapshot?.presentations ?? []
     }
 
     private var selectedProvider: ProviderPresentation? {
-        presentations.first { $0.id == model.selectedProviderID } ?? presentations.first
+        guard model.selectedProviderID != "overview" else { return nil }
+        return presentations.first { $0.id == model.selectedProviderID } ?? presentations.first
     }
 
     var body: some View {
@@ -42,7 +43,9 @@ struct NativeMenuSurfaceView: View {
                     cliDescription: model.cliDescription,
                     generatedDate: model.snapshot?.generatedDate)
                 if let selectedProvider {
-                    HeroUsageCard(provider: selectedProvider)
+                    HeroUsageCard(provider: selectedProvider, percentMode: model.usagePercentMode)
+                } else if let snapshot = model.snapshot {
+                    OverviewUsageCard(snapshot: snapshot, percentMode: model.usagePercentMode)
                 }
             }
             .padding(.horizontal, 10)
@@ -61,7 +64,7 @@ private struct ProviderSwitcher: View {
             SwitcherButton(
                 id: "overview",
                 title: "Overview",
-                subtitle: overview.codexWeekly?.percentLabel ?? "usage",
+                subtitle: overview.codexWeekly?.percentLabel(mode: .used) ?? "usage",
                 systemImage: "square.grid.2x2",
                 isSelected: selection == "overview",
                 action: { selection = "overview" })
@@ -101,47 +104,45 @@ private struct SwitcherButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 2) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(height: 14)
-                Text(title)
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .lineLimit(1)
-                Text(subtitle)
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .foregroundStyle(isSelected ? MenuPalette.selectedText.opacity(0.86) : MenuPalette.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            .foregroundStyle(isSelected ? MenuPalette.selectedText : MenuPalette.secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 42)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(background))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(isSelected ? 0.20 : 0.06), lineWidth: 1))
+        VStack(spacing: 2) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(height: 14)
+            Text(title)
+                .font(.system(size: 10.5, weight: .semibold))
+                .lineLimit(1)
+            Text(subtitle)
+                .font(.system(size: 8.5, weight: .semibold))
+                .foregroundStyle(isSelected ? MenuPalette.selectedText.opacity(0.86) : MenuPalette.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? MenuPalette.selectedText : MenuPalette.secondary)
+        .frame(maxWidth: .infinity)
+        .frame(height: 42)
+        .background(selectionBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(isSelected ? 0.20 : 0.06), lineWidth: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onTapGesture(perform: action)
     }
 
-    private var background: LinearGradient {
+    @ViewBuilder
+    private var selectionBackground: some View {
         if isSelected {
-            return LinearGradient(
+            LinearGradient(
                 colors: [
                     MenuPalette.selectedBackground.opacity(0.94),
-                    Color(red: 0.32, green: 0.40, blue: 0.92).opacity(0.84),
+                    Color(red: 0.10, green: 0.48, blue: 0.55).opacity(0.82),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        } else {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(red: 0.075, green: 0.080, blue: 0.086))
         }
-        return LinearGradient(
-            colors: [Color.white.opacity(0.050), Color.white.opacity(0.018)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing)
     }
 }
 
@@ -171,6 +172,7 @@ private struct HeaderBlock: View {
 
 private struct HeroUsageCard: View {
     let provider: ProviderPresentation
+    let percentMode: UsagePercentMode
 
     private var primaryMetric: MetricPresentation? {
         provider.metrics.first
@@ -199,18 +201,25 @@ private struct HeroUsageCard: View {
                 Spacer()
 
                 VStack(alignment: .leading, spacing: 7) {
-                    MetricPair(label: primaryMetric?.label ?? "Primary", value: primaryMetric?.percentLabel ?? "n/a")
-                    MetricPair(label: secondaryMetric?.label ?? "Secondary", value: secondaryMetric?.percentLabel ?? "n/a")
+                    MetricPair(
+                        label: primaryMetric?.label ?? "Primary",
+                        value: primaryMetric?.percentLabel(mode: percentMode) ?? "n/a")
+                    MetricPair(
+                        label: secondaryMetric?.label ?? "Secondary",
+                        value: secondaryMetric?.percentLabel(mode: percentMode) ?? "n/a")
                 }
             }
 
             Divider().overlay(MenuPalette.separator)
 
-            MiniBarChart(seed: provider.id, metrics: provider.metrics)
+            UsageMeterStack(provider: provider, metrics: Array(provider.metrics.prefix(3)), percentMode: percentMode)
+                .frame(height: 88)
+
+            MiniBarChart(seed: provider.id, metrics: provider.metrics, percentMode: percentMode)
                 .frame(height: 40)
 
             if !provider.metrics.isEmpty {
-                UsageSummaryFooter(metrics: Array(provider.metrics.prefix(2)))
+                UsageSummaryFooter(metrics: Array(provider.metrics.prefix(2)), percentMode: percentMode)
             }
         }
         .padding(.horizontal, 6)
@@ -218,8 +227,93 @@ private struct HeroUsageCard: View {
     }
 }
 
+private struct OverviewUsageCard: View {
+    let snapshot: StatusSnapshot
+    let percentMode: UsagePercentMode
+
+    private var codex: ProviderPresentation? {
+        snapshot.presentations.first { $0.id == "codex" }
+    }
+
+    private var claude: ProviderPresentation? {
+        snapshot.presentations.first { $0.id == "claude" }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                OverviewTile(
+                    title: "Codex",
+                    value: snapshot.overview.codexWeekly?.percentLabel(mode: percentMode) ?? codex?.badgeText ?? "ready",
+                    subtitle: snapshot.overview.codexFiveHour?.resetText ?? "5h window",
+                    accent: MenuPalette.accent(for: "codex"))
+                OverviewTile(
+                    title: "Claude",
+                    value: claude?.headlineValue ?? snapshot.overview.claudeThirtyDay ?? "ready",
+                    subtitle: claude?.badgeText ?? "local logs",
+                    accent: MenuPalette.accent(for: "claude"))
+            }
+
+            Divider().overlay(MenuPalette.separator)
+
+            if let codex {
+                UsageMeterStack(
+                    provider: codex,
+                    metrics: Array(codex.metrics.prefix(2)),
+                    percentMode: percentMode)
+                    .frame(height: 62)
+            }
+
+            if let claude {
+                UsageMeterStack(
+                    provider: claude,
+                    metrics: Array(claude.metrics.prefix(2)),
+                    percentMode: percentMode)
+                    .frame(height: 62)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+    }
+}
+
+private struct OverviewTile: View {
+    let title: String
+    let value: String
+    let subtitle: String
+    let accent: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(MenuPalette.secondary)
+            Text(value)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(MenuPalette.primary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(subtitle)
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(MenuPalette.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(accent.opacity(0.12)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(accent.opacity(0.26), lineWidth: 1))
+    }
+}
+
 private struct UsageSummaryFooter: View {
     let metrics: [MetricPresentation]
+    let percentMode: UsagePercentMode
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -229,7 +323,7 @@ private struct UsageSummaryFooter: View {
                         Text(metric.label)
                             .font(.system(size: 10.5, weight: .semibold))
                             .foregroundStyle(MenuPalette.primary.opacity(0.90))
-                        Text(metric.percentLabel)
+                        Text(metric.percentLabel(mode: percentMode))
                             .font(.system(size: 10.5, weight: .bold))
                             .foregroundStyle(MenuPalette.primary)
                     }
@@ -245,6 +339,64 @@ private struct UsageSummaryFooter: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct UsageMeterStack: View {
+    let provider: ProviderPresentation
+    let metrics: [MetricPresentation]
+    let percentMode: UsagePercentMode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(metrics) { metric in
+                UsageMeterRow(
+                    metric: metric,
+                    accent: MenuPalette.accent(for: provider.id),
+                    percentMode: percentMode)
+            }
+        }
+    }
+}
+
+private struct UsageMeterRow: View {
+    let metric: MetricPresentation
+    let accent: Color
+    let percentMode: UsagePercentMode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(metric.label)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(MenuPalette.primary.opacity(0.92))
+                Spacer(minLength: 8)
+                Text(metric.percentLabel(mode: percentMode))
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundStyle(MenuPalette.primary)
+                    .monospacedDigit()
+                if let pace = metric.paceText() {
+                    Text(pace)
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(MenuPalette.secondary)
+                }
+            }
+            GeometryReader { proxy in
+                let width = max(1, proxy.size.width * CGFloat(metric.displayPercent(mode: percentMode) / 100))
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(MenuPalette.primary.opacity(0.10))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [accent.opacity(0.92), accent.opacity(0.46)],
+                                startPoint: .leading,
+                                endPoint: .trailing))
+                        .frame(width: width)
+                }
+            }
+            .frame(height: 6)
+        }
     }
 }
 
@@ -270,6 +422,7 @@ private struct MetricPair: View {
 private struct MiniBarChart: View {
     let seed: String
     let metrics: [MetricPresentation]
+    let percentMode: UsagePercentMode
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 3) {
@@ -293,7 +446,7 @@ private struct MiniBarChart: View {
     }
 
     private var values: [CGFloat] {
-        let base = metrics.map { CGFloat($0.usedPercent / 100) }
+        let base = metrics.map { CGFloat($0.displayPercent(mode: percentMode) / 100) }
         let source = base.isEmpty ? [0.16, 0.25, 0.34] : base
         return (0..<30).map { index in
             let metric = source[index % source.count]
@@ -313,7 +466,7 @@ private struct LoadingPane: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(MenuPalette.secondary)
         }
-        .frame(maxWidth: .infinity, minHeight: 420)
+        .frame(maxWidth: .infinity, minHeight: 260)
     }
 }
 
@@ -331,6 +484,6 @@ private struct FailurePane: View {
         }
         .foregroundStyle(MenuPalette.primary)
         .padding(14)
-        .frame(maxWidth: .infinity, minHeight: 420, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
     }
 }

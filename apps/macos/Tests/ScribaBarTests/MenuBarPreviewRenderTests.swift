@@ -25,7 +25,7 @@ struct MenuBarPreviewRenderTests {
         let view = NativeMenuSurfaceView(model: model)
             .environment(\.colorScheme, .dark)
         let hostingView = NSHostingView(rootView: view)
-        hostingView.frame = NSRect(x: 0, y: 0, width: 310, height: 326)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 310, height: 368)
         hostingView.layoutSubtreeIfNeeded()
 
         let bitmap = try #require(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))

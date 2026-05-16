@@ -15,6 +15,10 @@ scriba status --fast
 scriba status --no-remote
 scriba status --redact --json
 scriba schema
+scriba config path
+scriba config show --json
+scriba config init
+scriba config telegram --enable --chat-id <id> --bot-token-env SCRIBA_TELEGRAM_BOT_TOKEN
 scriba cache status
 scriba cache reset
 scriba cache prune
@@ -34,6 +38,12 @@ cache schema/WAL state, cache size, and latest snapshot age. It reports `ok`,
 
 `--fast` reads the cached status snapshot only. It is intended for the menu bar,
 Telegram, and agent reads that should not trigger a foreground scan.
+
+## Config
+
+`scriba config telegram` edits the same config file used by the macOS menu bar
+settings window. Bot tokens can be stored in the config for app use, or supplied
+through `telegram.botTokenEnv` for terminal-only workflows.
 
 ## Reports
 

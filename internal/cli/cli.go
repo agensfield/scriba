@@ -27,19 +27,28 @@ import (
 )
 
 type options struct {
-	jsonOut  bool
-	config   string
-	cacheDir string
-	noCache  bool
-	noRemote bool
-	fast     bool
-	redact   bool
-	since    string
-	until    string
-	send     bool
-	provider string
-	execute  bool
-	out      string
+	jsonOut         bool
+	config          string
+	cacheDir        string
+	botToken        string
+	botTokenEnv     string
+	chatID          string
+	noCache         bool
+	noRemote        bool
+	fast            bool
+	redact          bool
+	since           string
+	until           string
+	sessionPercent  float64
+	weeklyPercent   float64
+	send            bool
+	enable          bool
+	disable         bool
+	includeErrors   bool
+	noIncludeErrors bool
+	provider        string
+	execute         bool
+	out             string
 }
 
 func Run(args []string) int {
@@ -94,6 +103,21 @@ func dispatch(args []string) error {
 		return runReport(args[0], args[1], opts)
 	case "schema":
 		return printJSON(map[string]any{"schemaVersion": model.SchemaVersion, "commands": commands()}, false)
+	case "config":
+		if len(args) < 2 {
+			return fmt.Errorf("missing config command")
+		}
+		opts, _, err := parse(args[2:], flagSpec{
+			Use: fmt.Sprintf("scriba config %s [flags]", args[1]),
+			Flags: []string{
+				"json", "config", "redact", "enable", "disable", "bot-token", "bot-token-env",
+				"chat-id", "session-percent", "weekly-percent", "include-errors", "no-include-errors",
+			},
+		})
+		if err != nil {
+			return err
+		}
+		return runConfig(args[1], opts)
 	case "cache":
 		if len(args) < 2 {
 			return fmt.Errorf("missing cache command")
@@ -151,19 +175,28 @@ type flagMeta struct {
 }
 
 var flagHelp = map[string]flagMeta{
-	"json":      {Name: "json", Usage: "emit JSON"},
-	"config":    {Name: "config", Value: "path", Usage: "config path"},
-	"cache-dir": {Name: "cache-dir", Value: "dir", Usage: "cache dir"},
-	"no-cache":  {Name: "no-cache", Usage: "disable cache"},
-	"no-remote": {Name: "no-remote", Usage: "skip remote provider probes"},
-	"fast":      {Name: "fast", Usage: "read cached status only"},
-	"redact":    {Name: "redact", Usage: "redact output"},
-	"since":     {Name: "since", Value: "time", Usage: "start date or timestamp"},
-	"until":     {Name: "until", Value: "time", Usage: "end date or timestamp"},
-	"send":      {Name: "send", Usage: "send alerts"},
-	"provider":  {Name: "provider", Value: "name", Usage: "benchmark provider", Default: "all"},
-	"execute":   {Name: "execute", Usage: "execute benchmark"},
-	"out":       {Name: "out", Value: "path", Usage: "output path"},
+	"json":              {Name: "json", Usage: "emit JSON"},
+	"config":            {Name: "config", Value: "path", Usage: "config path"},
+	"cache-dir":         {Name: "cache-dir", Value: "dir", Usage: "cache dir"},
+	"no-cache":          {Name: "no-cache", Usage: "disable cache"},
+	"no-remote":         {Name: "no-remote", Usage: "skip remote provider probes"},
+	"fast":              {Name: "fast", Usage: "read cached status only"},
+	"redact":            {Name: "redact", Usage: "redact output"},
+	"since":             {Name: "since", Value: "time", Usage: "start date or timestamp"},
+	"until":             {Name: "until", Value: "time", Usage: "end date or timestamp"},
+	"send":              {Name: "send", Usage: "send alerts"},
+	"enable":            {Name: "enable", Usage: "enable feature"},
+	"disable":           {Name: "disable", Usage: "disable feature"},
+	"bot-token":         {Name: "bot-token", Value: "token", Usage: "telegram bot token"},
+	"bot-token-env":     {Name: "bot-token-env", Value: "env", Usage: "telegram bot token environment variable"},
+	"chat-id":           {Name: "chat-id", Value: "id", Usage: "telegram chat id"},
+	"session-percent":   {Name: "session-percent", Value: "n", Usage: "session alert percentage"},
+	"weekly-percent":    {Name: "weekly-percent", Value: "n", Usage: "weekly alert percentage"},
+	"include-errors":    {Name: "include-errors", Usage: "include provider errors in telegram alerts"},
+	"no-include-errors": {Name: "no-include-errors", Usage: "exclude provider errors from telegram alerts"},
+	"provider":          {Name: "provider", Value: "name", Usage: "benchmark provider", Default: "all"},
+	"execute":           {Name: "execute", Usage: "execute benchmark"},
+	"out":               {Name: "out", Value: "path", Usage: "output path"},
 }
 
 func parse(args []string, spec flagSpec) (options, []string, error) {
@@ -177,6 +210,12 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.StringVar(&opts.config, name, "", flagHelp[name].Usage)
 		case "cache-dir":
 			fs.StringVar(&opts.cacheDir, name, "", flagHelp[name].Usage)
+		case "bot-token":
+			fs.StringVar(&opts.botToken, name, "", flagHelp[name].Usage)
+		case "bot-token-env":
+			fs.StringVar(&opts.botTokenEnv, name, "", flagHelp[name].Usage)
+		case "chat-id":
+			fs.StringVar(&opts.chatID, name, "", flagHelp[name].Usage)
 		case "no-cache":
 			fs.BoolVar(&opts.noCache, name, false, flagHelp[name].Usage)
 		case "no-remote":
@@ -189,8 +228,20 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.StringVar(&opts.since, name, "", flagHelp[name].Usage)
 		case "until":
 			fs.StringVar(&opts.until, name, "", flagHelp[name].Usage)
+		case "session-percent":
+			fs.Float64Var(&opts.sessionPercent, name, 0, flagHelp[name].Usage)
+		case "weekly-percent":
+			fs.Float64Var(&opts.weeklyPercent, name, 0, flagHelp[name].Usage)
 		case "send":
 			fs.BoolVar(&opts.send, name, false, flagHelp[name].Usage)
+		case "enable":
+			fs.BoolVar(&opts.enable, name, false, flagHelp[name].Usage)
+		case "disable":
+			fs.BoolVar(&opts.disable, name, false, flagHelp[name].Usage)
+		case "include-errors":
+			fs.BoolVar(&opts.includeErrors, name, false, flagHelp[name].Usage)
+		case "no-include-errors":
+			fs.BoolVar(&opts.noIncludeErrors, name, false, flagHelp[name].Usage)
 		case "provider":
 			fs.StringVar(&opts.provider, name, "all", flagHelp[name].Usage)
 		case "execute":
@@ -393,6 +444,132 @@ func runCache(command string, opts options) error {
 	}
 }
 
+func runConfig(command string, opts options) error {
+	path := opts.config
+	if path == "" {
+		path = config.DefaultPath()
+	}
+	switch command {
+	case "path":
+		fmt.Println(path)
+		return nil
+	case "show":
+		cfg, err := config.Load(opts.config)
+		if err != nil {
+			return err
+		}
+		if opts.jsonOut {
+			return printJSON(privacy.Redact(cfg), false)
+		}
+		fmt.Println(path)
+		return nil
+	case "init":
+		cfg, err := config.Load(opts.config)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := config.Save(opts.config, cfg); err != nil {
+			return err
+		}
+		return output(opts, configSummary(path, cfg), "config initialized: "+path)
+	case "telegram":
+		cfg, err := config.Load(opts.config)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		changed := applyTelegramConfig(&cfg, opts)
+		if changed {
+			if err := config.Save(opts.config, cfg); err != nil {
+				return err
+			}
+		}
+		return output(opts, telegramSummary(path, cfg.Telegram), telegramHumanSummary(path, cfg.Telegram, changed))
+	default:
+		return fmt.Errorf("unknown config command: %s", command)
+	}
+}
+
+func applyTelegramConfig(cfg *config.Config, opts options) bool {
+	changed := false
+	if opts.enable {
+		cfg.Telegram.Enabled = true
+		changed = true
+	}
+	if opts.disable {
+		cfg.Telegram.Enabled = false
+		changed = true
+	}
+	if opts.botToken != "" {
+		cfg.Telegram.BotToken = opts.botToken
+		changed = true
+	}
+	if opts.botTokenEnv != "" {
+		cfg.Telegram.BotTokenEnv = opts.botTokenEnv
+		changed = true
+	}
+	if opts.chatID != "" {
+		cfg.Telegram.ChatID = opts.chatID
+		changed = true
+	}
+	if opts.sessionPercent > 0 {
+		cfg.Telegram.Alerts.SessionPercent = opts.sessionPercent
+		changed = true
+	}
+	if opts.weeklyPercent > 0 {
+		cfg.Telegram.Alerts.WeeklyPercent = opts.weeklyPercent
+		changed = true
+	}
+	if opts.includeErrors {
+		cfg.Telegram.Alerts.IncludeErrors = true
+		changed = true
+	}
+	if opts.noIncludeErrors {
+		cfg.Telegram.Alerts.IncludeErrors = false
+		changed = true
+	}
+	return changed
+}
+
+func configSummary(path string, cfg config.Config) map[string]any {
+	return map[string]any{
+		"path":          path,
+		"schemaVersion": cfg.SchemaVersion,
+		"telegram":      telegramSummary(path, cfg.Telegram),
+	}
+}
+
+func telegramSummary(path string, cfg config.TelegramConfig) map[string]any {
+	return map[string]any{
+		"path":           path,
+		"enabled":        cfg.Enabled,
+		"hasBotToken":    cfg.BotToken != "",
+		"botTokenEnv":    cfg.BotTokenEnv,
+		"chatId":         cfg.ChatID,
+		"sessionPercent": cfg.Alerts.SessionPercent,
+		"weeklyPercent":  cfg.Alerts.WeeklyPercent,
+		"includeErrors":  cfg.Alerts.IncludeErrors,
+	}
+}
+
+func telegramHumanSummary(path string, cfg config.TelegramConfig, changed bool) string {
+	state := "disabled"
+	if cfg.Enabled {
+		state = "enabled"
+	}
+	prefix := "telegram config"
+	if changed {
+		prefix = "telegram config updated"
+	}
+	return fmt.Sprintf("%s · %s · chat %s · %s", prefix, state, emptyAsUnset(cfg.ChatID), path)
+}
+
+func emptyAsUnset(value string) string {
+	if value == "" {
+		return "unset"
+	}
+	return value
+}
+
 func runTelegram(opts options) error {
 	cfg, err := load(opts)
 	if err != nil {
@@ -405,9 +582,12 @@ func runTelegram(opts options) error {
 	alerts := telegram.Evaluate(built.Snapshot, cfg.Telegram)
 	sent := 0
 	if opts.send && len(alerts) > 0 {
-		token := os.Getenv(cfg.Telegram.BotTokenEnv)
+		token := cfg.Telegram.BotToken
 		if token == "" {
-			return fmt.Errorf("missing Telegram bot token env: %s", cfg.Telegram.BotTokenEnv)
+			token = os.Getenv(cfg.Telegram.BotTokenEnv)
+		}
+		if token == "" {
+			return fmt.Errorf("missing Telegram bot token; set telegram.botToken or env %s", cfg.Telegram.BotTokenEnv)
 		}
 		if cfg.Telegram.ChatID == "" {
 			return fmt.Errorf("missing telegram.chatId in Scriba config")
@@ -481,9 +661,10 @@ func title(value string) string {
 
 func commands() map[string][]string {
 	return map[string][]string{
-		"root":     {"doctor", "status", "claude", "codex", "schema", "cache", "bench", "telegram"},
+		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "cache", "bench", "telegram"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks"},
 		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session"},
+		"config":   {"path", "show", "init", "telegram"},
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
 		"telegram": {"alerts"},
@@ -498,6 +679,7 @@ Commands:
   scriba doctor
   scriba claude daily|weekly|monthly|sessions|blocks
   scriba codex daily|weekly|monthly|sessions
+  scriba config path|show|init|telegram
   scriba cache status|reset|prune|vacuum
   scriba telegram alerts
   scriba bench ccusage
