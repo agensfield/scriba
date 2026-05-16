@@ -47,9 +47,13 @@ The root `justfile` wraps the common local loops:
 ```sh
 just
 just check
+just install
+just use
+just install-cli
 just macos-start
 just macos-package
 just macos-launch
+just macos-use
 just macos-release
 ```
 
