@@ -31,6 +31,22 @@ func Report(title string, rows int) string {
 	return fmt.Sprintf("%s · %d rows", title, rows)
 }
 
+func CodexLimits(lines []model.MetricLine, cached bool) string {
+	var b strings.Builder
+	suffix := "live"
+	if cached {
+		suffix = "cached"
+	}
+	fmt.Fprintf(&b, "%s\n%s\n", header("Codex Limits"), muted(suffix+" ChatGPT/Codex backend usage"))
+	for _, line := range lines {
+		fmt.Fprintf(&b, "  %s\n", MetricLine(line))
+	}
+	if len(lines) == 0 {
+		fmt.Fprintf(&b, "  %s\n", yellow("no limit lines available"))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func Doctor(state string) string {
 	return "Scriba doctor: " + state
 }

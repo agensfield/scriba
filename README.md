@@ -32,6 +32,7 @@ go run ./cmd/scriba status
 go run ./cmd/scriba status --fast --json
 go run ./cmd/scriba claude daily
 go run ./cmd/scriba codex weekly
+go run ./cmd/scriba codex limits
 go run ./cmd/scriba cache status
 go run ./cmd/scriba telegram alerts
 

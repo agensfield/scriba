@@ -70,10 +70,18 @@ scriba codex daily
 scriba codex weekly
 scriba codex monthly
 scriba codex sessions
+scriba codex limits
+scriba codex limits --fast
 ```
 
 Report commands support `--since` and `--until`, accepting full timestamps or
 `YYYY-MM-DD` dates.
+
+`scriba codex limits` skips local log scanning and only fetches Codex usage
+windows from the logged-in ChatGPT/Codex backend. It reads Codex OAuth state
+from `${CODEX_HOME:-~/.codex}/auth.json`; OpenAI API key auth cannot expose
+these ChatGPT subscription windows. Pass `--fast` to read the last cached
+`scriba status` snapshot instead of making a network request.
 
 ## Package Execution
 

@@ -17,9 +17,10 @@ import (
 	"github.com/agensfield/scriba/internal/doctor"
 	"github.com/agensfield/scriba/internal/local"
 	"github.com/agensfield/scriba/internal/local/claude"
-	"github.com/agensfield/scriba/internal/local/codex"
+	localcodex "github.com/agensfield/scriba/internal/local/codex"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/privacy"
+	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/render"
 	"github.com/agensfield/scriba/internal/reports"
 	"github.com/agensfield/scriba/internal/status"
@@ -95,6 +96,16 @@ func dispatch(args []string) error {
 	case "claude", "codex":
 		if len(args) < 2 {
 			return fmt.Errorf("missing %s report command", args[0])
+		}
+		if args[0] == "codex" && args[1] == "limits" {
+			opts, _, err := parse(args[2:], flagSpec{
+				Use:   "scriba codex limits [flags]",
+				Flags: []string{"json", "config", "cache-dir", "fast", "redact"},
+			})
+			if err != nil {
+				return err
+			}
+			return runCodexLimits(opts)
 		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use:   fmt.Sprintf("scriba %s %s [flags]", args[0], args[1]),
@@ -390,7 +401,7 @@ func runReport(provider, command string, opts options) error {
 	} else if provider == "claude" {
 		events, stats, err = claude.Scan(cfg.Providers.Claude.Paths)
 	} else {
-		events, stats, err = codex.Scan(cfg.Providers.Codex.Paths)
+		events, stats, err = localcodex.Scan(cfg.Providers.Codex.Paths)
 	}
 	if err != nil {
 		return err
@@ -419,6 +430,91 @@ func runReport(provider, command string, opts options) error {
 	}
 	payload["rows"] = rows
 	return output(opts, payload, render.Report(title(provider)+" "+title(command), rowCount(rows)))
+}
+
+func runCodexLimits(opts options) error {
+	if opts.fast {
+		cfg, err := load(opts)
+		if err != nil {
+			return err
+		}
+		c, err := cache.Open(cfg.CacheDir)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = c.Close() }()
+		snapshot, err := c.LoadStatusSnapshot()
+		if err != nil {
+			return err
+		}
+		if snapshot == nil {
+			return fmt.Errorf("no cached status snapshot found; run `scriba status` first")
+		}
+		payload, err := codexLimitsFromSnapshot(*snapshot)
+		if err != nil {
+			return err
+		}
+		return output(opts, payload, render.CodexLimits(payload.Lines, true))
+	}
+	result, err := remotecodex.Probe(true)
+	if err != nil {
+		return err
+	}
+	payload := codexLimitsPayload{
+		SchemaVersion: model.SchemaVersion,
+		ProviderID:    result.ProviderID,
+		Source:        "chatgpt-codex-backend",
+		Mode:          "live",
+		Lines:         filterCodexLimitLines(result.Lines),
+		Provenance:    result.Provenance,
+		AuthState:     result.AuthState,
+	}
+	return output(opts, payload, render.CodexLimits(payload.Lines, false))
+}
+
+type codexLimitsPayload struct {
+	SchemaVersion string                   `json:"schemaVersion"`
+	ProviderID    string                   `json:"providerId"`
+	Source        string                   `json:"source"`
+	Mode          string                   `json:"mode"`
+	GeneratedAt   string                   `json:"generatedAt,omitempty"`
+	Lines         []model.MetricLine       `json:"lines"`
+	Provenance    []model.SourceProvenance `json:"provenance,omitempty"`
+	AuthState     any                      `json:"authState,omitempty"`
+}
+
+func codexLimitsFromSnapshot(snapshot model.StatusSnapshot) (codexLimitsPayload, error) {
+	for _, provider := range snapshot.Providers {
+		if provider.ProviderID != "codex" {
+			continue
+		}
+		return codexLimitsPayload{
+			SchemaVersion: snapshot.SchemaVersion,
+			ProviderID:    provider.ProviderID,
+			Source:        "status-cache",
+			Mode:          "fast",
+			GeneratedAt:   snapshot.GeneratedAt,
+			Lines:         filterCodexLimitLines(provider.Lines),
+			Provenance:    provider.Provenance,
+		}, nil
+	}
+	return codexLimitsPayload{}, fmt.Errorf("cached status snapshot has no codex provider")
+}
+
+func filterCodexLimitLines(lines []model.MetricLine) []model.MetricLine {
+	var filtered []model.MetricLine
+	for _, line := range lines {
+		label := strings.ToLower(line.Label)
+		if line.Type == "progress" ||
+			label == "plan" ||
+			strings.Contains(label, "limit") ||
+			strings.Contains(label, "spark") ||
+			strings.Contains(label, "review") ||
+			strings.Contains(label, "credit") {
+			filtered = append(filtered, line)
+		}
+	}
+	return filtered
 }
 
 func runCache(command string, opts options) error {
@@ -744,7 +840,7 @@ func commands() map[string][]string {
 	return map[string][]string{
 		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "cache", "bench", "telegram"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks"},
-		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session"},
+		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits"},
 		"config":   {"path", "show", "init", "telegram"},
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
@@ -759,7 +855,7 @@ Commands:
   scriba [status]
   scriba doctor
   scriba claude daily|weekly|monthly|sessions|blocks
-  scriba codex daily|weekly|monthly|sessions
+  scriba codex daily|weekly|monthly|sessions|limits
   scriba config path|show|init|telegram
   scriba cache status|reset|prune|vacuum
   scriba telegram alerts|reset
