@@ -36,6 +36,7 @@ type Controller interface {
 	PollInterval(context.Context) (time.Duration, error)
 	SetPollInterval(context.Context, time.Duration) error
 	LastResetEvent(context.Context) (resetwatch.Event, bool, error)
+	LatestObservation(context.Context) (resetwatch.Observation, bool, error)
 }
 
 type OffsetStore interface {
@@ -202,14 +203,14 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 		interval, _ := s.controller.PollInterval(ctx)
 		return settingsText(interval), settingsKeyboard(interval)
 	case "/limits":
-		result, err := s.controller.RefreshNow(ctx)
-		if errors.Is(err, server.ErrRefreshInProgress) {
-			return "refresh already in progress. hold the line.", nil
-		}
+		obs, ok, err := s.controller.LatestObservation(ctx)
 		if err != nil {
-			return "refresh failed: " + err.Error(), nil
+			return "limits failed: " + err.Error(), nil
 		}
-		return RenderLimits(result.Observation), nil
+		if !ok {
+			return "no cached limits yet. use /refresh to fetch live Codex limits.", nil
+		}
+		return RenderLimits(obs), nil
 	case "/refresh":
 		if retryAfter := s.manualRefreshRetryAfter(); retryAfter > 0 {
 			return "refresh rate-limited. try again in " + retryAfter.Round(time.Second).String(), nil

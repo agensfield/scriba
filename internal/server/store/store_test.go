@@ -80,6 +80,20 @@ func TestApplyDecisionStoresObservationWindowsAndDedupesEvents(t *testing.T) {
 	if event.Account.Email != "arda@example.com" || event.ResetKind != resetwatch.ResetKindEarly {
 		t.Fatalf("unexpected event: %#v", event)
 	}
+
+	latest, ok, err := store.LoadLatestObservation(ctx)
+	if err != nil {
+		t.Fatalf("latest observation: %v", err)
+	}
+	if !ok {
+		t.Fatal("latest observation not found")
+	}
+	if !latest.ObservedAt.Equal(resetObs.ObservedAt) || latest.Account.Email != "arda@example.com" {
+		t.Fatalf("unexpected latest observation: %#v", latest)
+	}
+	if len(latest.Windows) != 2 {
+		t.Fatalf("expected two latest windows, got %#v", latest.Windows)
+	}
 }
 
 func TestDeliveriesSettingsAndTelegramOffset(t *testing.T) {

@@ -245,6 +245,64 @@ func (s *Store) LoadLastResetEvent(ctx context.Context) (resetwatch.Event, bool,
 	return s.LoadResetEvent(ctx, id)
 }
 
+func (s *Store) LoadLatestObservation(ctx context.Context) (resetwatch.Observation, bool, error) {
+	var obs resetwatch.Observation
+	var observationID, observedAt, snapshot string
+	err := s.db.QueryRowContext(ctx, `
+select o.id, o.provider_id, o.account_ref, a.label, a.email, a.plan, o.observed_at, o.snapshot_json
+from limit_observations o
+join accounts a on a.account_ref = o.account_ref
+order by o.observed_at desc, o.created_at desc
+limit 1`).Scan(
+		&observationID, &obs.ProviderID, &obs.Account.Ref, &obs.Account.Label, &obs.Account.Email, &obs.Account.Plan, &observedAt, &snapshot,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return obs, false, nil
+	}
+	if err != nil {
+		return obs, false, err
+	}
+	obs.ObservedAt = parseDBTime(observedAt)
+	obs.SnapshotJSON = []byte(snapshot)
+	windows, err := s.loadObservedWindows(ctx, observationID)
+	if err != nil {
+		return obs, false, err
+	}
+	obs.Windows = windows
+	return obs, true, nil
+}
+
+func (s *Store) loadObservedWindows(ctx context.Context, observationID string) ([]resetwatch.Window, error) {
+	rows, err := s.db.QueryContext(ctx, `
+select label, used_percent, reset_at, period_duration_ms
+from observed_windows
+where observation_id = ?
+order by label`, observationID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var windows []resetwatch.Window
+	for rows.Next() {
+		var window resetwatch.Window
+		var used sql.NullFloat64
+		var resetAt string
+		var period sql.NullInt64
+		if err := rows.Scan(&window.Label, &used, &resetAt, &period); err != nil {
+			return nil, err
+		}
+		if used.Valid {
+			window.UsedPercent = &used.Float64
+		}
+		window.ResetAt = parseDBTime(resetAt)
+		if period.Valid {
+			window.PeriodDurationMs = &period.Int64
+		}
+		windows = append(windows, window)
+	}
+	return windows, rows.Err()
+}
+
 func (s *Store) EnsureDelivery(ctx context.Context, eventID, target string) (Delivery, error) {
 	now := formatTime(time.Now())
 	id := DeliveryID(eventID, target)

@@ -31,6 +31,7 @@ type Store interface {
 	GetSetting(context.Context, string) (string, bool, error)
 	SetSetting(context.Context, string, string) error
 	LoadLastResetEvent(context.Context) (resetwatch.Event, bool, error)
+	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
 }
 
 type Fetcher interface {
@@ -158,6 +159,10 @@ func (s *Server) SetPollInterval(ctx context.Context, interval time.Duration) er
 
 func (s *Server) LastResetEvent(ctx context.Context) (resetwatch.Event, bool, error) {
 	return s.store.LoadLastResetEvent(ctx)
+}
+
+func (s *Server) LatestObservation(ctx context.Context) (resetwatch.Observation, bool, error) {
+	return s.store.LoadLatestObservation(ctx)
 }
 
 func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {

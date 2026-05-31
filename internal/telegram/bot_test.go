@@ -92,6 +92,27 @@ func TestHandleSettingsCallbackUpdatesPollInterval(t *testing.T) {
 	}
 }
 
+func TestLimitsCommandUsesCachedObservation(t *testing.T) {
+	controller := &fakeController{
+		latest: resetwatch.Observation{
+			Account:    resetwatch.Account{Label: "personal"},
+			ObservedAt: parseTime("2026-06-01T00:00:00Z"),
+			Windows: []resetwatch.Window{
+				{Label: resetwatch.LabelWeeklyLimit, UsedPercent: ptrFloat(3), ResetAt: parseTime("2026-06-07T16:39:00Z")},
+			},
+		},
+		latestOK: true,
+	}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	reply, _ := svc.handleCommand(context.Background(), "/limits")
+	if !strings.Contains(reply, "<b>Codex limits</b>") {
+		t.Fatalf("unexpected limits reply: %s", reply)
+	}
+	if controller.refreshes != 0 {
+		t.Fatalf("/limits should not force refresh, got %d refreshes", controller.refreshes)
+	}
+}
+
 func TestStripTelegramHTMLFallback(t *testing.T) {
 	text := "<b>Codex limits</b>\n<pre>Weekly &lt;ok&gt;</pre>"
 	got := stripTelegramHTML(text)
@@ -107,10 +128,14 @@ func TestCommandNameNormalizesBotSuffix(t *testing.T) {
 }
 
 type fakeController struct {
-	interval time.Duration
+	interval  time.Duration
+	latest    resetwatch.Observation
+	latestOK  bool
+	refreshes int
 }
 
 func (f *fakeController) RefreshNow(context.Context) (server.PollResult, error) {
+	f.refreshes++
 	return server.PollResult{}, nil
 }
 
@@ -125,6 +150,10 @@ func (f *fakeController) SetPollInterval(_ context.Context, interval time.Durati
 
 func (f *fakeController) LastResetEvent(context.Context) (resetwatch.Event, bool, error) {
 	return resetwatch.Event{}, false, nil
+}
+
+func (f *fakeController) LatestObservation(context.Context) (resetwatch.Observation, bool, error) {
+	return f.latest, f.latestOK, nil
 }
 
 func snapshot(resetAt string, used float64) []byte {
