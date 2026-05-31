@@ -138,7 +138,7 @@ func (c Client) RenderText(current Current) string {
 		b.WriteString("\nprediction: ")
 		b.WriteString(current.Prediction.Level)
 		if current.Prediction.Probability24H > 0 {
-			b.WriteString(fmt.Sprintf(" · 24h %.0f%%", current.Prediction.Probability24H*100))
+			_, _ = fmt.Fprintf(&b, " · 24h %.0f%%", current.Prediction.Probability24H*100)
 		}
 	}
 	return b.String()

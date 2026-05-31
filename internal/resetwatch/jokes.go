@@ -42,7 +42,15 @@ func (c CatalogJokeChooser) Choose(event Event) string {
 	}
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(event.ID))
-	return candidates[int(h.Sum64()%uint64(len(candidates)))].ID
+	choice := h.Sum64() % uint64(len(candidates))
+	var idx uint64
+	for _, joke := range candidates {
+		if idx == choice {
+			return joke.ID
+		}
+		idx++
+	}
+	return candidates[0].ID
 }
 
 func JokeText(id string) string {
