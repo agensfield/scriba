@@ -28,13 +28,41 @@ func TestRenderResetIncludesJokeAccountAndBeforeAfterBars(t *testing.T) {
 	}
 	text := RenderReset(event)
 	for _, want := range []string{
-		"Codex Reset Notification",
+		"<b>Codex reset notification</b>",
 		"Tibo moved the ceiling again.",
-		"account: personal",
-		"trigger: Weekly limit (early)",
-		"Weekly limit",
+		"<b>Account</b> personal",
+		"<b>Trigger</b>",
+		"window   Weekly",
 		"before",
 		"after",
+		"▰▰▰▰▰▰▱▱▱▱",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("render missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestRenderLimitsUsesHTMLSectionsAndFreshness(t *testing.T) {
+	text := RenderLimits(resetwatch.Observation{
+		Account:    resetwatch.Account{Label: "personal", Email: "arda@example.com", Plan: "prolite"},
+		ObservedAt: parseTime("2026-06-01T00:00:00Z"),
+		Windows: []resetwatch.Window{
+			{Label: resetwatch.LabelWeeklyLimit, UsedPercent: ptrFloat(3), ResetAt: parseTime("2026-06-07T16:39:00Z")},
+			{Label: resetwatch.LabelFiveHour, UsedPercent: ptrFloat(6), ResetAt: parseTime("2026-06-01T02:39:00Z")},
+			{Label: resetwatch.LabelSparkWeekly, UsedPercent: ptrFloat(3), ResetAt: parseTime("2026-06-07T16:39:00Z")},
+		},
+	})
+	for _, want := range []string{
+		"<b>Codex limits</b>",
+		"<i>observed ",
+		"<b>Primary</b>",
+		"<b>Secondary</b>",
+		"<pre>",
+		"Weekly",
+		"5h",
+		"Spark weekly",
+		"▰▱▱▱▱▱▱▱▱▱",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("render missing %q in:\n%s", want, text)
@@ -98,4 +126,8 @@ func parseTime(value string) time.Time {
 		panic(err)
 	}
 	return t.UTC()
+}
+
+func ptrFloat(value float64) *float64 {
+	return &value
 }

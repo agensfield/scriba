@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
@@ -163,17 +166,17 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 	}
 	switch strings.ToLower(strings.Split(command[0], "@")[0]) {
 	case "/start":
-		return "Scriba is alive.\n\n" + helpText(), mainKeyboard()
+		return "<b>Scriba is alive</b>\nremote Codex limit watch is running.\n\n" + helpText(), mainKeyboard()
 	case "/status":
 		interval, err := s.controller.PollInterval(ctx)
 		if err != nil {
-			return "status: alive\npoll interval: unknown (" + err.Error() + ")", nil
+			return "<b>Scriba status</b>\nalive: yes\npoll interval: unknown\n<code>" + html.EscapeString(err.Error()) + "</code>", nil
 		}
 		last := "none yet"
 		if event, ok, err := s.controller.LastResetEvent(ctx); err == nil && ok {
 			last = fmt.Sprintf("%s · %s -> %s", event.ResetKind, formatTime(event.PreviousResetAt), formatTime(event.CurrentResetAt))
 		}
-		return "Scriba status\nalive: yes\npoll interval: " + interval.String() + "\nlast reset: " + last, mainKeyboard()
+		return "<b>Scriba status</b>\n<pre>" + html.EscapeString(fmt.Sprintf("%-14s %s\n%-14s %s\n%-14s %s", "alive", "yes", "poll interval", interval.String(), "last reset", last)) + "</pre>", mainKeyboard()
 	case "/settings":
 		interval, _ := s.controller.PollInterval(ctx)
 		return settingsText(interval), settingsKeyboard(interval)
@@ -228,6 +231,16 @@ func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuer
 		reply, _ := s.handleCommand(ctx, "/limits")
 		_, _ = s.send(ctx, reply, nil)
 		return
+	case "quick:refresh":
+		s.answerCallback(ctx, query.ID, "forcing refresh")
+		reply, _ := s.handleCommand(ctx, "/refresh")
+		_, _ = s.send(ctx, reply, nil)
+		return
+	case "quick:radar":
+		s.answerCallback(ctx, query.ID, "checking radar")
+		reply, _ := s.handleCommand(ctx, "/radar")
+		_, _ = s.send(ctx, reply, nil)
+		return
 	case "quick:settings":
 		interval, _ := s.controller.PollInterval(ctx)
 		s.answerCallback(ctx, query.ID, "settings")
@@ -267,6 +280,7 @@ func (s *Service) editCallbackMessage(ctx context.Context, query *models.Callbac
 		ChatID:      query.Message.Message.Chat.ID,
 		MessageID:   query.Message.Message.ID,
 		Text:        text,
+		ParseMode:   parseMode(text),
 		ReplyMarkup: markup,
 	})
 	if err != nil {
@@ -340,6 +354,7 @@ func (s *Service) send(ctx context.Context, text string, markup models.ReplyMark
 	return s.bot.SendMessage(ctx, &tgbot.SendMessageParams{
 		ChatID:      s.cfg.ChatID,
 		Text:        text,
+		ParseMode:   parseMode(text),
 		ReplyMarkup: markup,
 	})
 }
@@ -406,53 +421,62 @@ func mainKeyboard() models.InlineKeyboardMarkup {
 	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
 		{
 			{Text: "Limits", CallbackData: "quick:limits"},
+			{Text: "Refresh", CallbackData: "quick:refresh"},
+		},
+		{
+			{Text: "Radar", CallbackData: "quick:radar"},
 			{Text: "Settings", CallbackData: "quick:settings"},
 		},
 	}}
 }
 
 func settingsText(interval time.Duration) string {
-	return "Polling interval\ncurrent: " + interval.String() + "\n\nChoose how often Scriba polls live Codex limits."
+	return "<b>Polling interval</b>\ncurrent: <code>" + html.EscapeString(interval.String()) + "</code>\n\nChoose how often Scriba polls live Codex limits."
 }
 
 func helpText() string {
 	return strings.Join([]string{
-		"Commands",
-		"/status - server health and polling state",
-		"/limits - show current Codex limits",
-		"/refresh - force a live Codex poll",
-		"/lastreset - show the latest reset event",
-		"/settings - change poll interval",
-		"/radar - public reset radar",
+		"<b>Commands</b>",
+		"<code>/status</code> server health and polling state",
+		"<code>/limits</code> current Codex limits",
+		"<code>/refresh</code> force a live poll",
+		"<code>/lastreset</code> latest reset event",
+		"<code>/settings</code> polling settings",
+		"<code>/radar</code> public reset radar",
 	}, "\n")
 }
 
 func RenderBaseline(notice server.BaselineNotice) string {
-	return "Scriba is alive.\nStarted tracking Codex limits.\n\n" + renderAccount(notice.Account) + "\n\n" + renderWindows(notice.Windows, "current")
+	return "<b>Scriba is alive</b>\nstarted tracking Codex limits.\n" + renderFreshness(notice.ObservedAt) + "\n\n" + renderAccount(notice.Account) + "\n\n" + renderWindows(notice.Windows, "current")
 }
 
 func RenderLimits(obs resetwatch.Observation) string {
-	return "Codex limits\n" + renderAccount(obs.Account) + "\n\n" + renderWindows(obs.Windows, "current")
+	return "<b>Codex limits</b>\n" + renderFreshness(obs.ObservedAt) + "\n\n" + renderAccount(obs.Account) + "\n\n" + renderWindows(obs.Windows, "current")
 }
 
 func RenderReset(event resetwatch.Event) string {
 	var b strings.Builder
-	b.WriteString("Codex Reset Notification\n")
+	b.WriteString("<b>Codex reset notification</b>\n")
 	if joke := resetwatch.JokeText(event.JokeID); joke != "" {
-		b.WriteString(joke)
+		b.WriteString(html.EscapeString(joke))
 		b.WriteString("\n")
 	}
 	b.WriteString(renderAccount(event.Account))
 	b.WriteString("\n\n")
-	b.WriteString("trigger: ")
-	b.WriteString(event.PrimaryTriggerLabel)
-	b.WriteString(" (")
-	b.WriteString(event.ResetKind)
-	b.WriteString(")\n")
-	b.WriteString("before reset: ")
-	b.WriteString(formatTime(event.PreviousResetAt))
-	b.WriteString("\nafter reset:  ")
-	b.WriteString(formatTime(event.CurrentResetAt))
+	b.WriteString("<b>Trigger</b>\n")
+	b.WriteString("<pre>")
+	b.WriteString(html.EscapeString(fmt.Sprintf("%-8s %s", "window", sectionLabel(event.PrimaryTriggerLabel))))
+	b.WriteString("\n")
+	b.WriteString(html.EscapeString(fmt.Sprintf("%-8s %s", "kind", event.ResetKind)))
+	b.WriteString("\n")
+	b.WriteString(html.EscapeString(fmt.Sprintf("%-8s %s", "before", formatTime(event.PreviousResetAt))))
+	b.WriteString("\n")
+	b.WriteString(html.EscapeString(fmt.Sprintf("%-8s %s", "after", formatTime(event.CurrentResetAt))))
+	if !event.DetectedAt.IsZero() {
+		b.WriteString("\n")
+		b.WriteString(html.EscapeString(fmt.Sprintf("%-8s %s", "seen", formatFreshTime(event.DetectedAt))))
+	}
+	b.WriteString("</pre>")
 
 	prev := windowsFromSnapshot(event.PreviousSnapshotJSON)
 	current := windowsFromSnapshot(event.CurrentSnapshotJSON)
@@ -463,21 +487,40 @@ func RenderReset(event resetwatch.Event) string {
 	return b.String()
 }
 
+func renderFreshness(t time.Time) string {
+	if t.IsZero() {
+		return "<i>observed unknown</i>"
+	}
+	return "<i>observed " + html.EscapeString(formatFreshTime(t)) + "</i>"
+}
+
+func formatFreshTime(t time.Time) string {
+	return humanize.Time(t) + " · " + t.Local().Format("Mon 15:04:05")
+}
+
 func renderAccount(account resetwatch.Account) string {
-	var parts []string
-	if account.Label != "" {
-		parts = append(parts, account.Label)
+	label := account.Label
+	if label == "" {
+		label = "unknown"
 	}
-	if account.Email != "" {
-		parts = append(parts, account.Email)
+	var b strings.Builder
+	b.WriteString("<b>Account</b> ")
+	b.WriteString(html.EscapeString(label))
+	if account.Email != "" || account.Plan != "" {
+		b.WriteString("\n")
+		b.WriteString("<code>")
+		if account.Email != "" {
+			b.WriteString(html.EscapeString(account.Email))
+		}
+		if account.Email != "" && account.Plan != "" {
+			b.WriteString(" · ")
+		}
+		if account.Plan != "" {
+			b.WriteString(html.EscapeString(account.Plan))
+		}
+		b.WriteString("</code>")
 	}
-	if account.Plan != "" {
-		parts = append(parts, account.Plan)
-	}
-	if len(parts) == 0 {
-		return "account: unknown"
-	}
-	return "account: " + strings.Join(parts, " · ")
+	return b.String()
 }
 
 func renderWindows(windows []resetwatch.Window, rowLabel string) string {
@@ -485,19 +528,19 @@ func renderWindows(windows []resetwatch.Window, rowLabel string) string {
 	for _, window := range windows {
 		byLabel[window.Label] = window
 	}
-	labels := []string{resetwatch.LabelWeeklyLimit, resetwatch.LabelFiveHour, resetwatch.LabelSparkWeekly, resetwatch.LabelSparkFive, resetwatch.LabelReviewWeek}
+	primaryLabels := []string{resetwatch.LabelWeeklyLimit, resetwatch.LabelFiveHour}
+	secondaryLabels := []string{resetwatch.LabelSparkWeekly, resetwatch.LabelSparkFive, resetwatch.LabelReviewWeek}
 	var b strings.Builder
-	for _, label := range labels {
-		window, ok := byLabel[label]
-		if !ok {
-			continue
-		}
-		b.WriteString(sectionLabel(label))
-		b.WriteString("\n")
-		b.WriteString(renderWindow(rowLabel, window, ""))
-		b.WriteString("\n")
+	if section := renderWindowSection("Primary", primaryLabels, byLabel, rowLabel); section != "" {
+		b.WriteString(section)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	if section := renderWindowSection("Secondary", secondaryLabels, byLabel, rowLabel); section != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(section)
+	}
+	return b.String()
 }
 
 func renderBeforeAfter(prev, current []resetwatch.Window) string {
@@ -511,18 +554,37 @@ func renderBeforeAfter(prev, current []resetwatch.Window) string {
 		if !beforeOK && !afterOK {
 			continue
 		}
-		b.WriteString(sectionLabel(label))
-		b.WriteString("\n")
+		b.WriteString("<b>")
+		b.WriteString(html.EscapeString(sectionLabel(label)))
+		b.WriteString("</b>\n")
+		b.WriteString("<pre>")
 		if beforeOK {
-			b.WriteString(renderWindow("before", before, "  "))
+			b.WriteString(renderWindow("before", before, ""))
 			b.WriteString("\n")
 		}
 		if afterOK {
-			b.WriteString(renderWindow("after", after, "  "))
+			b.WriteString(renderWindow("after", after, ""))
 			b.WriteString("\n")
 		}
+		b.WriteString("</pre>")
+		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderWindowSection(title string, labels []string, byLabel map[string]resetwatch.Window, rowLabel string) string {
+	var rows []string
+	for _, label := range labels {
+		window, ok := byLabel[label]
+		if !ok {
+			continue
+		}
+		rows = append(rows, renderWindow(rowLabel, window, sectionLabel(label)))
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	return "<b>" + html.EscapeString(title) + "</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n\n")) + "</pre>"
 }
 
 func renderWindow(label string, window resetwatch.Window, prefix string) string {
@@ -530,7 +592,11 @@ func renderWindow(label string, window resetwatch.Window, prefix string) string 
 	if window.UsedPercent != nil {
 		percent = *window.UsedPercent
 	}
-	return fmt.Sprintf("%s%-7s %s %3.0f%%  reset %s", prefix, label, bar(percent), percent, formatTime(window.ResetAt))
+	title := prefix
+	if title == "" {
+		title = label
+	}
+	return fmt.Sprintf("%-13s %s %3.0f%% used\n%-13s %s", title, bar(percent), percent, "reset", formatTime(window.ResetAt))
 }
 
 func sectionLabel(label string) string {
@@ -574,14 +640,22 @@ func unmarshalSnapshot(data []byte, target any) error {
 }
 
 func bar(percent float64) string {
-	filled := int(percent / 10)
+	const width = 10
+	filled := int(math.Ceil(percent / (100 / width)))
 	if filled < 0 {
 		filled = 0
 	}
-	if filled > 10 {
-		filled = 10
+	if filled > width {
+		filled = width
 	}
-	return strings.Repeat("█", filled) + strings.Repeat("░", 10-filled)
+	return strings.Repeat("▰", filled) + strings.Repeat("▱", width-filled)
+}
+
+func parseMode(text string) models.ParseMode {
+	if strings.Contains(text, "<b>") || strings.Contains(text, "<code>") || strings.Contains(text, "<pre>") || strings.Contains(text, "<blockquote") {
+		return models.ParseModeHTML
+	}
+	return ""
 }
 
 func formatTime(t time.Time) string {
