@@ -275,6 +275,67 @@ func TestPruneObservationsKeepsEventsAndDeliveries(t *testing.T) {
 	}
 }
 
+func TestStatsSummarizesStorageDeliveriesAndRecentRows(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	obs := observation("2026-06-01T12:00:00Z", "2026-06-07T12:00:00Z", "2026-06-01T17:00:00Z")
+	decision := resetwatch.Decide(obs, nil, testOptions())
+	if _, err := store.ApplyDecision(ctx, obs, decision); err != nil {
+		t.Fatalf("apply observation: %v", err)
+	}
+	event := resetEvent()
+	if _, err := store.InsertResetEvents(ctx, []resetwatch.Event{event}); err != nil {
+		t.Fatalf("insert reset: %v", err)
+	}
+	if _, err := store.EnsureDelivery(ctx, event.ID, "telegram:123"); err != nil {
+		t.Fatalf("ensure delivery: %v", err)
+	}
+	if err := store.MarkDeliveryAttempt(ctx, event.ID, "telegram:123", true, "", "42"); err != nil {
+		t.Fatalf("mark delivery: %v", err)
+	}
+	warning := resetwatch.WarningEvent{
+		ID:                 resetwatch.WarningEventID("codex", "acct", resetwatch.LabelFiveHour, parseTime("2026-06-01T17:00:00Z"), 5),
+		ProviderID:         "codex",
+		Account:            resetwatch.Account{Ref: "acct", Label: "personal", Email: "arda@example.com", Plan: "Plus"},
+		Label:              resetwatch.LabelFiveHour,
+		ThresholdRemaining: 5,
+		UsedPercent:        96,
+		RemainingPercent:   4,
+		ResetAt:            parseTime("2026-06-01T17:00:00Z"),
+		SnapshotJSON:       []byte(`{"snapshot":true}`),
+		DetectedAt:         parseTime("2026-06-01T12:00:00Z"),
+	}
+	if _, err := store.InsertWarningEvents(ctx, []resetwatch.WarningEvent{warning}); err != nil {
+		t.Fatalf("insert warning: %v", err)
+	}
+
+	stats, err := store.Stats(ctx)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.SchemaVersion != SchemaVersion {
+		t.Fatalf("unexpected schema version: %d", stats.SchemaVersion)
+	}
+	if stats.Counts["limit_observations"] != 1 || stats.Counts["observed_windows"] != 2 {
+		t.Fatalf("unexpected counts: %#v", stats.Counts)
+	}
+	if stats.ResetDeliveries["delivered"].Count != 1 || stats.ResetDeliveries["delivered"].Attempts != 1 {
+		t.Fatalf("unexpected delivery stats: %#v", stats.ResetDeliveries)
+	}
+	if stats.LatestObservation == nil || stats.LatestObservation.Windows != 2 {
+		t.Fatalf("unexpected latest observation: %#v", stats.LatestObservation)
+	}
+	if stats.LastReset == nil || stats.LastReset.Kind != resetwatch.ResetKindEarly {
+		t.Fatalf("unexpected last reset: %#v", stats.LastReset)
+	}
+	if stats.LastWarning == nil || stats.LastWarning.ThresholdRemaining != 5 {
+		t.Fatalf("unexpected last warning: %#v", stats.LastWarning)
+	}
+	if stats.DBFiles.MainBytes == 0 {
+		t.Fatalf("expected db file size, got %#v", stats.DBFiles)
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(filepath.Join(t.TempDir(), "scriba-server.sqlite"))

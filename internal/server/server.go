@@ -35,6 +35,7 @@ type Store interface {
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
 	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
 	InsertWarningEvents(context.Context, []resetwatch.WarningEvent) ([]resetwatch.WarningEvent, error)
+	Stats(context.Context) (store.Stats, error)
 }
 
 type Fetcher interface {
@@ -78,6 +79,12 @@ type PollResult struct {
 	Inserted    int
 	Warnings    []resetwatch.WarningEvent
 	Baseline    bool
+}
+
+type Stats struct {
+	Store                    store.Stats   `json:"store"`
+	PollInterval             time.Duration `json:"pollInterval"`
+	ObservationRetentionDays int           `json:"observationRetentionDays"`
 }
 
 type CodexFetcher struct{}
@@ -172,6 +179,22 @@ func (s *Server) LastResetEvent(ctx context.Context) (resetwatch.Event, bool, er
 
 func (s *Server) LatestObservation(ctx context.Context) (resetwatch.Observation, bool, error) {
 	return s.store.LoadLatestObservation(ctx)
+}
+
+func (s *Server) Stats(ctx context.Context) (Stats, error) {
+	storeStats, err := s.store.Stats(ctx)
+	if err != nil {
+		return Stats{}, err
+	}
+	interval, err := s.PollInterval(ctx)
+	if err != nil {
+		return Stats{}, err
+	}
+	return Stats{
+		Store:                    storeStats,
+		PollInterval:             interval,
+		ObservationRetentionDays: s.cfg.ObservationRetentionDays,
+	}, nil
 }
 
 func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {

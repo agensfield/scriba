@@ -37,6 +37,7 @@ type Controller interface {
 	SetPollInterval(context.Context, time.Duration) error
 	LastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LatestObservation(context.Context) (resetwatch.Observation, bool, error)
+	Stats(context.Context) (server.Stats, error)
 }
 
 type OffsetStore interface {
@@ -111,6 +112,7 @@ func (s *Service) RegisterCommands(ctx context.Context) error {
 	}
 	_, err := s.bot.SetMyCommands(ctx, &tgbot.SetMyCommandsParams{Commands: []models.BotCommand{
 		{Command: "status", Description: "server health and polling state"},
+		{Command: "stats", Description: "storage and delivery stats"},
 		{Command: "limits", Description: "show current Codex limits"},
 		{Command: "refresh", Description: "force a live Codex poll"},
 		{Command: "lastreset", Description: "show the latest reset event"},
@@ -224,7 +226,13 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 		if event, ok, err := s.controller.LastResetEvent(ctx); err == nil && ok {
 			last = fmt.Sprintf("%s · %s -> %s", event.ResetKind, formatTime(event.PreviousResetAt), formatTime(event.CurrentResetAt))
 		}
-		return "<b>Scriba status</b>\n<pre>" + html.EscapeString(fmt.Sprintf("%-14s %s\n%-14s %s\n%-14s %s", "alive", "yes", "poll interval", interval.String(), "last reset", last)) + "</pre>", mainKeyboard()
+		return "<b>Scriba status</b>\n<pre>" + html.EscapeString(fmt.Sprintf("%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s", "alive", "yes", "poll interval", interval.String(), "last reset", last, "details", "/stats")) + "</pre>", mainKeyboard()
+	case "/stats":
+		stats, err := s.controller.Stats(ctx)
+		if err != nil {
+			return "stats failed: " + err.Error(), nil
+		}
+		return RenderStats(stats, "", false), mainKeyboard()
 	case "/settings":
 		interval, _ := s.controller.PollInterval(ctx)
 		return settingsText(interval), settingsKeyboard(interval)
@@ -288,6 +296,11 @@ func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuer
 		s.answerCallback(ctx, query.ID, "checking radar")
 		reply, _ := s.handleCommand(ctx, "/radar")
 		_, _ = s.send(ctx, reply, nil)
+		return
+	case "quick:stats":
+		s.answerCallback(ctx, query.ID, "loading stats")
+		reply, _ := s.handleCommand(ctx, "/stats")
+		_, _ = s.send(ctx, reply, mainKeyboard())
 		return
 	case "quick:settings":
 		interval, _ := s.controller.PollInterval(ctx)
@@ -531,7 +544,10 @@ func mainKeyboard() models.InlineKeyboardMarkup {
 			{Text: "Refresh", CallbackData: "quick:refresh"},
 		},
 		{
+			{Text: "Stats", CallbackData: "quick:stats"},
 			{Text: "Radar", CallbackData: "quick:radar"},
+		},
+		{
 			{Text: "Settings", CallbackData: "quick:settings"},
 		},
 	}}
@@ -545,6 +561,7 @@ func helpText() string {
 	return strings.Join([]string{
 		"<b>Commands</b>",
 		"<code>/status</code> server health and polling state",
+		"<code>/stats</code> storage and delivery stats",
 		"<code>/limits</code> current Codex limits",
 		"<code>/refresh</code> force a live poll",
 		"<code>/lastreset</code> latest reset event",
@@ -616,6 +633,99 @@ func RenderLimitWarning(warning resetwatch.WarningEvent) string {
 	}
 	b.WriteString("</pre>")
 	return b.String()
+}
+
+func RenderStats(stats server.Stats, environment string, telegramEnabled bool) string {
+	var b strings.Builder
+	b.WriteString("<b>Scriba stats</b>\n")
+	b.WriteString(renderRuntimeStats(stats, environment, telegramEnabled))
+	if stats.Store.LatestObservation != nil {
+		b.WriteString("\n\n")
+		b.WriteString(renderObservationStats(*stats.Store.LatestObservation))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(renderStorageStats(stats.Store))
+	b.WriteString("\n\n")
+	b.WriteString(renderDeliveryStats("Reset deliveries", stats.Store.ResetDeliveries))
+	b.WriteString("\n\n")
+	b.WriteString(renderDeliveryStats("Warning deliveries", stats.Store.WarningDeliveries))
+	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil {
+		b.WriteString("\n\n")
+		b.WriteString(renderRecentStats(stats.Store))
+	}
+	return b.String()
+}
+
+func renderRuntimeStats(stats server.Stats, environment string, telegramEnabled bool) string {
+	rows := []string{
+		fmt.Sprintf("%-12s %s", "poll", stats.PollInterval.String()),
+		fmt.Sprintf("%-12s %dd", "retention", stats.ObservationRetentionDays),
+	}
+	if environment != "" {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "env", environment))
+		rows = append(rows, fmt.Sprintf("%-12s %t", "telegram", telegramEnabled))
+	}
+	return "<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func renderObservationStats(latest store.ObservationSummary) string {
+	rows := []string{
+		fmt.Sprintf("%-12s %s", "latest", formatFreshTime(latest.ObservedAt)),
+		fmt.Sprintf("%-12s %d", "windows", latest.Windows),
+		fmt.Sprintf("%-12s %s", "account", latest.AccountLabel),
+	}
+	if latest.AccountEmail != "" || latest.AccountPlan != "" {
+		account := latest.AccountEmail
+		if latest.AccountEmail != "" && latest.AccountPlan != "" {
+			account += " · "
+		}
+		account += latest.AccountPlan
+		rows = append(rows, fmt.Sprintf("%-12s %s", "plan", account))
+	}
+	return "<b>Observation</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func renderStorageStats(stats store.Stats) string {
+	counts := stats.Counts
+	rows := []string{
+		fmt.Sprintf("%-13s %s", "db", formatBytes(stats.DBFiles.TotalBytes)),
+		fmt.Sprintf("%-13s %s", "main", formatBytes(stats.DBFiles.MainBytes)),
+		fmt.Sprintf("%-13s %s", "wal", formatBytes(stats.DBFiles.WALBytes)),
+		fmt.Sprintf("%-13s %d", "accounts", counts["accounts"]),
+		fmt.Sprintf("%-13s %d", "observations", counts["limit_observations"]),
+		fmt.Sprintf("%-13s %d", "windows", counts["observed_windows"]),
+		fmt.Sprintf("%-13s %d", "tracked", counts["limit_windows"]),
+		fmt.Sprintf("%-13s %d", "resets", counts["reset_events"]),
+		fmt.Sprintf("%-13s %d", "warnings", counts["limit_warning_events"]),
+	}
+	return "<b>Storage</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func renderDeliveryStats(title string, counts map[string]store.DeliveryCounts) string {
+	rows := make([]string, 0, len(counts)+1)
+	for _, status := range []string{"pending", "failed", "delivered"} {
+		count := counts[status]
+		rows = append(rows, fmt.Sprintf("%-10s %3d  attempts %d", status, count.Count, count.Attempts))
+	}
+	return "<b>" + html.EscapeString(title) + "</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func renderRecentStats(stats store.Stats) string {
+	rows := []string{}
+	if stats.LastReset != nil {
+		rows = append(rows, fmt.Sprintf("%-8s %s · %s · %s", "reset", sectionLabel(stats.LastReset.Trigger), stats.LastReset.Kind, formatFreshTime(stats.LastReset.DetectedAt)))
+	}
+	if stats.LastWarning != nil {
+		rows = append(rows, fmt.Sprintf("%-8s %s · %d%% left · %s", "warning", sectionLabel(stats.LastWarning.Label), stats.LastWarning.ThresholdRemaining, formatFreshTime(stats.LastWarning.DetectedAt)))
+	}
+	return "<b>Recent</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func formatBytes(value int64) string {
+	if value <= 0 {
+		return "0 B"
+	}
+	return humanize.Bytes(uint64(value))
 }
 
 func renderFreshness(t time.Time) string {

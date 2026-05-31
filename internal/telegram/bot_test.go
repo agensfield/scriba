@@ -12,6 +12,7 @@ import (
 	"github.com/agensfield/scriba/internal/remote"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server"
+	"github.com/agensfield/scriba/internal/server/store"
 )
 
 func TestRenderResetIncludesJokeAccountAndBeforeAfterBars(t *testing.T) {
@@ -88,6 +89,31 @@ func TestRenderLimitWarningShowsCheckpoint(t *testing.T) {
 		"checkpoint 5%",
 		"used",
 		"96%",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("render missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestRenderStatsShowsStorageFreshnessAndDeliveries(t *testing.T) {
+	text := RenderStats(server.Stats{
+		PollInterval:             5 * time.Minute,
+		ObservationRetentionDays: 120,
+		Store:                    storeStatsFixture(),
+	}, "prod", true)
+	for _, want := range []string{
+		"<b>Scriba stats</b>",
+		"poll",
+		"5m0s",
+		"<b>Observation</b>",
+		"latest",
+		"<b>Storage</b>",
+		"observations",
+		"<b>Reset deliveries</b>",
+		"delivered",
+		"<b>Warning deliveries</b>",
+		"<b>Recent</b>",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("render missing %q in:\n%s", want, text)
@@ -179,6 +205,52 @@ func (f *fakeController) LastResetEvent(context.Context) (resetwatch.Event, bool
 
 func (f *fakeController) LatestObservation(context.Context) (resetwatch.Observation, bool, error) {
 	return f.latest, f.latestOK, nil
+}
+
+func (f *fakeController) Stats(context.Context) (server.Stats, error) {
+	return server.Stats{PollInterval: f.interval, ObservationRetentionDays: 120, Store: storeStatsFixture()}, nil
+}
+
+func storeStatsFixture() store.Stats {
+	return store.Stats{
+		Path:          "/tmp/scriba.sqlite",
+		SchemaVersion: 3,
+		DBFiles:       store.DBFileStats{MainBytes: 1024, WALBytes: 512, TotalBytes: 1536},
+		Counts: map[string]int64{
+			"accounts":                 1,
+			"limit_observations":       9,
+			"observed_windows":         36,
+			"limit_windows":            4,
+			"reset_events":             2,
+			"limit_warning_events":     3,
+			"notification_deliveries":  2,
+			"limit_warning_deliveries": 3,
+		},
+		ResetDeliveries: map[string]store.DeliveryCounts{
+			"delivered": {Count: 2, Attempts: 2},
+		},
+		WarningDeliveries: map[string]store.DeliveryCounts{
+			"pending":   {Count: 1, Attempts: 0},
+			"delivered": {Count: 2, Attempts: 2},
+		},
+		LatestObservation: &store.ObservationSummary{
+			ObservedAt:   parseTime("2026-06-01T00:00:00Z"),
+			AccountLabel: "personal",
+			AccountEmail: "arda@example.com",
+			AccountPlan:  "prolite",
+			Windows:      4,
+		},
+		LastReset: &store.ResetSummary{
+			Trigger:    resetwatch.LabelWeeklyLimit,
+			Kind:       resetwatch.ResetKindEarly,
+			DetectedAt: parseTime("2026-06-01T00:00:00Z"),
+		},
+		LastWarning: &store.WarningSummary{
+			Label:              resetwatch.LabelFiveHour,
+			ThresholdRemaining: 5,
+			DetectedAt:         parseTime("2026-06-01T00:00:00Z"),
+		},
+	}
 }
 
 func snapshot(resetAt string, used float64) []byte {

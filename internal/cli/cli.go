@@ -822,6 +822,8 @@ func runServer(command string, opts options) error {
 		return runServerRun(cfg, opts)
 	case "status":
 		return runServerStatus(cfg, opts)
+	case "stats":
+		return runServerStats(cfg, opts)
 	case "refresh":
 		return runServerRefresh(cfg, opts)
 	case "radar":
@@ -913,6 +915,26 @@ func runServerStatus(cfg config.Config, opts options) error {
 		"observationRetentionDays": cfg.Server.ObservationRetentionDays,
 	}
 	return output(opts, payload, fmt.Sprintf("scriba server · %s · poll %s", st.Path(), interval))
+}
+
+func runServerStats(cfg config.Config, opts options) error {
+	st, err := store.Open(resolveServerStatePath(cfg.Server.StatePath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	srv := servercore.New(st, nil, nil, servercore.Config{
+		AccountLabel:             cfg.Server.AccountLabel,
+		JokeTone:                 cfg.Telegram.ResetJokeTone,
+		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
+	})
+	stats, err := srv.Stats(context.Background())
+	if err != nil {
+		return err
+	}
+	payload := serverStatsPayload(stats, cfg.Server.Environment, cfg.Telegram.Enabled)
+	human := telegram.RenderStats(stats, cfg.Server.Environment, cfg.Telegram.Enabled)
+	return output(opts, payload, human)
 }
 
 func runServerRefresh(cfg config.Config, opts options) error {
@@ -1036,6 +1058,16 @@ func serverRefreshPayload(result servercore.PollResult) map[string]any {
 	}
 }
 
+func serverStatsPayload(stats servercore.Stats, environment string, telegramEnabled bool) map[string]any {
+	return map[string]any{
+		"environment":              environment,
+		"telegramEnabled":          telegramEnabled,
+		"pollInterval":             stats.PollInterval.String(),
+		"observationRetentionDays": stats.ObservationRetentionDays,
+		"store":                    stats.Store,
+	}
+}
+
 func runBench(opts options) error {
 	payload := bench.Build(opts.provider, opts.execute)
 	if opts.out != "" {
@@ -1104,7 +1136,7 @@ func commands() map[string][]string {
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
 		"telegram": {"alerts", "reset"},
-		"server":   {"run", "status", "refresh", "radar", "prune"},
+		"server":   {"run", "status", "stats", "refresh", "radar", "prune"},
 	}
 }
 
@@ -1119,7 +1151,7 @@ Commands:
   scriba config path|show|init|telegram
   scriba cache status|reset|prune|vacuum
   scriba telegram alerts|reset
-  scriba server run|status|refresh|radar|prune
+  scriba server run|status|stats|refresh|radar|prune
   scriba bench ccusage
 `
 }
