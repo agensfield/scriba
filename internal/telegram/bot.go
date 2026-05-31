@@ -371,21 +371,30 @@ func (s *Service) send(ctx context.Context, text string, markup models.ReplyMark
 	if s.bot == nil {
 		return nil, nil
 	}
+	started := time.Now()
 	message, err := s.bot.SendMessage(ctx, &tgbot.SendMessageParams{
 		ChatID:      s.cfg.ChatID,
 		Text:        text,
 		ParseMode:   parseMode(text),
 		ReplyMarkup: markup,
 	})
-	if err == nil || parseMode(text) == "" {
+	if err == nil {
+		s.logger.Info("telegram send completed", "duration", time.Since(started).Round(time.Millisecond), "formatted", parseMode(text) != "")
+		return message, nil
+	}
+	if parseMode(text) == "" {
 		return message, err
 	}
 	s.logger.Warn("telegram formatted send failed; retrying plain text", "error", err)
-	return s.bot.SendMessage(ctx, &tgbot.SendMessageParams{
+	message, err = s.bot.SendMessage(ctx, &tgbot.SendMessageParams{
 		ChatID:      s.cfg.ChatID,
 		Text:        stripTelegramHTML(text),
 		ReplyMarkup: markup,
 	})
+	if err == nil {
+		s.logger.Info("telegram send completed", "duration", time.Since(started).Round(time.Millisecond), "formatted", false, "fallback", true)
+	}
+	return message, err
 }
 
 func (s *Service) authorized(update *models.Update) bool {
