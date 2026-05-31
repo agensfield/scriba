@@ -105,6 +105,27 @@ func TestRefreshEmitsLimitWarningsOncePerCheckpoint(t *testing.T) {
 	}
 }
 
+func TestStartupHeartbeatOnlySendsOnce(t *testing.T) {
+	ctx := context.Background()
+	fetcher := &fakeFetcher{results: []remote.ProbeResult{
+		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
+		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
+		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
+	}}
+	notifier := &fakeNotifier{}
+	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal", StartupHeartbeat: true})
+	for i := 0; i < 3; i++ {
+		if _, err := srv.RefreshNow(ctx); err != nil {
+			t.Fatalf("refresh %d: %v", i, err)
+		}
+	}
+	// First poll sends both the normal baseline notice and the startup heartbeat
+	// in one message. Later polls must not keep sending heartbeat messages.
+	if len(notifier.baselines) != 1 {
+		t.Fatalf("expected one baseline/heartbeat notice, got %d", len(notifier.baselines))
+	}
+}
+
 func TestRefreshNowIsSingleFlight(t *testing.T) {
 	ctx := context.Background()
 	release := make(chan struct{})

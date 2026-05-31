@@ -64,6 +64,7 @@ type Server struct {
 
 	mu         sync.Mutex
 	refreshing bool
+	heartbeat  bool
 }
 
 type BaselineNotice struct {
@@ -105,11 +106,12 @@ func New(st Store, fetcher Fetcher, notifier Notifier, cfg Config) *Server {
 		cfg.ObservationRetentionDays = 120
 	}
 	return &Server{
-		store:    st,
-		fetcher:  fetcher,
-		notifier: notifier,
-		cfg:      cfg,
-		logger:   slog.Default(),
+		store:     st,
+		fetcher:   fetcher,
+		notifier:  notifier,
+		cfg:       cfg,
+		logger:    slog.Default(),
+		heartbeat: cfg.StartupHeartbeat,
 	}
 }
 
@@ -224,7 +226,8 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 	if err != nil {
 		return PollResult{}, err
 	}
-	if baseline || s.cfg.StartupHeartbeat {
+	heartbeat := s.consumeStartupHeartbeat()
+	if baseline || heartbeat {
 		if err := s.notifier.NotifyBaseline(ctx, BaselineNotice{Account: obs.Account, ObservedAt: obs.ObservedAt, Windows: obs.Windows, SnapshotJSON: obs.SnapshotJSON}); err != nil {
 			s.logger.Warn("scriba baseline notification failed", "error", err)
 		}
@@ -317,6 +320,16 @@ func (s *Server) endRefresh() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refreshing = false
+}
+
+func (s *Server) consumeStartupHeartbeat() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.heartbeat {
+		return false
+	}
+	s.heartbeat = false
+	return true
 }
 
 func (CodexFetcher) FetchLimits(ctx context.Context) (remote.ProbeResult, error) {
