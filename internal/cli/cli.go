@@ -918,7 +918,7 @@ func runServerRefresh(cfg config.Config, opts options) error {
 	if err != nil {
 		return err
 	}
-	return output(opts, result, telegram.RenderLimits(result.Observation))
+	return output(opts, serverRefreshPayload(result), telegram.RenderLimits(result.Observation))
 }
 
 func runServerRadar(opts options) error {
@@ -962,6 +962,28 @@ func resolveServerStatePath(configured string) string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".local", "state", "scriba", "server.sqlite")
+}
+
+func serverRefreshPayload(result servercore.PollResult) map[string]any {
+	events := make([]map[string]any, 0, len(result.Decision.Events))
+	for _, event := range result.Decision.Events {
+		events = append(events, map[string]any{
+			"id":              event.ID,
+			"resetKind":       event.ResetKind,
+			"trigger":         event.PrimaryTriggerLabel,
+			"previousResetAt": event.PreviousResetAt,
+			"currentResetAt":  event.CurrentResetAt,
+			"detectedAt":      event.DetectedAt,
+			"jokeId":          event.JokeID,
+		})
+	}
+	return map[string]any{
+		"baseline": result.Baseline,
+		"inserted": result.Inserted,
+		"account":  result.Observation.Account,
+		"windows":  result.Observation.Windows,
+		"events":   events,
+	}
 }
 
 func runBench(opts options) error {
