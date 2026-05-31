@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/dustin/go-humanize v1.0.1
+	github.com/go-telegram/bot v1.21.0
 	modernc.org/sqlite v1.50.1
 )
 
