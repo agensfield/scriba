@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"log/slog"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,6 +58,7 @@ type Service struct {
 	radar             radar.Client
 	bot               *tgbot.Bot
 	botRef            string
+	logger            *slog.Logger
 	mu                sync.Mutex
 	lastManualRefresh time.Time
 }
@@ -67,7 +70,7 @@ func NewBotService(cfg BotConfig, controller Controller, offsets OffsetStore, de
 	if cfg.ChatID == 0 {
 		return nil, errors.New("telegram chat id is required")
 	}
-	svc := &Service{cfg: cfg, controller: controller, offsets: offsets, deliveries: deliveries, radar: radarClient, botRef: "default"}
+	svc := &Service{cfg: cfg, controller: controller, offsets: offsets, deliveries: deliveries, radar: radarClient, botRef: "default", logger: slog.Default()}
 	var options []tgbot.Option
 	if offsets != nil {
 		if offset, ok, err := offsets.GetTelegramOffset(context.Background(), svc.botRef); err != nil {
@@ -89,7 +92,9 @@ func NewBotService(cfg BotConfig, controller Controller, offsets OffsetStore, de
 }
 
 func (s *Service) Start(ctx context.Context) {
-	_ = s.RegisterCommands(ctx)
+	if err := s.RegisterCommands(ctx); err != nil {
+		s.logger.Warn("telegram command registration failed", "error", err)
+	}
 	go s.retryDeliveries(ctx)
 	s.bot.Start(ctx)
 }
@@ -138,24 +143,39 @@ func (s *Service) NotifyReset(ctx context.Context, event resetwatch.Event) error
 }
 
 func (s *Service) handleUpdate(ctx context.Context, b *tgbot.Bot, update *models.Update) {
-	if s.offsets != nil {
-		defer func() { _ = s.offsets.SetTelegramOffset(ctx, s.botRef, update.ID) }()
-	}
+	handled := false
+	defer func() {
+		if handled && s.offsets != nil {
+			if err := s.offsets.SetTelegramOffset(ctx, s.botRef, update.ID); err != nil {
+				s.logger.Warn("telegram offset persist failed", "update_id", update.ID, "error", err)
+			}
+		}
+	}()
 	if !s.authorized(update) {
+		s.logUnauthorized(update)
+		handled = true
 		return
 	}
 	if update.CallbackQuery != nil {
+		s.logger.Info("telegram callback received", "update_id", update.ID, "data", update.CallbackQuery.Data)
 		s.handleCallback(ctx, update.CallbackQuery)
+		handled = true
 		return
 	}
 	if update.Message == nil || update.Message.Text == "" {
+		handled = true
 		return
 	}
 	text := strings.TrimSpace(update.Message.Text)
+	s.logger.Info("telegram command received", "update_id", update.ID, "command", commandName(text))
 	reply, markup := s.handleCommand(ctx, text)
 	if reply != "" {
-		_, _ = s.send(ctx, reply, markup)
+		if _, err := s.send(ctx, reply, markup); err != nil {
+			s.logger.Warn("telegram command reply failed", "update_id", update.ID, "command", commandName(text), "error", err)
+			return
+		}
 	}
+	handled = true
 	_ = b
 }
 
@@ -351,10 +371,19 @@ func (s *Service) send(ctx context.Context, text string, markup models.ReplyMark
 	if s.bot == nil {
 		return nil, nil
 	}
-	return s.bot.SendMessage(ctx, &tgbot.SendMessageParams{
+	message, err := s.bot.SendMessage(ctx, &tgbot.SendMessageParams{
 		ChatID:      s.cfg.ChatID,
 		Text:        text,
 		ParseMode:   parseMode(text),
+		ReplyMarkup: markup,
+	})
+	if err == nil || parseMode(text) == "" {
+		return message, err
+	}
+	s.logger.Warn("telegram formatted send failed; retrying plain text", "error", err)
+	return s.bot.SendMessage(ctx, &tgbot.SendMessageParams{
+		ChatID:      s.cfg.ChatID,
+		Text:        stripTelegramHTML(text),
 		ReplyMarkup: markup,
 	})
 }
@@ -394,6 +423,27 @@ func updateIdentity(update *models.Update) (chatID int64, userID int64, ok bool)
 		}
 	}
 	return 0, 0, false
+}
+
+func (s *Service) logUnauthorized(update *models.Update) {
+	chatID, userID, ok := updateIdentity(update)
+	if !ok {
+		s.logger.Warn("telegram update ignored without identity", "update_id", update.ID)
+		return
+	}
+	s.logger.Warn("telegram update ignored by allowlist", "update_id", update.ID, "chat_id", chatID, "user_id", userID)
+}
+
+func commandName(text string) string {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return ""
+	}
+	command := strings.ToLower(strings.Split(fields[0], "@")[0])
+	if !strings.HasPrefix(command, "/") {
+		return "message"
+	}
+	return command
 }
 
 func settingsKeyboard(current time.Duration) models.InlineKeyboardMarkup {
@@ -656,6 +706,13 @@ func parseMode(text string) models.ParseMode {
 		return models.ParseModeHTML
 	}
 	return ""
+}
+
+var telegramHTMLTagPattern = regexp.MustCompile(`</?(?:b|strong|i|em|u|ins|s|strike|del|span|tg-spoiler|a|code|pre|blockquote)(?:\s+[^>]*)?>`)
+
+func stripTelegramHTML(text string) string {
+	stripped := telegramHTMLTagPattern.ReplaceAllString(text, "")
+	return html.UnescapeString(stripped)
 }
 
 func formatTime(t time.Time) string {

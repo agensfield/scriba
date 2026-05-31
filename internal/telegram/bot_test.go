@@ -92,6 +92,20 @@ func TestHandleSettingsCallbackUpdatesPollInterval(t *testing.T) {
 	}
 }
 
+func TestStripTelegramHTMLFallback(t *testing.T) {
+	text := "<b>Codex limits</b>\n<pre>Weekly &lt;ok&gt;</pre>"
+	got := stripTelegramHTML(text)
+	if got != "Codex limits\nWeekly <ok>" {
+		t.Fatalf("unexpected stripped text: %q", got)
+	}
+}
+
+func TestCommandNameNormalizesBotSuffix(t *testing.T) {
+	if got := commandName("/Status@codexusagebot now"); got != "/status" {
+		t.Fatalf("unexpected command: %q", got)
+	}
+}
+
 type fakeController struct {
 	interval time.Duration
 }
