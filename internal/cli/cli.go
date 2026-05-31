@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dustin/go-humanize"
+
 	"github.com/agensfield/scriba/internal/bench"
 	"github.com/agensfield/scriba/internal/buildinfo"
 	"github.com/agensfield/scriba/internal/cache"
@@ -933,7 +935,7 @@ func runServerStats(cfg config.Config, opts options) error {
 		return err
 	}
 	payload := serverStatsPayload(stats, cfg.Server.Environment, cfg.Telegram.Enabled)
-	human := telegram.RenderStats(stats, cfg.Server.Environment, cfg.Telegram.Enabled)
+	human := renderServerStats(stats, cfg.Server.Environment, cfg.Telegram.Enabled)
 	return output(opts, payload, human)
 }
 
@@ -1066,6 +1068,96 @@ func serverStatsPayload(stats servercore.Stats, environment string, telegramEnab
 		"observationRetentionDays": stats.ObservationRetentionDays,
 		"store":                    stats.Store,
 	}
+}
+
+func renderServerStats(stats servercore.Stats, environment string, telegramEnabled bool) string {
+	var b strings.Builder
+	b.WriteString("Scriba stats\n")
+	writeRows(&b, []string{
+		fmt.Sprintf("%-13s %s", "poll", stats.PollInterval.String()),
+		fmt.Sprintf("%-13s %dd", "retention", stats.ObservationRetentionDays),
+		fmt.Sprintf("%-13s %s", "env", environment),
+		fmt.Sprintf("%-13s %t", "telegram", telegramEnabled),
+	})
+	if stats.Store.LatestObservation != nil {
+		latest := stats.Store.LatestObservation
+		b.WriteString("\nObservation\n")
+		rows := []string{
+			fmt.Sprintf("%-13s %s", "latest", formatCLIStatsTime(latest.ObservedAt)),
+			fmt.Sprintf("%-13s %d", "latest win", latest.Windows),
+			fmt.Sprintf("%-13s %s", "account", latest.AccountLabel),
+		}
+		if latest.AccountEmail != "" || latest.AccountPlan != "" {
+			account := latest.AccountEmail
+			if latest.AccountEmail != "" && latest.AccountPlan != "" {
+				account += " · "
+			}
+			account += latest.AccountPlan
+			rows = append(rows, fmt.Sprintf("%-13s %s", "plan", account))
+		}
+		writeRows(&b, rows)
+	}
+	counts := stats.Store.Counts
+	b.WriteString("\nStorage\n")
+	writeRows(&b, []string{
+		fmt.Sprintf("%-13s %s", "db", formatCLIBytes(stats.Store.DBFiles.TotalBytes)),
+		fmt.Sprintf("%-13s %s", "main", formatCLIBytes(stats.Store.DBFiles.MainBytes)),
+		fmt.Sprintf("%-13s %s", "wal", formatCLIBytes(stats.Store.DBFiles.WALBytes)),
+		fmt.Sprintf("%-13s %d", "accounts", counts["accounts"]),
+		fmt.Sprintf("%-13s %d", "stored polls", counts["limit_observations"]),
+		fmt.Sprintf("%-13s %d", "stored win", counts["observed_windows"]),
+		fmt.Sprintf("%-13s %d", "tracked win", counts["limit_windows"]),
+		fmt.Sprintf("%-13s %d", "resets", counts["reset_events"]),
+		fmt.Sprintf("%-13s %d", "warnings", counts["limit_warning_events"]),
+	})
+	b.WriteString("\nReset deliveries\n")
+	writeDeliveryRows(&b, stats.Store.ResetDeliveries)
+	b.WriteString("\nWarning deliveries\n")
+	writeDeliveryRows(&b, stats.Store.WarningDeliveries)
+	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil {
+		b.WriteString("\nRecent\n")
+		var rows []string
+		if stats.Store.LastReset != nil {
+			reset := stats.Store.LastReset
+			rows = append(rows, fmt.Sprintf("%-13s %s · %s · %s", "reset", reset.Trigger, reset.Kind, formatCLIStatsTime(reset.DetectedAt)))
+		}
+		if stats.Store.LastWarning != nil {
+			warning := stats.Store.LastWarning
+			rows = append(rows, fmt.Sprintf("%-13s %s · %d%% left · %s", "warning", warning.Label, warning.ThresholdRemaining, formatCLIStatsTime(warning.DetectedAt)))
+		}
+		writeRows(&b, rows)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func writeDeliveryRows(b *strings.Builder, counts map[string]store.DeliveryCounts) {
+	rows := make([]string, 0, 3)
+	for _, status := range []string{"pending", "failed", "delivered"} {
+		count := counts[status]
+		rows = append(rows, fmt.Sprintf("%-13s %3d  attempts %d", status, count.Count, count.Attempts))
+	}
+	writeRows(b, rows)
+}
+
+func writeRows(b *strings.Builder, rows []string) {
+	for _, row := range rows {
+		b.WriteString(row)
+		b.WriteString("\n")
+	}
+}
+
+func formatCLIStatsTime(t time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	return humanize.Time(t) + " · " + t.Local().Format("Mon 15:04:05")
+}
+
+func formatCLIBytes(value int64) string {
+	if value <= 0 {
+		return "0 B"
+	}
+	return humanize.Bytes(uint64(value))
 }
 
 func runBench(opts options) error {

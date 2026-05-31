@@ -671,7 +671,7 @@ func renderRuntimeStats(stats server.Stats, environment string, telegramEnabled 
 func renderObservationStats(latest store.ObservationSummary) string {
 	rows := []string{
 		fmt.Sprintf("%-12s %s", "latest", formatFreshTime(latest.ObservedAt)),
-		fmt.Sprintf("%-12s %d", "windows", latest.Windows),
+		fmt.Sprintf("%-12s %d", "latest win", latest.Windows),
 		fmt.Sprintf("%-12s %s", "account", latest.AccountLabel),
 	}
 	if latest.AccountEmail != "" || latest.AccountPlan != "" {
@@ -692,9 +692,9 @@ func renderStorageStats(stats store.Stats) string {
 		fmt.Sprintf("%-13s %s", "main", formatBytes(stats.DBFiles.MainBytes)),
 		fmt.Sprintf("%-13s %s", "wal", formatBytes(stats.DBFiles.WALBytes)),
 		fmt.Sprintf("%-13s %d", "accounts", counts["accounts"]),
-		fmt.Sprintf("%-13s %d", "observations", counts["limit_observations"]),
-		fmt.Sprintf("%-13s %d", "windows", counts["observed_windows"]),
-		fmt.Sprintf("%-13s %d", "tracked", counts["limit_windows"]),
+		fmt.Sprintf("%-13s %d", "stored polls", counts["limit_observations"]),
+		fmt.Sprintf("%-13s %d", "stored win", counts["observed_windows"]),
+		fmt.Sprintf("%-13s %d", "tracked win", counts["limit_windows"]),
 		fmt.Sprintf("%-13s %d", "resets", counts["reset_events"]),
 		fmt.Sprintf("%-13s %d", "warnings", counts["limit_warning_events"]),
 	}
