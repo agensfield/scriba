@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -126,6 +127,47 @@ func TestStartupHeartbeatOnlySendsOnce(t *testing.T) {
 	}
 }
 
+func TestHealthRecordsPollFailuresAndRecovery(t *testing.T) {
+	ctx := context.Background()
+	fetcher := fakeFetcherFunc(func(context.Context) (remote.ProbeResult, error) {
+		return remote.ProbeResult{}, errors.New("401 auth exploded")
+	})
+	notifier := &fakeNotifier{}
+	srv := New(openStore(t), fetcher, notifier, Config{})
+	for i := 0; i < FailureAlertThreshold; i++ {
+		if _, err := srv.RefreshNow(ctx); err == nil {
+			t.Fatal("expected refresh failure")
+		}
+	}
+	health, err := srv.Health(ctx)
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if health.Status != HealthDegraded || health.ConsecutiveFailures != FailureAlertThreshold || health.FailureKind != "auth" {
+		t.Fatalf("unexpected degraded health: %#v", health)
+	}
+	if len(notifier.health) != 1 || notifier.health[0].Recovery {
+		t.Fatalf("expected one failure health notice, got %#v", notifier.health)
+	}
+
+	srv.fetcher = fakeFetcherFunc(func(context.Context) (remote.ProbeResult, error) {
+		return probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"), nil
+	})
+	if _, err := srv.RefreshNow(ctx); err != nil {
+		t.Fatalf("recovery refresh: %v", err)
+	}
+	health, err = srv.Health(ctx)
+	if err != nil {
+		t.Fatalf("health after recovery: %v", err)
+	}
+	if health.Status != HealthOK || health.ConsecutiveFailures != 0 {
+		t.Fatalf("unexpected recovered health: %#v", health)
+	}
+	if len(notifier.health) != 2 || !notifier.health[1].Recovery {
+		t.Fatalf("expected recovery notice, got %#v", notifier.health)
+	}
+}
+
 func TestRefreshNowIsSingleFlight(t *testing.T) {
 	ctx := context.Background()
 	release := make(chan struct{})
@@ -185,6 +227,7 @@ type fakeNotifier struct {
 	baselines []BaselineNotice
 	resets    []resetwatch.Event
 	warnings  []resetwatch.WarningEvent
+	health    []HealthNotice
 }
 
 func (n *fakeNotifier) NotifyBaseline(_ context.Context, notice BaselineNotice) error {
@@ -199,6 +242,11 @@ func (n *fakeNotifier) NotifyReset(_ context.Context, event resetwatch.Event) er
 
 func (n *fakeNotifier) NotifyLimitWarning(_ context.Context, warning resetwatch.WarningEvent) error {
 	n.warnings = append(n.warnings, warning)
+	return nil
+}
+
+func (n *fakeNotifier) NotifyHealth(_ context.Context, notice HealthNotice) error {
+	n.health = append(n.health, notice)
 	return nil
 }
 

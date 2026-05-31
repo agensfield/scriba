@@ -38,6 +38,7 @@ type Controller interface {
 	LastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LatestObservation(context.Context) (resetwatch.Observation, bool, error)
 	Stats(context.Context) (server.Stats, error)
+	Health(context.Context) (server.Health, error)
 }
 
 type OffsetStore interface {
@@ -112,6 +113,7 @@ func (s *Service) RegisterCommands(ctx context.Context) error {
 	}
 	_, err := s.bot.SetMyCommands(ctx, &tgbot.SetMyCommandsParams{Commands: []models.BotCommand{
 		{Command: "status", Description: "server health and polling state"},
+		{Command: "health", Description: "poll/auth health check"},
 		{Command: "stats", Description: "storage and delivery stats"},
 		{Command: "limits", Description: "show current Codex limits"},
 		{Command: "refresh", Description: "force a live Codex poll"},
@@ -172,6 +174,11 @@ func (s *Service) NotifyLimitWarning(ctx context.Context, warning resetwatch.War
 	return s.deliveries.MarkWarningDeliveryAttempt(ctx, warning.ID, target, true, "", messageID)
 }
 
+func (s *Service) NotifyHealth(ctx context.Context, notice server.HealthNotice) error {
+	_, err := s.send(ctx, RenderHealthNotice(notice), nil)
+	return err
+}
+
 func (s *Service) handleUpdate(ctx context.Context, b *tgbot.Bot, update *models.Update) {
 	handled := false
 	defer func() {
@@ -218,15 +225,21 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 	case "/start":
 		return "<b>Scriba is alive</b>\nremote Codex limit watch is running.\n\n" + helpText(), mainKeyboard()
 	case "/status":
-		interval, err := s.controller.PollInterval(ctx)
+		health, err := s.controller.Health(ctx)
 		if err != nil {
-			return "<b>Scriba status</b>\nalive: yes\npoll interval: unknown\n<code>" + html.EscapeString(err.Error()) + "</code>", nil
+			return "<b>Scriba status</b>\nalive: yes\nhealth: unknown\n<code>" + html.EscapeString(err.Error()) + "</code>", nil
 		}
 		last := "none yet"
 		if event, ok, err := s.controller.LastResetEvent(ctx); err == nil && ok {
 			last = fmt.Sprintf("%s · %s -> %s", event.ResetKind, formatTime(event.PreviousResetAt), formatTime(event.CurrentResetAt))
 		}
-		return "<b>Scriba status</b>\n<pre>" + html.EscapeString(fmt.Sprintf("%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s", "alive", "yes", "poll interval", interval.String(), "last reset", last, "details", "/stats")) + "</pre>", mainKeyboard()
+		return "<b>Scriba status</b>\n<pre>" + html.EscapeString(fmt.Sprintf("%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s", "alive", "yes", "version", health.Version, "health", health.Status, "poll interval", health.PollInterval.String(), "last reset", last, "details", "/health · /stats")) + "</pre>", mainKeyboard()
+	case "/health":
+		health, err := s.controller.Health(ctx)
+		if err != nil {
+			return "health failed: " + err.Error(), nil
+		}
+		return RenderHealth(health), mainKeyboard()
 	case "/stats":
 		stats, err := s.controller.Stats(ctx)
 		if err != nil {
@@ -286,6 +299,11 @@ func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuer
 		s.answerCallback(ctx, query.ID, "refreshing limits")
 		reply, _ := s.handleCommand(ctx, "/limits")
 		_, _ = s.send(ctx, reply, nil)
+		return
+	case "quick:health":
+		s.answerCallback(ctx, query.ID, "checking health")
+		reply, _ := s.handleCommand(ctx, "/health")
+		_, _ = s.send(ctx, reply, mainKeyboard())
 		return
 	case "quick:refresh":
 		s.answerCallback(ctx, query.ID, "forcing refresh")
@@ -544,10 +562,11 @@ func mainKeyboard() models.InlineKeyboardMarkup {
 			{Text: "Refresh", CallbackData: "quick:refresh"},
 		},
 		{
+			{Text: "Health", CallbackData: "quick:health"},
 			{Text: "Stats", CallbackData: "quick:stats"},
-			{Text: "Radar", CallbackData: "quick:radar"},
 		},
 		{
+			{Text: "Radar", CallbackData: "quick:radar"},
 			{Text: "Settings", CallbackData: "quick:settings"},
 		},
 	}}
@@ -561,6 +580,7 @@ func helpText() string {
 	return strings.Join([]string{
 		"<b>Commands</b>",
 		"<code>/status</code> server health and polling state",
+		"<code>/health</code> poll/auth health check",
 		"<code>/stats</code> storage and delivery stats",
 		"<code>/limits</code> current Codex limits",
 		"<code>/refresh</code> force a live poll",
@@ -639,6 +659,8 @@ func RenderStats(stats server.Stats, environment string, telegramEnabled bool) s
 	var b strings.Builder
 	b.WriteString("<b>Scriba stats</b>\n")
 	b.WriteString(renderRuntimeStats(stats, environment, telegramEnabled))
+	b.WriteString("\n\n")
+	b.WriteString(renderHealthStats(stats.Health))
 	if stats.Store.LatestObservation != nil {
 		b.WriteString("\n\n")
 		b.WriteString(renderObservationStats(*stats.Store.LatestObservation))
@@ -658,6 +680,8 @@ func RenderStats(stats server.Stats, environment string, telegramEnabled bool) s
 
 func renderRuntimeStats(stats server.Stats, environment string, telegramEnabled bool) string {
 	rows := []string{
+		fmt.Sprintf("%-12s %s", "version", stats.Version),
+		fmt.Sprintf("%-12s %s", "commit", stats.Commit),
 		fmt.Sprintf("%-12s %s", "poll", stats.PollInterval.String()),
 		fmt.Sprintf("%-12s %dd", "retention", stats.ObservationRetentionDays),
 	}
@@ -666,6 +690,43 @@ func renderRuntimeStats(stats server.Stats, environment string, telegramEnabled 
 		rows = append(rows, fmt.Sprintf("%-12s %t", "telegram", telegramEnabled))
 	}
 	return "<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func RenderHealth(health server.Health) string {
+	return "<b>Scriba health</b>\n" + renderHealthStats(health)
+}
+
+func RenderHealthNotice(notice server.HealthNotice) string {
+	title := "<b>Scriba health alert</b>"
+	if notice.Recovery {
+		title = "<b>Scriba recovered</b>"
+	}
+	return title + "\n" + renderHealthStats(notice.Health)
+}
+
+func renderHealthStats(health server.Health) string {
+	rows := []string{
+		fmt.Sprintf("%-12s %s", "status", health.Status),
+		fmt.Sprintf("%-12s %s", "version", health.Version),
+		fmt.Sprintf("%-12s %s", "poll", health.PollInterval.String()),
+	}
+	if health.LastSuccessAt != nil {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "last ok", formatFreshTime(*health.LastSuccessAt)))
+	}
+	if health.LastFailureAt != nil {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "last fail", formatFreshTime(*health.LastFailureAt)))
+	}
+	if health.NextPollEstimateAt != nil {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "next", formatFreshTime(*health.NextPollEstimateAt)))
+	}
+	rows = append(rows, fmt.Sprintf("%-12s %d", "failures", health.ConsecutiveFailures))
+	if health.FailureKind != "" {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "kind", health.FailureKind))
+	}
+	if health.LastError != "" {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "error", truncate(health.LastError, 120)))
+	}
+	return "<b>Health</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
 }
 
 func renderObservationStats(latest store.ObservationSummary) string {
@@ -726,6 +787,16 @@ func formatBytes(value int64) string {
 		return "0 B"
 	}
 	return humanize.Bytes(uint64(value))
+}
+
+func truncate(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
 }
 
 func renderFreshness(t time.Time) string {

@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/agensfield/scriba/internal/buildinfo"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/remote"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
@@ -18,10 +20,16 @@ import (
 )
 
 const (
-	DefaultPollInterval = 5 * time.Minute
-	DefaultBackoff      = 30 * time.Second
-	SettingPollInterval = "poll_interval"
-	SettingLastPruneAt  = "last_prune_at"
+	DefaultPollInterval     = 5 * time.Minute
+	DefaultBackoff          = 30 * time.Second
+	SettingPollInterval     = "poll_interval"
+	SettingLastPruneAt      = "last_prune_at"
+	SettingPollSuccessAt    = "poll_success_at"
+	SettingPollFailureAt    = "poll_failure_at"
+	SettingPollFailureCount = "poll_failure_count"
+	SettingPollFailureError = "poll_failure_error"
+	SettingHealthAlertState = "health_alert_state"
+	FailureAlertThreshold   = 3
 )
 
 var ErrRefreshInProgress = errors.New("refresh already in progress")
@@ -46,6 +54,7 @@ type Notifier interface {
 	NotifyBaseline(context.Context, BaselineNotice) error
 	NotifyReset(context.Context, resetwatch.Event) error
 	NotifyLimitWarning(context.Context, resetwatch.WarningEvent) error
+	NotifyHealth(context.Context, HealthNotice) error
 }
 
 type Config struct {
@@ -82,10 +91,43 @@ type PollResult struct {
 	Baseline    bool
 }
 
+type HealthStatus string
+
+const (
+	HealthUnknown  HealthStatus = "unknown"
+	HealthOK       HealthStatus = "ok"
+	HealthStale    HealthStatus = "stale"
+	HealthDegraded HealthStatus = "degraded"
+)
+
 type Stats struct {
 	Store                    store.Stats   `json:"store"`
 	PollInterval             time.Duration `json:"pollInterval"`
 	ObservationRetentionDays int           `json:"observationRetentionDays"`
+	Health                   Health        `json:"health"`
+	Version                  string        `json:"version"`
+	Commit                   string        `json:"commit"`
+}
+
+type Health struct {
+	Status                   HealthStatus  `json:"status"`
+	Version                  string        `json:"version"`
+	Commit                   string        `json:"commit"`
+	PollInterval             time.Duration `json:"pollInterval"`
+	ObservationRetentionDays int           `json:"observationRetentionDays"`
+	LastSuccessAt            *time.Time    `json:"lastSuccessAt,omitempty"`
+	LastFailureAt            *time.Time    `json:"lastFailureAt,omitempty"`
+	LastError                string        `json:"lastError,omitempty"`
+	FailureKind              string        `json:"failureKind,omitempty"`
+	ConsecutiveFailures      int           `json:"consecutiveFailures"`
+	NextPollEstimateAt       *time.Time    `json:"nextPollEstimateAt,omitempty"`
+	StaleAfter               time.Duration `json:"staleAfter"`
+	IsStale                  bool          `json:"isStale"`
+}
+
+type HealthNotice struct {
+	Health   Health
+	Recovery bool
 }
 
 type CodexFetcher struct{}
@@ -150,7 +192,17 @@ func (s *Server) RefreshNow(ctx context.Context) (PollResult, error) {
 		return PollResult{}, ErrRefreshInProgress
 	}
 	defer s.endRefresh()
-	return s.pollOnce(ctx)
+	result, err := s.pollOnce(ctx)
+	if err != nil {
+		if recordErr := s.recordPollFailure(ctx, err); recordErr != nil {
+			s.logger.Warn("scriba poll failure recording failed", "error", recordErr)
+		}
+		return PollResult{}, err
+	}
+	if err := s.recordPollSuccess(ctx); err != nil {
+		s.logger.Warn("scriba poll success recording failed", "error", err)
+	}
+	return result, nil
 }
 
 func (s *Server) PollInterval(ctx context.Context) (time.Duration, error) {
@@ -188,15 +240,147 @@ func (s *Server) Stats(ctx context.Context) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
-	interval, err := s.PollInterval(ctx)
+	health, err := s.Health(ctx)
 	if err != nil {
 		return Stats{}, err
 	}
 	return Stats{
 		Store:                    storeStats,
+		PollInterval:             health.PollInterval,
+		ObservationRetentionDays: s.cfg.ObservationRetentionDays,
+		Health:                   health,
+		Version:                  buildinfo.Version,
+		Commit:                   buildinfo.Commit,
+	}, nil
+}
+
+func (s *Server) Health(ctx context.Context) (Health, error) {
+	interval, err := s.PollInterval(ctx)
+	if err != nil {
+		return Health{}, err
+	}
+	health := Health{
+		Status:                   HealthUnknown,
+		Version:                  buildinfo.Version,
+		Commit:                   buildinfo.Commit,
 		PollInterval:             interval,
 		ObservationRetentionDays: s.cfg.ObservationRetentionDays,
-	}, nil
+		StaleAfter:               2 * interval,
+	}
+	success, ok, err := s.timeSetting(ctx, SettingPollSuccessAt)
+	if err != nil {
+		return health, err
+	}
+	if ok {
+		health.LastSuccessAt = &success
+	}
+	failure, ok, err := s.timeSetting(ctx, SettingPollFailureAt)
+	if err != nil {
+		return health, err
+	}
+	if ok {
+		health.LastFailureAt = &failure
+	}
+	count, err := s.intSetting(ctx, SettingPollFailureCount)
+	if err != nil {
+		return health, err
+	}
+	health.ConsecutiveFailures = count
+	if value, ok, err := s.store.GetSetting(ctx, SettingPollFailureError); err != nil {
+		return health, err
+	} else if ok {
+		health.LastError = value
+		health.FailureKind = classifyPollError(value)
+	}
+	now := time.Now().UTC()
+	if health.LastFailureAt != nil && (health.LastSuccessAt == nil || health.LastFailureAt.After(*health.LastSuccessAt)) && count > 0 {
+		health.Status = HealthDegraded
+		next := health.LastFailureAt.Add(pollBackoff(count))
+		health.NextPollEstimateAt = &next
+		return health, nil
+	}
+	if health.LastSuccessAt != nil {
+		next := health.LastSuccessAt.Add(interval)
+		health.NextPollEstimateAt = &next
+		health.IsStale = now.Sub(*health.LastSuccessAt) > health.StaleAfter
+		if health.IsStale {
+			health.Status = HealthStale
+		} else {
+			health.Status = HealthOK
+		}
+	}
+	return health, nil
+}
+
+func (s *Server) recordPollFailure(ctx context.Context, pollErr error) error {
+	count, err := s.intSetting(ctx, SettingPollFailureCount)
+	if err != nil {
+		return err
+	}
+	count++
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.store.SetSetting(ctx, SettingPollFailureAt, now); err != nil {
+		return err
+	}
+	if err := s.store.SetSetting(ctx, SettingPollFailureCount, strconv.Itoa(count)); err != nil {
+		return err
+	}
+	if err := s.store.SetSetting(ctx, SettingPollFailureError, pollErr.Error()); err != nil {
+		return err
+	}
+	if count < FailureAlertThreshold {
+		return nil
+	}
+	alertState, _, err := s.store.GetSetting(ctx, SettingHealthAlertState)
+	if err != nil {
+		return err
+	}
+	if alertState == "failing" {
+		return nil
+	}
+	health, err := s.Health(ctx)
+	if err != nil {
+		return err
+	}
+	if notifyErr := s.notifier.NotifyHealth(ctx, HealthNotice{Health: health}); notifyErr != nil {
+		s.logger.Warn("scriba health failure notification failed", "error", notifyErr)
+		return notifyErr
+	}
+	return s.store.SetSetting(ctx, SettingHealthAlertState, "failing")
+}
+
+func (s *Server) recordPollSuccess(ctx context.Context) error {
+	wasFailing := false
+	if alertState, ok, err := s.store.GetSetting(ctx, SettingHealthAlertState); err != nil {
+		return err
+	} else if ok && alertState == "failing" {
+		wasFailing = true
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.store.SetSetting(ctx, SettingPollSuccessAt, now); err != nil {
+		return err
+	}
+	if err := s.store.SetSetting(ctx, SettingPollFailureCount, "0"); err != nil {
+		return err
+	}
+	if err := s.store.SetSetting(ctx, SettingPollFailureError, ""); err != nil {
+		return err
+	}
+	if err := s.store.SetSetting(ctx, SettingHealthAlertState, "ok"); err != nil {
+		return err
+	}
+	if !wasFailing {
+		return nil
+	}
+	health, err := s.Health(ctx)
+	if err != nil {
+		return err
+	}
+	if notifyErr := s.notifier.NotifyHealth(ctx, HealthNotice{Health: health, Recovery: true}); notifyErr != nil {
+		s.logger.Warn("scriba health recovery notification failed", "error", notifyErr)
+		return notifyErr
+	}
+	return nil
 }
 
 func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
@@ -261,6 +445,30 @@ func (s *Server) PruneObservations(ctx context.Context, compact bool) (store.Pru
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 	return s.store.PruneObservations(ctx, cutoff, compact)
+}
+
+func (s *Server) timeSetting(ctx context.Context, key string) (time.Time, bool, error) {
+	value, ok, err := s.store.GetSetting(ctx, key)
+	if err != nil || !ok || strings.TrimSpace(value) == "" {
+		return time.Time{}, ok, err
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false, nil
+	}
+	return parsed.UTC(), true, nil
+}
+
+func (s *Server) intSetting(ctx context.Context, key string) (int, error) {
+	value, ok, err := s.store.GetSetting(ctx, key)
+	if err != nil || !ok || strings.TrimSpace(value) == "" {
+		return 0, err
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0, nil
+	}
+	return parsed, nil
 }
 
 func (s *Server) pruneIfDue(ctx context.Context) error {
@@ -348,6 +556,10 @@ func (NoopNotifier) NotifyLimitWarning(context.Context, resetwatch.WarningEvent)
 	return nil
 }
 
+func (NoopNotifier) NotifyHealth(context.Context, HealthNotice) error {
+	return nil
+}
+
 func accountRef(auth remote.AuthState) string {
 	if auth.AccountID != "" {
 		return auth.AccountID
@@ -380,6 +592,33 @@ func sleep(ctx context.Context, d time.Duration) bool {
 		return false
 	case <-timer.C:
 		return true
+	}
+}
+
+func pollBackoff(attempts int) time.Duration {
+	switch {
+	case attempts <= 1:
+		return DefaultBackoff
+	case attempts == 2:
+		return time.Minute
+	case attempts == 3:
+		return 2 * time.Minute
+	case attempts == 4:
+		return 5 * time.Minute
+	default:
+		return 5 * time.Minute
+	}
+}
+
+func classifyPollError(message string) string {
+	lowered := strings.ToLower(message)
+	switch {
+	case strings.Contains(lowered, "auth"), strings.Contains(lowered, "token"), strings.Contains(lowered, "unauthorized"), strings.Contains(lowered, "forbidden"), strings.Contains(lowered, "401"), strings.Contains(lowered, "403"):
+		return "auth"
+	case strings.Contains(lowered, "timeout"), strings.Contains(lowered, "deadline"), strings.Contains(lowered, "temporary"), strings.Contains(lowered, "connection"), strings.Contains(lowered, "network"):
+		return "network"
+	default:
+		return "backend"
 	}
 }
 

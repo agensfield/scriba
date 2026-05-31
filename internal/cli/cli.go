@@ -824,6 +824,8 @@ func runServer(command string, opts options) error {
 		return runServerRun(cfg, opts)
 	case "status":
 		return runServerStatus(cfg, opts)
+	case "health":
+		return runServerHealth(cfg, opts)
 	case "stats":
 		return runServerStats(cfg, opts)
 	case "refresh":
@@ -911,12 +913,32 @@ func runServerStatus(cfg config.Config, opts options) error {
 	payload := map[string]any{
 		"statePath":                st.Path(),
 		"schemaVersion":            version,
+		"version":                  buildinfo.Version,
+		"commit":                   buildinfo.Commit,
 		"pollInterval":             interval.String(),
 		"telegramEnabled":          cfg.Telegram.Enabled,
 		"environment":              cfg.Server.Environment,
 		"observationRetentionDays": cfg.Server.ObservationRetentionDays,
 	}
-	return output(opts, payload, fmt.Sprintf("scriba server · %s · poll %s", st.Path(), interval))
+	return output(opts, payload, fmt.Sprintf("scriba server · %s · %s · poll %s", buildinfo.Version, st.Path(), interval))
+}
+
+func runServerHealth(cfg config.Config, opts options) error {
+	st, err := store.Open(resolveServerStatePath(cfg.Server.StatePath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	srv := servercore.New(st, nil, nil, servercore.Config{
+		AccountLabel:             cfg.Server.AccountLabel,
+		JokeTone:                 cfg.Telegram.ResetJokeTone,
+		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
+	})
+	health, err := srv.Health(context.Background())
+	if err != nil {
+		return err
+	}
+	return output(opts, healthPayload(health), renderServerHealth(health))
 }
 
 func runServerStats(cfg config.Config, opts options) error {
@@ -1066,7 +1088,28 @@ func serverStatsPayload(stats servercore.Stats, environment string, telegramEnab
 		"telegramEnabled":          telegramEnabled,
 		"pollInterval":             stats.PollInterval.String(),
 		"observationRetentionDays": stats.ObservationRetentionDays,
+		"version":                  stats.Version,
+		"commit":                   stats.Commit,
+		"health":                   healthPayload(stats.Health),
 		"store":                    stats.Store,
+	}
+}
+
+func healthPayload(health servercore.Health) map[string]any {
+	return map[string]any{
+		"status":                   health.Status,
+		"version":                  health.Version,
+		"commit":                   health.Commit,
+		"pollInterval":             health.PollInterval.String(),
+		"observationRetentionDays": health.ObservationRetentionDays,
+		"lastSuccessAt":            health.LastSuccessAt,
+		"lastFailureAt":            health.LastFailureAt,
+		"lastError":                health.LastError,
+		"failureKind":              health.FailureKind,
+		"consecutiveFailures":      health.ConsecutiveFailures,
+		"nextPollEstimateAt":       health.NextPollEstimateAt,
+		"staleAfter":               health.StaleAfter.String(),
+		"isStale":                  health.IsStale,
 	}
 }
 
@@ -1074,11 +1117,15 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 	var b strings.Builder
 	b.WriteString("Scriba stats\n")
 	writeRows(&b, []string{
+		fmt.Sprintf("%-13s %s", "version", stats.Version),
+		fmt.Sprintf("%-13s %s", "commit", stats.Commit),
 		fmt.Sprintf("%-13s %s", "poll", stats.PollInterval.String()),
 		fmt.Sprintf("%-13s %dd", "retention", stats.ObservationRetentionDays),
 		fmt.Sprintf("%-13s %s", "env", environment),
 		fmt.Sprintf("%-13s %t", "telegram", telegramEnabled),
 	})
+	b.WriteString("\nHealth\n")
+	writeHealthRows(&b, stats.Health)
 	if stats.Store.LatestObservation != nil {
 		latest := stats.Store.LatestObservation
 		b.WriteString("\nObservation\n")
@@ -1130,6 +1177,38 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func renderServerHealth(health servercore.Health) string {
+	var b strings.Builder
+	b.WriteString("Scriba health\n")
+	writeHealthRows(&b, health)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func writeHealthRows(b *strings.Builder, health servercore.Health) {
+	rows := []string{
+		fmt.Sprintf("%-13s %s", "status", health.Status),
+		fmt.Sprintf("%-13s %s", "version", health.Version),
+		fmt.Sprintf("%-13s %s", "poll", health.PollInterval.String()),
+	}
+	if health.LastSuccessAt != nil {
+		rows = append(rows, fmt.Sprintf("%-13s %s", "last ok", formatCLIStatsTime(*health.LastSuccessAt)))
+	}
+	if health.LastFailureAt != nil {
+		rows = append(rows, fmt.Sprintf("%-13s %s", "last fail", formatCLIStatsTime(*health.LastFailureAt)))
+	}
+	if health.NextPollEstimateAt != nil {
+		rows = append(rows, fmt.Sprintf("%-13s %s", "next", formatCLIStatsTime(*health.NextPollEstimateAt)))
+	}
+	rows = append(rows, fmt.Sprintf("%-13s %d", "failures", health.ConsecutiveFailures))
+	if health.FailureKind != "" {
+		rows = append(rows, fmt.Sprintf("%-13s %s", "kind", health.FailureKind))
+	}
+	if health.LastError != "" {
+		rows = append(rows, fmt.Sprintf("%-13s %s", "error", truncateCLI(health.LastError, 160)))
+	}
+	writeRows(b, rows)
+}
+
 func writeDeliveryRows(b *strings.Builder, counts map[string]store.DeliveryCounts) {
 	rows := make([]string, 0, 3)
 	for _, status := range []string{"pending", "failed", "delivered"} {
@@ -1158,6 +1237,16 @@ func formatCLIBytes(value int64) string {
 		return "0 B"
 	}
 	return humanize.Bytes(uint64(value))
+}
+
+func truncateCLI(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
 }
 
 func runBench(opts options) error {
@@ -1228,7 +1317,7 @@ func commands() map[string][]string {
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
 		"telegram": {"alerts", "reset"},
-		"server":   {"run", "status", "stats", "refresh", "radar", "prune"},
+		"server":   {"run", "status", "health", "stats", "refresh", "radar", "prune"},
 	}
 }
 
@@ -1243,7 +1332,7 @@ Commands:
   scriba config path|show|init|telegram
   scriba cache status|reset|prune|vacuum
   scriba telegram alerts|reset
-  scriba server run|status|stats|refresh|radar|prune
+  scriba server run|status|health|stats|refresh|radar|prune
   scriba bench ccusage
 `
 }

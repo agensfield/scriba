@@ -104,6 +104,7 @@ func TestRenderStatsShowsStorageFreshnessAndDeliveries(t *testing.T) {
 	}, "prod", true)
 	for _, want := range []string{
 		"<b>Scriba stats</b>",
+		"<b>Health</b>",
 		"poll",
 		"5m0s",
 		"<b>Observation</b>",
@@ -211,7 +212,26 @@ func (f *fakeController) LatestObservation(context.Context) (resetwatch.Observat
 }
 
 func (f *fakeController) Stats(context.Context) (server.Stats, error) {
-	return server.Stats{PollInterval: f.interval, ObservationRetentionDays: 120, Store: storeStatsFixture()}, nil
+	return server.Stats{PollInterval: f.interval, ObservationRetentionDays: 120, Store: storeStatsFixture(), Health: healthFixture(), Version: "0.1.0-alpha.1", Commit: "test"}, nil
+}
+
+func (f *fakeController) Health(context.Context) (server.Health, error) {
+	return healthFixture(), nil
+}
+
+func healthFixture() server.Health {
+	lastOK := parseTime("2026-06-01T00:00:00Z")
+	next := parseTime("2026-06-01T00:05:00Z")
+	return server.Health{
+		Status:              server.HealthOK,
+		Version:             "0.1.0-alpha.1",
+		Commit:              "test",
+		PollInterval:        5 * time.Minute,
+		LastSuccessAt:       &lastOK,
+		NextPollEstimateAt:  &next,
+		StaleAfter:          10 * time.Minute,
+		ConsecutiveFailures: 0,
+	}
 }
 
 func storeStatsFixture() store.Stats {
