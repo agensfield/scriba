@@ -127,11 +127,17 @@ func (c Client) RenderText(current Current) string {
 		}
 		if last.WindowHuman != "" {
 			b.WriteString(" · duration ")
-			b.WriteString(last.WindowHuman)
+			b.WriteString(durationText(last))
 		}
 		if last.Scope != "" {
 			b.WriteString(" · ")
-			b.WriteString(last.Scope)
+			b.WriteString(scopeText(last.Scope))
+		}
+		for _, source := range last.Sources {
+			if source.URL != "" {
+				b.WriteString("\nsource: ")
+				b.WriteString(source.URL)
+			}
 		}
 	}
 	if current.Prediction != nil && current.Prediction.Level != "" {
@@ -142,4 +148,32 @@ func (c Client) RenderText(current Current) string {
 		}
 	}
 	return b.String()
+}
+
+func durationText(window *Window) string {
+	if window == nil {
+		return ""
+	}
+	if window.WindowMinutes <= 0 {
+		return window.WindowHuman
+	}
+	d := time.Duration(window.WindowMinutes) * time.Minute
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	if hours > 0 && minutes > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dm", minutes)
+}
+
+func scopeText(scope string) string {
+	switch strings.TrimSpace(scope) {
+	case "所有付费计划":
+		return "all paid plans"
+	default:
+		return scope
+	}
 }

@@ -30,6 +30,7 @@ type Store interface {
 	ApplyDecision(context.Context, resetwatch.Observation, resetwatch.Decision) (int, error)
 	GetSetting(context.Context, string) (string, bool, error)
 	SetSetting(context.Context, string, string) error
+	LoadLastResetEvent(context.Context) (resetwatch.Event, bool, error)
 }
 
 type Fetcher interface {
@@ -153,6 +154,10 @@ func (s *Server) SetPollInterval(ctx context.Context, interval time.Duration) er
 		return errors.New("poll interval must be positive")
 	}
 	return s.store.SetSetting(ctx, SettingPollInterval, interval.String())
+}
+
+func (s *Server) LastResetEvent(ctx context.Context) (resetwatch.Event, bool, error) {
+	return s.store.LoadLastResetEvent(ctx)
 }
 
 func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {

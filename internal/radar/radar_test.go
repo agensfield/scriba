@@ -48,7 +48,7 @@ func TestFetchAndRenderCurrentRadar(t *testing.T) {
 		t.Fatalf("unexpected current: %#v", current)
 	}
 	text := client.RenderText(current)
-	for _, want := range []string{"no active reset window", "last reset:", "20 hours ago", "duration 9小时25分", "prediction: low"} {
+	for _, want := range []string{"no active reset window", "last reset:", "20 hours ago", "duration 9h 25m", "all paid plans", "prediction: low"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("render missing %q in:\n%s", want, text)
 		}

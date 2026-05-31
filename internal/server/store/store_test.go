@@ -105,18 +105,29 @@ func TestDeliveriesSettingsAndTelegramOffset(t *testing.T) {
 		t.Fatalf("delivery id changed: %s != %s", again.ID, delivery.ID)
 	}
 
-	if err := store.MarkDeliveryAttempt(ctx, event.ID, "telegram:123", false, "telegram down"); err != nil {
+	if err := store.MarkDeliveryAttempt(ctx, event.ID, "telegram:123", false, "telegram down", ""); err != nil {
 		t.Fatalf("mark failed: %v", err)
+	}
+	delivery, ok, err := store.LoadDelivery(ctx, event.ID, "telegram:123")
+	if err != nil {
+		t.Fatalf("load failed delivery: %v", err)
+	}
+	if !ok || delivery.Attempts != 1 || delivery.LastError != "telegram down" || delivery.NextAttemptAt == nil {
+		t.Fatalf("unexpected failed delivery: %#v", delivery)
 	}
 	pending, err := store.PendingDeliveries(ctx, "telegram:123", 10)
 	if err != nil {
 		t.Fatalf("pending: %v", err)
 	}
-	if len(pending) != 1 || pending[0].Attempts != 1 || pending[0].LastError != "telegram down" {
-		t.Fatalf("unexpected pending deliveries: %#v", pending)
+	if len(pending) != 0 {
+		t.Fatalf("expected failed delivery to wait for backoff: %#v", pending)
 	}
-	if err := store.MarkDeliveryAttempt(ctx, event.ID, "telegram:123", true, ""); err != nil {
+	if err := store.MarkDeliveryAttempt(ctx, event.ID, "telegram:123", true, "", "42"); err != nil {
 		t.Fatalf("mark delivered: %v", err)
+	}
+	delivered, ok, err := store.LoadDelivery(ctx, event.ID, "telegram:123")
+	if err != nil || !ok || delivered.ProviderMessageID != "42" {
+		t.Fatalf("unexpected delivered row: %#v ok=%v err=%v", delivered, ok, err)
 	}
 	pending, err = store.PendingDeliveries(ctx, "telegram:123", 10)
 	if err != nil {

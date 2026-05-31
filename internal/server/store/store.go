@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type Store struct {
 	db   *sql.DB
@@ -24,16 +24,18 @@ type Store struct {
 }
 
 type Delivery struct {
-	ID            string
-	EventID       string
-	Target        string
-	Status        string
-	Attempts      int
-	LastAttemptAt *time.Time
-	DeliveredAt   *time.Time
-	LastError     string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID                string
+	EventID           string
+	Target            string
+	Status            string
+	Attempts          int
+	LastAttemptAt     *time.Time
+	NextAttemptAt     *time.Time
+	DeliveredAt       *time.Time
+	ProviderMessageID string
+	LastError         string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 func Open(path string) (*Store, error) {
@@ -75,11 +77,56 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := s.migrateNotificationDeliveries(ctx); err != nil {
+		return err
+	}
 	_, err = s.db.ExecContext(ctx, `
 insert into schema_migrations (version, applied_at)
 values (?, ?)
 on conflict(version) do nothing`, SchemaVersion, formatTime(time.Now()))
 	return err
+}
+
+func (s *Store) migrateNotificationDeliveries(ctx context.Context) error {
+	columns, err := s.tableColumns(ctx, "notification_deliveries")
+	if err != nil {
+		return err
+	}
+	for _, migration := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "next_attempt_at", sql: `alter table notification_deliveries add column next_attempt_at text`},
+		{name: "provider_message_id", sql: `alter table notification_deliveries add column provider_message_id text`},
+	} {
+		if !columns[migration.name] {
+			if _, err := s.db.ExecContext(ctx, migration.sql); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `pragma table_info(`+table+`)`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return nil, err
+		}
+		columns[name] = true
+	}
+	return columns, rows.Err()
 }
 
 func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
@@ -186,6 +233,18 @@ where id = ?`, id).Scan(
 	return event, true, nil
 }
 
+func (s *Store) LoadLastResetEvent(ctx context.Context) (resetwatch.Event, bool, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `select id from reset_events order by detected_at desc limit 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return resetwatch.Event{}, false, nil
+	}
+	if err != nil {
+		return resetwatch.Event{}, false, err
+	}
+	return s.LoadResetEvent(ctx, id)
+}
+
 func (s *Store) EnsureDelivery(ctx context.Context, eventID, target string) (Delivery, error) {
 	now := formatTime(time.Now())
 	id := DeliveryID(eventID, target)
@@ -208,7 +267,7 @@ on conflict(event_id, target) do nothing`, id, eventID, target, now, now)
 
 func (s *Store) LoadDelivery(ctx context.Context, eventID, target string) (Delivery, bool, error) {
 	return scanDelivery(s.db.QueryRowContext(ctx, `
-select id, event_id, target, status, attempts, last_attempt_at, delivered_at, last_error, created_at, updated_at
+select id, event_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
 from notification_deliveries
 where event_id = ? and target = ?`, eventID, target))
 }
@@ -218,11 +277,11 @@ func (s *Store) PendingDeliveries(ctx context.Context, target string, limit int)
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx, `
-select id, event_id, target, status, attempts, last_attempt_at, delivered_at, last_error, created_at, updated_at
+select id, event_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
 from notification_deliveries
-where target = ? and status != 'delivered'
-order by created_at
-limit ?`, target, limit)
+where target = ? and status != 'delivered' and (next_attempt_at is null or next_attempt_at = '' or next_attempt_at <= ?)
+order by coalesce(next_attempt_at, created_at), created_at
+limit ?`, target, formatTime(time.Now()), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -238,20 +297,26 @@ limit ?`, target, limit)
 	return deliveries, rows.Err()
 }
 
-func (s *Store) MarkDeliveryAttempt(ctx context.Context, eventID, target string, delivered bool, message string) error {
+func (s *Store) MarkDeliveryAttempt(ctx context.Context, eventID, target string, delivered bool, message string, providerMessageID string) error {
 	now := formatTime(time.Now())
 	status := "failed"
 	var deliveredAt any
+	var nextAttemptAt any
 	var lastError any = message
 	if delivered {
 		status = "delivered"
 		deliveredAt = now
+		nextAttemptAt = nil
 		lastError = nil
+	} else {
+		var attempts int
+		_ = s.db.QueryRowContext(ctx, `select attempts from notification_deliveries where event_id = ? and target = ?`, eventID, target).Scan(&attempts)
+		nextAttemptAt = formatTime(time.Now().Add(deliveryBackoff(attempts + 1)))
 	}
 	_, err := s.db.ExecContext(ctx, `
 update notification_deliveries
-set status = ?, attempts = attempts + 1, last_attempt_at = ?, delivered_at = coalesce(?, delivered_at), last_error = ?, updated_at = ?
-where event_id = ? and target = ?`, status, now, deliveredAt, lastError, now, eventID, target)
+set status = ?, attempts = attempts + 1, last_attempt_at = ?, next_attempt_at = ?, delivered_at = coalesce(?, delivered_at), provider_message_id = coalesce(nullif(?, ''), provider_message_id), last_error = ?, updated_at = ?
+where event_id = ? and target = ?`, status, now, nextAttemptAt, deliveredAt, providerMessageID, lastError, now, eventID, target)
 	return err
 }
 
@@ -322,23 +387,42 @@ func scanDeliveryRows(rows *sql.Rows) (Delivery, error) {
 
 func scanDeliveryValues(row rowScanner) (Delivery, error) {
 	var delivery Delivery
-	var lastAttempt, delivered, created, updated sql.NullString
+	var lastAttempt, nextAttempt, delivered, providerMessageID, created, updated sql.NullString
 	var lastError sql.NullString
 	err := row.Scan(
 		&delivery.ID, &delivery.EventID, &delivery.Target, &delivery.Status, &delivery.Attempts,
-		&lastAttempt, &delivered, &lastError, &created, &updated,
+		&lastAttempt, &nextAttempt, &delivered, &providerMessageID, &lastError, &created, &updated,
 	)
 	if err != nil {
 		return delivery, err
 	}
 	delivery.LastAttemptAt = parseNullableTime(lastAttempt)
+	delivery.NextAttemptAt = parseNullableTime(nextAttempt)
 	delivery.DeliveredAt = parseNullableTime(delivered)
+	if providerMessageID.Valid {
+		delivery.ProviderMessageID = providerMessageID.String
+	}
 	if lastError.Valid {
 		delivery.LastError = lastError.String
 	}
 	delivery.CreatedAt = parseDBTime(created.String)
 	delivery.UpdatedAt = parseDBTime(updated.String)
 	return delivery, nil
+}
+
+func deliveryBackoff(attempts int) time.Duration {
+	switch {
+	case attempts <= 1:
+		return 30 * time.Second
+	case attempts == 2:
+		return 2 * time.Minute
+	case attempts == 3:
+		return 5 * time.Minute
+	case attempts == 4:
+		return 15 * time.Minute
+	default:
+		return time.Hour
+	}
 }
 
 func upsertAccount(ctx context.Context, tx *sql.Tx, obs resetwatch.Observation) error {

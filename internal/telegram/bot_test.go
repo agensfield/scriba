@@ -81,6 +81,10 @@ func (f *fakeController) SetPollInterval(_ context.Context, interval time.Durati
 	return nil
 }
 
+func (f *fakeController) LastResetEvent(context.Context) (resetwatch.Event, bool, error) {
+	return resetwatch.Event{}, false, nil
+}
+
 func snapshot(resetAt string, used float64) []byte {
 	limit := 100.0
 	return resetwatch.SnapshotJSON(remote.ProbeResult{Lines: []model.MetricLine{
