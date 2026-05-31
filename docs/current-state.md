@@ -23,6 +23,20 @@ Claude Code and Codex usage tracker.
 - Packaging supports host-arch and universal app/helper builds. Debug builds use
   a separate bundle identifier from release builds.
 
+## Current Shipping Lane
+
+The next shippable lane is the devbox server and Telegram bot:
+
+- `scriba server run` as one resident process.
+- Live Codex backend limit polling from local Codex auth.
+- SQLite server state.
+- Weekly reset detection from `resetsAt` timestamp advances.
+- Telegram long polling, commands, and reset notifications.
+
+Canonical spec:
+
+- `/Users/arda/Documents/obsidian/obsidian-main/projects/agensfield/scriba/server-telegram-spec.md`
+
 ## Invariants
 
 - Claude/Codex logs and provider APIs remain source of truth.
