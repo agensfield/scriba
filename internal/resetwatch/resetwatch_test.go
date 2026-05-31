@@ -123,6 +123,36 @@ func TestFromMetricLinesKeepsProgressWindows(t *testing.T) {
 	}
 }
 
+func TestWarningCandidatesUseMostSevereCheckpointPerWindow(t *testing.T) {
+	obs := observation("2026-05-31T12:00:00Z", "2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")
+	weeklyUsed := 82.0
+	fiveUsed := 96.0
+	obs.Windows[0].UsedPercent = &weeklyUsed
+	obs.Windows[1].UsedPercent = &fiveUsed
+	warnings := WarningCandidates(obs)
+	if len(warnings) != 2 {
+		t.Fatalf("expected two warnings, got %d", len(warnings))
+	}
+	if warnings[0].Label != LabelWeeklyLimit || warnings[0].ThresholdRemaining != 20 || warnings[0].RemainingPercent != 18 {
+		t.Fatalf("unexpected weekly warning: %#v", warnings[0])
+	}
+	if warnings[1].Label != LabelFiveHour || warnings[1].ThresholdRemaining != 5 || warnings[1].RemainingPercent != 4 {
+		t.Fatalf("unexpected 5h warning: %#v", warnings[1])
+	}
+}
+
+func TestWarningCandidatesSkipComfortableUsage(t *testing.T) {
+	obs := observation("2026-05-31T12:00:00Z", "2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")
+	weeklyUsed := 50.0
+	fiveUsed := 79.0
+	obs.Windows[0].UsedPercent = &weeklyUsed
+	obs.Windows[1].UsedPercent = &fiveUsed
+	warnings := WarningCandidates(obs)
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings, got %#v", warnings)
+	}
+}
+
 func TestCatalogJokeChooserIsDeterministicAndToneAware(t *testing.T) {
 	event := Event{ID: "reset_test"}
 	chooser := CatalogJokeChooser{

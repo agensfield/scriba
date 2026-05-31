@@ -1014,12 +1014,25 @@ func serverRefreshPayload(result servercore.PollResult) map[string]any {
 			"jokeId":          event.JokeID,
 		})
 	}
+	warnings := make([]map[string]any, 0, len(result.Warnings))
+	for _, warning := range result.Warnings {
+		warnings = append(warnings, map[string]any{
+			"id":                 warning.ID,
+			"label":              warning.Label,
+			"thresholdRemaining": warning.ThresholdRemaining,
+			"usedPercent":        warning.UsedPercent,
+			"remainingPercent":   warning.RemainingPercent,
+			"resetAt":            warning.ResetAt,
+			"detectedAt":         warning.DetectedAt,
+		})
+	}
 	return map[string]any{
 		"baseline": result.Baseline,
 		"inserted": result.Inserted,
 		"account":  result.Observation.Account,
 		"windows":  result.Observation.Windows,
 		"events":   events,
+		"warnings": warnings,
 	}
 }
 

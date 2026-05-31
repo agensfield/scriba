@@ -78,6 +78,33 @@ func TestPollIntervalSetting(t *testing.T) {
 	}
 }
 
+func TestRefreshEmitsLimitWarningsOncePerCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	fetcher := &fakeFetcher{results: []remote.ProbeResult{
+		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
+		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
+	}}
+	notifier := &fakeNotifier{}
+	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal"})
+	first, err := srv.RefreshNow(ctx)
+	if err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	if len(first.Warnings) != 1 || first.Warnings[0].Label != resetwatch.LabelFiveHour || first.Warnings[0].ThresholdRemaining != 5 {
+		t.Fatalf("unexpected first warnings: %#v", first.Warnings)
+	}
+	if len(notifier.warnings) != 1 {
+		t.Fatalf("expected warning notification, got %d", len(notifier.warnings))
+	}
+	second, err := srv.RefreshNow(ctx)
+	if err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if len(second.Warnings) != 0 || len(notifier.warnings) != 1 {
+		t.Fatalf("expected deduped warning, result=%#v notifications=%d", second.Warnings, len(notifier.warnings))
+	}
+}
+
 func TestRefreshNowIsSingleFlight(t *testing.T) {
 	ctx := context.Background()
 	release := make(chan struct{})
@@ -136,6 +163,7 @@ func (f fakeFetcherFunc) FetchLimits(ctx context.Context) (remote.ProbeResult, e
 type fakeNotifier struct {
 	baselines []BaselineNotice
 	resets    []resetwatch.Event
+	warnings  []resetwatch.WarningEvent
 }
 
 func (n *fakeNotifier) NotifyBaseline(_ context.Context, notice BaselineNotice) error {
@@ -145,6 +173,11 @@ func (n *fakeNotifier) NotifyBaseline(_ context.Context, notice BaselineNotice) 
 
 func (n *fakeNotifier) NotifyReset(_ context.Context, event resetwatch.Event) error {
 	n.resets = append(n.resets, event)
+	return nil
+}
+
+func (n *fakeNotifier) NotifyLimitWarning(_ context.Context, warning resetwatch.WarningEvent) error {
+	n.warnings = append(n.warnings, warning)
 	return nil
 }
 

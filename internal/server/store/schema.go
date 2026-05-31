@@ -84,6 +84,41 @@ create table if not exists notification_deliveries (
   foreign key (event_id) references reset_events(id)
 );
 
+create table if not exists limit_warning_events (
+  id text primary key,
+  provider_id text not null,
+  account_ref text not null,
+  account_label text not null,
+  account_email text not null,
+  account_plan text not null,
+  label text not null,
+  threshold_remaining integer not null,
+  used_percent real not null,
+  remaining_percent real not null,
+  reset_at text not null,
+  snapshot_json text not null,
+  detected_at text not null,
+  created_at text not null,
+  foreign key (account_ref) references accounts(account_ref)
+);
+
+create table if not exists limit_warning_deliveries (
+  id text primary key,
+  warning_id text not null,
+  target text not null,
+  status text not null,
+  attempts integer not null default 0,
+  last_attempt_at text,
+  next_attempt_at text,
+  delivered_at text,
+  provider_message_id text,
+  last_error text,
+  created_at text not null,
+  updated_at text not null,
+  unique (warning_id, target),
+  foreign key (warning_id) references limit_warning_events(id)
+);
+
 create table if not exists server_settings (
   key text primary key,
   value text not null,
@@ -104,4 +139,10 @@ create index if not exists idx_reset_events_account_detected
 
 create index if not exists idx_notification_deliveries_status
   on notification_deliveries(status, created_at);
+
+create index if not exists idx_limit_warning_events_account_detected
+  on limit_warning_events(account_ref, detected_at);
+
+create index if not exists idx_limit_warning_deliveries_status
+  on limit_warning_deliveries(status, created_at);
 `

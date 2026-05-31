@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 type Store struct {
 	db   *sql.DB
@@ -211,6 +211,65 @@ func (s *Store) InsertResetEvents(ctx context.Context, events []resetwatch.Event
 	return inserted, nil
 }
 
+func (s *Store) InsertWarningEvents(ctx context.Context, warnings []resetwatch.WarningEvent) ([]resetwatch.WarningEvent, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	inserted := make([]resetwatch.WarningEvent, 0, len(warnings))
+	for _, warning := range warnings {
+		if err := upsertWarningAccount(ctx, tx, warning); err != nil {
+			return nil, err
+		}
+		result, err := tx.ExecContext(ctx, `
+insert into limit_warning_events (
+  id, provider_id, account_ref, account_label, account_email, account_plan,
+  label, threshold_remaining, used_percent, remaining_percent, reset_at,
+  snapshot_json, detected_at, created_at
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(id) do nothing`,
+			warning.ID, providerID(warning.ProviderID), warning.Account.Ref, warning.Account.Label, warning.Account.Email, warning.Account.Plan,
+			warning.Label, warning.ThresholdRemaining, warning.UsedPercent, warning.RemainingPercent, formatTime(warning.ResetAt),
+			string(warning.SnapshotJSON), formatTime(warning.DetectedAt), formatTime(time.Now()))
+		if err != nil {
+			return nil, err
+		}
+		if affected, _ := result.RowsAffected(); affected > 0 {
+			inserted = append(inserted, warning)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return inserted, nil
+}
+
+func (s *Store) LoadWarningEvent(ctx context.Context, id string) (resetwatch.WarningEvent, bool, error) {
+	var warning resetwatch.WarningEvent
+	var resetAt, snapshot, detected string
+	err := s.db.QueryRowContext(ctx, `
+select id, provider_id, account_ref, account_label, account_email, account_plan,
+  label, threshold_remaining, used_percent, remaining_percent, reset_at,
+  snapshot_json, detected_at
+from limit_warning_events
+where id = ?`, id).Scan(
+		&warning.ID, &warning.ProviderID, &warning.Account.Ref, &warning.Account.Label, &warning.Account.Email, &warning.Account.Plan,
+		&warning.Label, &warning.ThresholdRemaining, &warning.UsedPercent, &warning.RemainingPercent, &resetAt,
+		&snapshot, &detected,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return warning, false, nil
+	}
+	if err != nil {
+		return warning, false, err
+	}
+	warning.ResetAt = parseDBTime(resetAt)
+	warning.SnapshotJSON = []byte(snapshot)
+	warning.DetectedAt = parseDBTime(detected)
+	return warning, true, nil
+}
+
 func (s *Store) LoadResetEvent(ctx context.Context, id string) (resetwatch.Event, bool, error) {
 	var event resetwatch.Event
 	var secondaryJSON, prev, current, detected, prevSnapshot, currentSnapshot string
@@ -376,11 +435,38 @@ on conflict(event_id, target) do nothing`, id, eventID, target, now, now)
 	return delivery, nil
 }
 
+func (s *Store) EnsureWarningDelivery(ctx context.Context, warningID, target string) (Delivery, error) {
+	now := formatTime(time.Now())
+	id := WarningDeliveryID(warningID, target)
+	_, err := s.db.ExecContext(ctx, `
+insert into limit_warning_deliveries (id, warning_id, target, status, attempts, created_at, updated_at)
+values (?, ?, ?, 'pending', 0, ?, ?)
+on conflict(warning_id, target) do nothing`, id, warningID, target, now, now)
+	if err != nil {
+		return Delivery{}, err
+	}
+	delivery, ok, err := s.LoadWarningDelivery(ctx, warningID, target)
+	if err != nil {
+		return Delivery{}, err
+	}
+	if !ok {
+		return Delivery{}, errors.New("warning delivery not found after insert")
+	}
+	return delivery, nil
+}
+
 func (s *Store) LoadDelivery(ctx context.Context, eventID, target string) (Delivery, bool, error) {
 	return scanDelivery(s.db.QueryRowContext(ctx, `
 select id, event_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
 from notification_deliveries
 where event_id = ? and target = ?`, eventID, target))
+}
+
+func (s *Store) LoadWarningDelivery(ctx context.Context, warningID, target string) (Delivery, bool, error) {
+	return scanDelivery(s.db.QueryRowContext(ctx, `
+select id, warning_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
+from limit_warning_deliveries
+where warning_id = ? and target = ?`, warningID, target))
 }
 
 func (s *Store) PendingDeliveries(ctx context.Context, target string, limit int) ([]Delivery, error) {
@@ -390,6 +476,31 @@ func (s *Store) PendingDeliveries(ctx context.Context, target string, limit int)
 	rows, err := s.db.QueryContext(ctx, `
 select id, event_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
 from notification_deliveries
+where target = ? and status != 'delivered' and (next_attempt_at is null or next_attempt_at = '' or next_attempt_at <= ?)
+order by coalesce(next_attempt_at, created_at), created_at
+limit ?`, target, formatTime(time.Now()), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var deliveries []Delivery
+	for rows.Next() {
+		delivery, err := scanDeliveryRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, rows.Err()
+}
+
+func (s *Store) PendingWarningDeliveries(ctx context.Context, target string, limit int) ([]Delivery, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+select id, warning_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
+from limit_warning_deliveries
 where target = ? and status != 'delivered' and (next_attempt_at is null or next_attempt_at = '' or next_attempt_at <= ?)
 order by coalesce(next_attempt_at, created_at), created_at
 limit ?`, target, formatTime(time.Now()), limit)
@@ -428,6 +539,29 @@ func (s *Store) MarkDeliveryAttempt(ctx context.Context, eventID, target string,
 update notification_deliveries
 set status = ?, attempts = attempts + 1, last_attempt_at = ?, next_attempt_at = ?, delivered_at = coalesce(?, delivered_at), provider_message_id = coalesce(nullif(?, ''), provider_message_id), last_error = ?, updated_at = ?
 where event_id = ? and target = ?`, status, now, nextAttemptAt, deliveredAt, providerMessageID, lastError, now, eventID, target)
+	return err
+}
+
+func (s *Store) MarkWarningDeliveryAttempt(ctx context.Context, warningID, target string, delivered bool, message string, providerMessageID string) error {
+	now := formatTime(time.Now())
+	status := "failed"
+	var deliveredAt any
+	var nextAttemptAt any
+	var lastError any = message
+	if delivered {
+		status = "delivered"
+		deliveredAt = now
+		nextAttemptAt = nil
+		lastError = nil
+	} else {
+		var attempts int
+		_ = s.db.QueryRowContext(ctx, `select attempts from limit_warning_deliveries where warning_id = ? and target = ?`, warningID, target).Scan(&attempts)
+		nextAttemptAt = formatTime(time.Now().Add(deliveryBackoff(attempts + 1)))
+	}
+	_, err := s.db.ExecContext(ctx, `
+update limit_warning_deliveries
+set status = ?, attempts = attempts + 1, last_attempt_at = ?, next_attempt_at = ?, delivered_at = coalesce(?, delivered_at), provider_message_id = coalesce(nullif(?, ''), provider_message_id), last_error = ?, updated_at = ?
+where warning_id = ? and target = ?`, status, now, nextAttemptAt, deliveredAt, providerMessageID, lastError, now, warningID, target)
 	return err
 }
 
@@ -478,6 +612,11 @@ func ObservationID(obs resetwatch.Observation) string {
 func DeliveryID(eventID, target string) string {
 	sum := sha256.Sum256([]byte(eventID + "\x00" + target))
 	return "delivery_" + hex.EncodeToString(sum[:16])
+}
+
+func WarningDeliveryID(warningID, target string) string {
+	sum := sha256.Sum256([]byte(warningID + "\x00" + target))
+	return "warning_delivery_" + hex.EncodeToString(sum[:16])
 }
 
 type rowScanner interface {
@@ -638,6 +777,20 @@ on conflict(account_ref) do update set
   plan = excluded.plan,
   updated_at = excluded.updated_at`,
 		event.Account.Ref, providerID(event.ProviderID), event.Account.Label, event.Account.Email, event.Account.Plan, formatTime(time.Now()))
+	return err
+}
+
+func upsertWarningAccount(ctx context.Context, tx *sql.Tx, warning resetwatch.WarningEvent) error {
+	_, err := tx.ExecContext(ctx, `
+insert into accounts (account_ref, provider_id, label, email, plan, updated_at)
+values (?, ?, ?, ?, ?, ?)
+on conflict(account_ref) do update set
+  provider_id = excluded.provider_id,
+  label = excluded.label,
+  email = excluded.email,
+  plan = excluded.plan,
+  updated_at = excluded.updated_at`,
+		warning.Account.Ref, providerID(warning.ProviderID), warning.Account.Label, warning.Account.Email, warning.Account.Plan, formatTime(time.Now()))
 	return err
 }
 

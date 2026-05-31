@@ -167,6 +167,62 @@ func TestDeliveriesSettingsAndTelegramOffset(t *testing.T) {
 	}
 }
 
+func TestWarningEventsAndDeliveriesDedupe(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	warning := resetwatch.WarningEvent{
+		ID:                 resetwatch.WarningEventID("codex", "acct", resetwatch.LabelFiveHour, parseTime("2026-05-31T17:00:00Z"), 5),
+		ProviderID:         "codex",
+		Account:            resetwatch.Account{Ref: "acct", Label: "personal", Email: "arda@example.com", Plan: "Plus"},
+		Label:              resetwatch.LabelFiveHour,
+		ThresholdRemaining: 5,
+		UsedPercent:        96,
+		RemainingPercent:   4,
+		ResetAt:            parseTime("2026-05-31T17:00:00Z"),
+		SnapshotJSON:       []byte(`{"snapshot":true}`),
+		DetectedAt:         parseTime("2026-05-31T12:00:00Z"),
+	}
+	inserted, err := store.InsertWarningEvents(ctx, []resetwatch.WarningEvent{warning})
+	if err != nil {
+		t.Fatalf("insert warning: %v", err)
+	}
+	if len(inserted) != 1 {
+		t.Fatalf("expected inserted warning, got %#v", inserted)
+	}
+	inserted, err = store.InsertWarningEvents(ctx, []resetwatch.WarningEvent{warning})
+	if err != nil {
+		t.Fatalf("reinsert warning: %v", err)
+	}
+	if len(inserted) != 0 {
+		t.Fatalf("expected warning dedupe, got %#v", inserted)
+	}
+	loaded, ok, err := store.LoadWarningEvent(ctx, warning.ID)
+	if err != nil || !ok || loaded.ThresholdRemaining != 5 {
+		t.Fatalf("unexpected loaded warning: %#v ok=%v err=%v", loaded, ok, err)
+	}
+	delivery, err := store.EnsureWarningDelivery(ctx, warning.ID, "telegram:123")
+	if err != nil {
+		t.Fatalf("ensure warning delivery: %v", err)
+	}
+	if delivery.Status != "pending" || delivery.EventID != warning.ID {
+		t.Fatalf("unexpected warning delivery: %#v", delivery)
+	}
+	if err := store.MarkWarningDeliveryAttempt(ctx, warning.ID, "telegram:123", true, "", "99"); err != nil {
+		t.Fatalf("mark warning delivered: %v", err)
+	}
+	delivered, ok, err := store.LoadWarningDelivery(ctx, warning.ID, "telegram:123")
+	if err != nil || !ok || delivered.ProviderMessageID != "99" {
+		t.Fatalf("unexpected warning delivered row: %#v ok=%v err=%v", delivered, ok, err)
+	}
+	pending, err := store.PendingWarningDeliveries(ctx, "telegram:123", 10)
+	if err != nil {
+		t.Fatalf("pending warning deliveries: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending warnings, got %#v", pending)
+	}
+}
+
 func TestPruneObservationsKeepsEventsAndDeliveries(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)

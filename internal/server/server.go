@@ -34,6 +34,7 @@ type Store interface {
 	LoadLastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
 	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
+	InsertWarningEvents(context.Context, []resetwatch.WarningEvent) ([]resetwatch.WarningEvent, error)
 }
 
 type Fetcher interface {
@@ -43,6 +44,7 @@ type Fetcher interface {
 type Notifier interface {
 	NotifyBaseline(context.Context, BaselineNotice) error
 	NotifyReset(context.Context, resetwatch.Event) error
+	NotifyLimitWarning(context.Context, resetwatch.WarningEvent) error
 }
 
 type Config struct {
@@ -74,6 +76,7 @@ type PollResult struct {
 	Observation resetwatch.Observation
 	Decision    resetwatch.Decision
 	Inserted    int
+	Warnings    []resetwatch.WarningEvent
 	Baseline    bool
 }
 
@@ -206,6 +209,10 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 	if err := s.pruneIfDue(ctx); err != nil {
 		s.logger.Warn("scriba observation prune failed", "error", err)
 	}
+	warnings, err := s.store.InsertWarningEvents(ctx, resetwatch.WarningCandidates(obs))
+	if err != nil {
+		return PollResult{}, err
+	}
 	if inserted > 0 {
 		for _, event := range decision.Events {
 			if err := s.notifier.NotifyReset(ctx, event); err != nil {
@@ -213,7 +220,12 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 			}
 		}
 	}
-	return PollResult{Observation: obs, Decision: decision, Inserted: inserted, Baseline: baseline}, nil
+	for _, warning := range warnings {
+		if err := s.notifier.NotifyLimitWarning(ctx, warning); err != nil {
+			s.logger.Warn("scriba limit warning notification failed", "warning_id", warning.ID, "error", err)
+		}
+	}
+	return PollResult{Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, Baseline: baseline}, nil
 }
 
 func (s *Server) PruneObservations(ctx context.Context, compact bool) (store.PruneResult, error) {
@@ -293,6 +305,10 @@ func (NoopNotifier) NotifyBaseline(context.Context, BaselineNotice) error {
 }
 
 func (NoopNotifier) NotifyReset(context.Context, resetwatch.Event) error {
+	return nil
+}
+
+func (NoopNotifier) NotifyLimitWarning(context.Context, resetwatch.WarningEvent) error {
 	return nil
 }
 

@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -68,6 +70,19 @@ type Event struct {
 	CurrentSnapshotJSON    []byte
 	JokeID                 string
 	DetectedAt             time.Time
+}
+
+type WarningEvent struct {
+	ID                 string
+	ProviderID         string
+	Account            Account
+	Label              string
+	ThresholdRemaining int
+	UsedPercent        float64
+	RemainingPercent   float64
+	ResetAt            time.Time
+	SnapshotJSON       []byte
+	DetectedAt         time.Time
 }
 
 type Decision struct {
@@ -181,6 +196,77 @@ func EventID(providerID, accountRef, label string, resetAt time.Time) string {
 		resetAt.UTC().Format(time.RFC3339Nano),
 	}, "\x00")))
 	return "reset_" + hex.EncodeToString(sum[:16])
+}
+
+func WarningEventID(providerID, accountRef, label string, resetAt time.Time, thresholdRemaining int) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		providerID,
+		accountRef,
+		label,
+		resetAt.UTC().Format(time.RFC3339Nano),
+		fmt.Sprintf("%d", thresholdRemaining),
+	}, "\x00")))
+	return "warning_" + hex.EncodeToString(sum[:16])
+}
+
+func WarningCandidates(obs Observation) []WarningEvent {
+	labels := []string{LabelWeeklyLimit, LabelFiveHour}
+	byLabel := windowsByLabel(obs.Windows)
+	var warnings []WarningEvent
+	for _, label := range labels {
+		window, ok := byLabel[label]
+		if !ok || window.UsedPercent == nil || window.ResetAt.IsZero() {
+			continue
+		}
+		used := clampPercent(*window.UsedPercent)
+		remaining := clampPercent(100 - used)
+		threshold, ok := warningThreshold(remaining)
+		if !ok {
+			continue
+		}
+		event := WarningEvent{
+			ProviderID:         providerID(obs.ProviderID),
+			Account:            obs.Account,
+			Label:              label,
+			ThresholdRemaining: threshold,
+			UsedPercent:        used,
+			RemainingPercent:   remaining,
+			ResetAt:            window.ResetAt,
+			SnapshotJSON:       cloneBytes(obs.SnapshotJSON),
+			DetectedAt:         obs.ObservedAt,
+		}
+		event.ID = WarningEventID(event.ProviderID, event.Account.Ref, event.Label, event.ResetAt, event.ThresholdRemaining)
+		warnings = append(warnings, event)
+	}
+	return warnings
+}
+
+func warningThreshold(remaining float64) (int, bool) {
+	switch {
+	case remaining <= 0:
+		return 0, true
+	case remaining <= 5:
+		return 5, true
+	case remaining <= 10:
+		return 10, true
+	case remaining <= 20:
+		return 20, true
+	default:
+		return 0, false
+	}
+}
+
+func clampPercent(value float64) float64 {
+	if math.IsNaN(value) {
+		return 0
+	}
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
 }
 
 func normalizeOptions(opts Options) Options {

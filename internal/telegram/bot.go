@@ -49,6 +49,10 @@ type DeliveryStore interface {
 	MarkDeliveryAttempt(context.Context, string, string, bool, string, string) error
 	PendingDeliveries(context.Context, string, int) ([]store.Delivery, error)
 	LoadResetEvent(context.Context, string) (resetwatch.Event, bool, error)
+	EnsureWarningDelivery(context.Context, string, string) (store.Delivery, error)
+	MarkWarningDeliveryAttempt(context.Context, string, string, bool, string, string) error
+	PendingWarningDeliveries(context.Context, string, int) ([]store.Delivery, error)
+	LoadWarningEvent(context.Context, string) (resetwatch.WarningEvent, bool, error)
 }
 
 type Service struct {
@@ -142,6 +146,28 @@ func (s *Service) NotifyReset(ctx context.Context, event resetwatch.Event) error
 		messageID = strconv.Itoa(message.ID)
 	}
 	return s.deliveries.MarkDeliveryAttempt(ctx, event.ID, target, true, "", messageID)
+}
+
+func (s *Service) NotifyLimitWarning(ctx context.Context, warning resetwatch.WarningEvent) error {
+	target := s.target()
+	if s.deliveries != nil {
+		if _, err := s.deliveries.EnsureWarningDelivery(ctx, warning.ID, target); err != nil {
+			return err
+		}
+	}
+	message, err := s.send(ctx, RenderLimitWarning(warning), nil)
+	if s.deliveries == nil {
+		return err
+	}
+	if err != nil {
+		_ = s.deliveries.MarkWarningDeliveryAttempt(ctx, warning.ID, target, false, err.Error(), "")
+		return err
+	}
+	messageID := ""
+	if message != nil {
+		messageID = strconv.Itoa(message.ID)
+	}
+	return s.deliveries.MarkWarningDeliveryAttempt(ctx, warning.ID, target, true, "", messageID)
 }
 
 func (s *Service) handleUpdate(ctx context.Context, b *tgbot.Bot, update *models.Update) {
@@ -348,6 +374,26 @@ func (s *Service) retryDeliveriesOnce(ctx context.Context) {
 		}
 		_ = s.deliveries.MarkDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
 	}
+	warningDeliveries, err := s.deliveries.PendingWarningDeliveries(ctx, target, 10)
+	if err != nil {
+		return
+	}
+	for _, delivery := range warningDeliveries {
+		warning, ok, err := s.deliveries.LoadWarningEvent(ctx, delivery.EventID)
+		if err != nil || !ok {
+			continue
+		}
+		message, err := s.send(ctx, RenderLimitWarning(warning), nil)
+		if err != nil {
+			_ = s.deliveries.MarkWarningDeliveryAttempt(ctx, delivery.EventID, target, false, err.Error(), "")
+			continue
+		}
+		messageID := ""
+		if message != nil {
+			messageID = strconv.Itoa(message.ID)
+		}
+		_ = s.deliveries.MarkWarningDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
+	}
 }
 
 func (s *Service) manualRefreshRetryAfter() time.Duration {
@@ -548,6 +594,30 @@ func RenderReset(event resetwatch.Event) string {
 	return b.String()
 }
 
+func RenderLimitWarning(warning resetwatch.WarningEvent) string {
+	var b strings.Builder
+	b.WriteString("<b>Codex limit warning</b>\n")
+	b.WriteString(renderAccount(warning.Account))
+	b.WriteString("\n\n")
+	b.WriteString("<b>")
+	b.WriteString(html.EscapeString(sectionLabel(warning.Label)))
+	b.WriteString("</b>\n")
+	b.WriteString("<pre>")
+	b.WriteString(html.EscapeString(fmt.Sprintf("%-10s %s", "left", formatPercent(warning.RemainingPercent))))
+	b.WriteString("\n")
+	b.WriteString(html.EscapeString(fmt.Sprintf("%-10s %d%%", "checkpoint", warning.ThresholdRemaining)))
+	b.WriteString("\n")
+	b.WriteString(html.EscapeString(fmt.Sprintf("%-10s %s", "used", formatPercent(warning.UsedPercent))))
+	b.WriteString("\n")
+	b.WriteString(html.EscapeString(fmt.Sprintf("%-10s %s", "reset", formatTime(warning.ResetAt))))
+	if !warning.DetectedAt.IsZero() {
+		b.WriteString("\n")
+		b.WriteString(html.EscapeString(fmt.Sprintf("%-10s %s", "seen", formatFreshTime(warning.DetectedAt))))
+	}
+	b.WriteString("</pre>")
+	return b.String()
+}
+
 func renderFreshness(t time.Time) string {
 	if t.IsZero() {
 		return "<i>observed unknown</i>"
@@ -557,6 +627,10 @@ func renderFreshness(t time.Time) string {
 
 func formatFreshTime(t time.Time) string {
 	return humanize.Time(t) + " · " + t.Local().Format("Mon 15:04:05")
+}
+
+func formatPercent(value float64) string {
+	return fmt.Sprintf("%.0f%%", value)
 }
 
 func renderAccount(account resetwatch.Account) string {

@@ -70,6 +70,31 @@ func TestRenderLimitsUsesHTMLSectionsAndFreshness(t *testing.T) {
 	}
 }
 
+func TestRenderLimitWarningShowsCheckpoint(t *testing.T) {
+	text := RenderLimitWarning(resetwatch.WarningEvent{
+		Account:            resetwatch.Account{Label: "personal", Email: "arda@example.com", Plan: "prolite"},
+		Label:              resetwatch.LabelFiveHour,
+		ThresholdRemaining: 5,
+		UsedPercent:        96,
+		RemainingPercent:   4,
+		ResetAt:            parseTime("2026-06-01T02:39:00Z"),
+		DetectedAt:         parseTime("2026-06-01T00:39:00Z"),
+	})
+	for _, want := range []string{
+		"<b>Codex limit warning</b>",
+		"<b>5h</b>",
+		"left",
+		"4%",
+		"checkpoint 5%",
+		"used",
+		"96%",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("render missing %q in:\n%s", want, text)
+		}
+	}
+}
+
 func TestAuthorizationRequiresChatAndAllowedUser(t *testing.T) {
 	svc := &Service{cfg: BotConfig{ChatID: 123, AllowedUserIDs: []int64{7}}}
 	if !svc.authorized(&models.Update{Message: &models.Message{Chat: models.Chat{ID: 123}, From: &models.User{ID: 7}}}) {
