@@ -76,7 +76,8 @@ func NewBotService(cfg BotConfig, controller Controller, offsets OffsetStore, de
 		if offset, ok, err := offsets.GetTelegramOffset(context.Background(), svc.botRef); err != nil {
 			return nil, err
 		} else if ok {
-			options = append(options, tgbot.WithInitialOffset(offset+1))
+			// go-telegram/bot sends lastUpdateID+1 to getUpdates internally.
+			options = append(options, tgbot.WithInitialOffset(offset))
 		}
 	}
 	options = append(options,
