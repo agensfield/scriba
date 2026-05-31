@@ -35,6 +35,7 @@ type ServerConfig struct {
 	Environment                      string `json:"environment"`
 	AccountLabel                     string `json:"accountLabel"`
 	StartupHeartbeatRateLimitMinutes int    `json:"startupHeartbeatRateLimitMinutes"`
+	ObservationRetentionDays         int    `json:"observationRetentionDays"`
 }
 
 type Config struct {
@@ -71,6 +72,7 @@ func Default() Config {
 		Environment:                      "dev",
 		AccountLabel:                     "personal",
 		StartupHeartbeatRateLimitMinutes: 30,
+		ObservationRetentionDays:         120,
 	}
 	return cfg
 }
@@ -121,6 +123,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Server.StartupHeartbeatRateLimitMinutes == 0 {
 		cfg.Server.StartupHeartbeatRateLimitMinutes = 30
+	}
+	if cfg.Server.ObservationRetentionDays == 0 {
+		cfg.Server.ObservationRetentionDays = 120
 	}
 	if cfg.Telegram.Alerts.SessionPercent == 0 {
 		cfg.Telegram.Alerts.SessionPercent = 80

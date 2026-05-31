@@ -167,6 +167,58 @@ func TestDeliveriesSettingsAndTelegramOffset(t *testing.T) {
 	}
 }
 
+func TestPruneObservationsKeepsEventsAndDeliveries(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	oldObs := observation("2026-01-01T12:00:00Z", "2026-01-07T12:00:00Z", "2026-01-01T17:00:00Z")
+	oldDecision := resetwatch.Decide(oldObs, nil, testOptions())
+	if _, err := store.ApplyDecision(ctx, oldObs, oldDecision); err != nil {
+		t.Fatalf("apply old observation: %v", err)
+	}
+	newObs := observation("2026-06-01T12:00:00Z", "2026-06-07T12:00:00Z", "2026-06-01T17:00:00Z")
+	states, err := store.LoadWindowStates(ctx, "acct")
+	if err != nil {
+		t.Fatalf("load states: %v", err)
+	}
+	newDecision := resetwatch.Decide(newObs, states, testOptions())
+	if _, err := store.ApplyDecision(ctx, newObs, newDecision); err != nil {
+		t.Fatalf("apply new observation: %v", err)
+	}
+	event := resetEvent()
+	if inserted, err := store.InsertResetEvents(ctx, []resetwatch.Event{event}); err != nil || inserted != 1 {
+		t.Fatalf("insert event: inserted=%d err=%v", inserted, err)
+	}
+	if _, err := store.EnsureDelivery(ctx, event.ID, "telegram:123"); err != nil {
+		t.Fatalf("ensure delivery: %v", err)
+	}
+	eventCount := countRows(t, store, "reset_events")
+	deliveryCount := countRows(t, store, "notification_deliveries")
+
+	result, err := store.PruneObservations(ctx, parseTime("2026-05-01T00:00:00Z"), false)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if result.DeletedObservations != 1 || result.DeletedWindows != 2 {
+		t.Fatalf("unexpected prune result: %#v", result)
+	}
+	if got := countRows(t, store, "limit_observations"); got != 1 {
+		t.Fatalf("unexpected observations after prune: %d", got)
+	}
+	if got := countRows(t, store, "observed_windows"); got != 2 {
+		t.Fatalf("unexpected windows after prune: %d", got)
+	}
+	if got := countRows(t, store, "reset_events"); got != eventCount {
+		t.Fatalf("reset events should be retained, got %d", got)
+	}
+	if got := countRows(t, store, "notification_deliveries"); got != deliveryCount {
+		t.Fatalf("deliveries should be retained, got %d", got)
+	}
+	latest, ok, err := store.LoadLatestObservation(ctx)
+	if err != nil || !ok || !latest.ObservedAt.Equal(newObs.ObservedAt) {
+		t.Fatalf("unexpected latest after prune: %#v ok=%v err=%v", latest, ok, err)
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(filepath.Join(t.TempDir(), "scriba-server.sqlite"))
@@ -175,6 +227,15 @@ func openTestStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+func countRows(t *testing.T, store *Store, table string) int {
+	t.Helper()
+	var count int
+	if err := store.db.QueryRow(`select count(*) from ` + table).Scan(&count); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	return count
 }
 
 func observation(observedAt, weeklyReset, fiveReset string) resetwatch.Observation {

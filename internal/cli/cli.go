@@ -826,6 +826,8 @@ func runServer(command string, opts options) error {
 		return runServerRefresh(cfg, opts)
 	case "radar":
 		return runServerRadar(opts)
+	case "prune":
+		return runServerPrune(cfg, opts)
 	default:
 		return fmt.Errorf("unknown server command: %s", command)
 	}
@@ -844,9 +846,10 @@ func runServerRun(cfg config.Config, opts options) error {
 		return err
 	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
-		AccountLabel:     cfg.Server.AccountLabel,
-		JokeTone:         cfg.Telegram.ResetJokeTone,
-		StartupHeartbeat: heartbeat,
+		AccountLabel:             cfg.Server.AccountLabel,
+		JokeTone:                 cfg.Telegram.ResetJokeTone,
+		StartupHeartbeat:         heartbeat,
+		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
 	})
 	if cfg.Telegram.Enabled {
 		token := cfg.Telegram.BotToken
@@ -892,17 +895,22 @@ func runServerStatus(cfg config.Config, opts options) error {
 	if err != nil {
 		return err
 	}
-	srv := servercore.New(st, nil, nil, servercore.Config{AccountLabel: cfg.Server.AccountLabel, JokeTone: cfg.Telegram.ResetJokeTone})
+	srv := servercore.New(st, nil, nil, servercore.Config{
+		AccountLabel:             cfg.Server.AccountLabel,
+		JokeTone:                 cfg.Telegram.ResetJokeTone,
+		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
+	})
 	interval, err := srv.PollInterval(ctx)
 	if err != nil {
 		return err
 	}
 	payload := map[string]any{
-		"statePath":       st.Path(),
-		"schemaVersion":   version,
-		"pollInterval":    interval.String(),
-		"telegramEnabled": cfg.Telegram.Enabled,
-		"environment":     cfg.Server.Environment,
+		"statePath":                st.Path(),
+		"schemaVersion":            version,
+		"pollInterval":             interval.String(),
+		"telegramEnabled":          cfg.Telegram.Enabled,
+		"environment":              cfg.Server.Environment,
+		"observationRetentionDays": cfg.Server.ObservationRetentionDays,
 	}
 	return output(opts, payload, fmt.Sprintf("scriba server · %s · poll %s", st.Path(), interval))
 }
@@ -913,12 +921,41 @@ func runServerRefresh(cfg config.Config, opts options) error {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	srv := servercore.New(st, nil, nil, servercore.Config{AccountLabel: cfg.Server.AccountLabel, JokeTone: cfg.Telegram.ResetJokeTone})
+	srv := servercore.New(st, nil, nil, servercore.Config{
+		AccountLabel:             cfg.Server.AccountLabel,
+		JokeTone:                 cfg.Telegram.ResetJokeTone,
+		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
+	})
 	result, err := srv.RefreshNow(context.Background())
 	if err != nil {
 		return err
 	}
 	return output(opts, serverRefreshPayload(result), telegram.RenderLimits(result.Observation))
+}
+
+func runServerPrune(cfg config.Config, opts options) error {
+	st, err := store.Open(resolveServerStatePath(cfg.Server.StatePath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	srv := servercore.New(st, nil, nil, servercore.Config{
+		AccountLabel:             cfg.Server.AccountLabel,
+		JokeTone:                 cfg.Telegram.ResetJokeTone,
+		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
+	})
+	result, err := srv.PruneObservations(context.Background(), true)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"cutoff":              result.Cutoff.Format(time.RFC3339),
+		"deletedObservations": result.DeletedObservations,
+		"deletedWindows":      result.DeletedWindows,
+		"checkpointed":        result.Checkpointed,
+		"vacuumed":            result.Vacuumed,
+	}
+	return output(opts, payload, fmt.Sprintf("pruned %d observations and %d windows before %s", result.DeletedObservations, result.DeletedWindows, result.Cutoff.Format(time.RFC3339)))
 }
 
 func runServerRadar(opts options) error {
@@ -1054,7 +1091,7 @@ func commands() map[string][]string {
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
 		"telegram": {"alerts", "reset"},
-		"server":   {"run", "status", "refresh", "radar"},
+		"server":   {"run", "status", "refresh", "radar", "prune"},
 	}
 }
 
@@ -1069,7 +1106,7 @@ Commands:
   scriba config path|show|init|telegram
   scriba cache status|reset|prune|vacuum
   scriba telegram alerts|reset
-  scriba server run|status|refresh|radar
+  scriba server run|status|refresh|radar|prune
   scriba bench ccusage
 `
 }

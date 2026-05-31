@@ -38,6 +38,14 @@ type Delivery struct {
 	UpdatedAt         time.Time
 }
 
+type PruneResult struct {
+	Cutoff              time.Time
+	DeletedObservations int64
+	DeletedWindows      int64
+	Checkpointed        bool
+	Vacuumed            bool
+}
+
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("store path is required")
@@ -270,6 +278,51 @@ limit 1`).Scan(
 	}
 	obs.Windows = windows
 	return obs, true, nil
+}
+
+func (s *Store) PruneObservations(ctx context.Context, cutoff time.Time, compact bool) (PruneResult, error) {
+	result := PruneResult{Cutoff: cutoff.UTC()}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	cutoffValue := formatTime(cutoff)
+	if err := tx.QueryRowContext(ctx, `
+select count(*)
+from observed_windows
+where observation_id in (select id from limit_observations where observed_at < ?)`, cutoffValue).Scan(&result.DeletedWindows); err != nil {
+		return result, err
+	}
+	deleted, err := tx.ExecContext(ctx, `delete from limit_observations where observed_at < ?`, cutoffValue)
+	if err != nil {
+		return result, err
+	}
+	result.DeletedObservations, _ = deleted.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return result, err
+	}
+	if compact && (result.DeletedObservations > 0 || result.DeletedWindows > 0) {
+		if err := s.Checkpoint(ctx); err != nil {
+			return result, err
+		}
+		result.Checkpointed = true
+		if err := s.Vacuum(ctx); err != nil {
+			return result, err
+		}
+		result.Vacuumed = true
+	}
+	return result, nil
+}
+
+func (s *Store) Checkpoint(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `pragma wal_checkpoint(truncate)`)
+	return err
+}
+
+func (s *Store) Vacuum(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `vacuum`)
+	return err
 }
 
 func (s *Store) loadObservedWindows(ctx context.Context, observationID string) ([]resetwatch.Window, error) {

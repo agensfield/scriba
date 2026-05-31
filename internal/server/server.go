@@ -21,6 +21,7 @@ const (
 	DefaultPollInterval = 5 * time.Minute
 	DefaultBackoff      = 30 * time.Second
 	SettingPollInterval = "poll_interval"
+	SettingLastPruneAt  = "last_prune_at"
 )
 
 var ErrRefreshInProgress = errors.New("refresh already in progress")
@@ -32,6 +33,7 @@ type Store interface {
 	SetSetting(context.Context, string, string) error
 	LoadLastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
+	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
 }
 
 type Fetcher interface {
@@ -44,9 +46,10 @@ type Notifier interface {
 }
 
 type Config struct {
-	AccountLabel     string
-	JokeTone         string
-	StartupHeartbeat bool
+	AccountLabel             string
+	JokeTone                 string
+	StartupHeartbeat         bool
+	ObservationRetentionDays int
 }
 
 type Server struct {
@@ -87,6 +90,9 @@ func New(st Store, fetcher Fetcher, notifier Notifier, cfg Config) *Server {
 	}
 	if cfg.AccountLabel == "" {
 		cfg.AccountLabel = "personal"
+	}
+	if cfg.ObservationRetentionDays == 0 {
+		cfg.ObservationRetentionDays = 120
 	}
 	return &Server{
 		store:    st,
@@ -197,6 +203,9 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 			s.logger.Warn("scriba baseline notification failed", "error", err)
 		}
 	}
+	if err := s.pruneIfDue(ctx); err != nil {
+		s.logger.Warn("scriba observation prune failed", "error", err)
+	}
 	if inserted > 0 {
 		for _, event := range decision.Events {
 			if err := s.notifier.NotifyReset(ctx, event); err != nil {
@@ -205,6 +214,40 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 		}
 	}
 	return PollResult{Observation: obs, Decision: decision, Inserted: inserted, Baseline: baseline}, nil
+}
+
+func (s *Server) PruneObservations(ctx context.Context, compact bool) (store.PruneResult, error) {
+	days := s.cfg.ObservationRetentionDays
+	if days <= 0 {
+		return store.PruneResult{}, errors.New("observation retention must be positive")
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	return s.store.PruneObservations(ctx, cutoff, compact)
+}
+
+func (s *Server) pruneIfDue(ctx context.Context) error {
+	value, ok, err := s.store.GetSetting(ctx, SettingLastPruneAt)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if ok {
+		last, err := time.Parse(time.RFC3339Nano, value)
+		if err == nil && now.Sub(last) < 24*time.Hour {
+			return nil
+		}
+	}
+	result, err := s.PruneObservations(ctx, true)
+	if err != nil {
+		return err
+	}
+	if err := s.store.SetSetting(ctx, SettingLastPruneAt, now.Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
+	if result.DeletedObservations > 0 || result.DeletedWindows > 0 {
+		s.logger.Info("scriba pruned observations", "observations", result.DeletedObservations, "windows", result.DeletedWindows, "cutoff", result.Cutoff.Format(time.RFC3339))
+	}
+	return nil
 }
 
 func (s *Server) observation(result remote.ProbeResult) resetwatch.Observation {
