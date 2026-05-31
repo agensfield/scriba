@@ -184,13 +184,13 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 	}
 	if baseline || s.cfg.StartupHeartbeat {
 		if err := s.notifier.NotifyBaseline(ctx, BaselineNotice{Account: obs.Account, ObservedAt: obs.ObservedAt, Windows: obs.Windows, SnapshotJSON: obs.SnapshotJSON}); err != nil {
-			return PollResult{}, err
+			s.logger.Warn("scriba baseline notification failed", "error", err)
 		}
 	}
 	if inserted > 0 {
 		for _, event := range decision.Events {
 			if err := s.notifier.NotifyReset(ctx, event); err != nil {
-				return PollResult{}, err
+				s.logger.Warn("scriba reset notification failed", "event_id", event.ID, "error", err)
 			}
 		}
 	}
