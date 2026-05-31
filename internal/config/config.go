@@ -20,11 +20,21 @@ type TelegramAlertsConfig struct {
 }
 
 type TelegramConfig struct {
-	Enabled     bool                 `json:"enabled"`
-	BotToken    string               `json:"botToken,omitempty"`
-	BotTokenEnv string               `json:"botTokenEnv"`
-	ChatID      string               `json:"chatId,omitempty"`
-	Alerts      TelegramAlertsConfig `json:"alerts"`
+	Enabled        bool                 `json:"enabled"`
+	BotToken       string               `json:"botToken,omitempty"`
+	BotTokenEnv    string               `json:"botTokenEnv"`
+	ChatID         string               `json:"chatId,omitempty"`
+	AllowedUserIDs []int64              `json:"allowedUserIds,omitempty"`
+	ResetJokeTone  string               `json:"resetJokeTone"`
+	Alerts         TelegramAlertsConfig `json:"alerts"`
+}
+
+type ServerConfig struct {
+	Enabled                          bool   `json:"enabled"`
+	StatePath                        string `json:"statePath,omitempty"`
+	Environment                      string `json:"environment"`
+	AccountLabel                     string `json:"accountLabel"`
+	StartupHeartbeatRateLimitMinutes int    `json:"startupHeartbeatRateLimitMinutes"`
 }
 
 type Config struct {
@@ -36,6 +46,7 @@ type Config struct {
 		Claude ProviderConfig `json:"claude"`
 		Codex  ProviderConfig `json:"codex"`
 	} `json:"providers"`
+	Server   ServerConfig   `json:"server"`
 	Telegram TelegramConfig `json:"telegram"`
 }
 
@@ -46,13 +57,20 @@ func Default() Config {
 	cfg.Providers.Claude = ProviderConfig{Enabled: true}
 	cfg.Providers.Codex = ProviderConfig{Enabled: true}
 	cfg.Telegram = TelegramConfig{
-		Enabled:     false,
-		BotTokenEnv: "SCRIBA_TELEGRAM_BOT_TOKEN",
+		Enabled:       false,
+		BotTokenEnv:   "SCRIBA_TELEGRAM_BOT_TOKEN",
+		ResetJokeTone: "spicy",
 		Alerts: TelegramAlertsConfig{
 			SessionPercent: 80,
 			WeeklyPercent:  80,
 			IncludeErrors:  true,
 		},
+	}
+	cfg.Server = ServerConfig{
+		Enabled:                          false,
+		Environment:                      "dev",
+		AccountLabel:                     "personal",
+		StartupHeartbeatRateLimitMinutes: 30,
 	}
 	return cfg
 }
@@ -91,6 +109,18 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Telegram.BotTokenEnv == "" {
 		cfg.Telegram.BotTokenEnv = "SCRIBA_TELEGRAM_BOT_TOKEN"
+	}
+	if cfg.Telegram.ResetJokeTone == "" {
+		cfg.Telegram.ResetJokeTone = "spicy"
+	}
+	if cfg.Server.Environment == "" {
+		cfg.Server.Environment = "dev"
+	}
+	if cfg.Server.AccountLabel == "" {
+		cfg.Server.AccountLabel = "personal"
+	}
+	if cfg.Server.StartupHeartbeatRateLimitMinutes == 0 {
+		cfg.Server.StartupHeartbeatRateLimitMinutes = 30
 	}
 	if cfg.Telegram.Alerts.SessionPercent == 0 {
 		cfg.Telegram.Alerts.SessionPercent = 80

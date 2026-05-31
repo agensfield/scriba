@@ -1,13 +1,18 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/agensfield/scriba/internal/bench"
 	"github.com/agensfield/scriba/internal/buildinfo"
@@ -20,9 +25,12 @@ import (
 	localcodex "github.com/agensfield/scriba/internal/local/codex"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/privacy"
+	"github.com/agensfield/scriba/internal/radar"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/render"
 	"github.com/agensfield/scriba/internal/reports"
+	servercore "github.com/agensfield/scriba/internal/server"
+	"github.com/agensfield/scriba/internal/server/store"
 	"github.com/agensfield/scriba/internal/status"
 	"github.com/agensfield/scriba/internal/telegram"
 )
@@ -53,6 +61,8 @@ type options struct {
 	message         string
 	execute         bool
 	out             string
+	statePath       string
+	env             string
 }
 
 func Run(args []string) int {
@@ -169,6 +179,18 @@ func dispatch(args []string) error {
 			return runTelegramReset(opts)
 		}
 		return fmt.Errorf("unknown telegram command")
+	case "server":
+		if len(args) < 2 {
+			return fmt.Errorf("missing server command")
+		}
+		opts, _, err := parse(args[2:], flagSpec{
+			Use:   fmt.Sprintf("scriba server %s [flags]", args[1]),
+			Flags: []string{"json", "config", "state-path", "env", "redact"},
+		})
+		if err != nil {
+			return err
+		}
+		return runServer(args[1], opts)
 	case "bench":
 		if len(args) < 2 || args[1] != "ccusage" {
 			return fmt.Errorf("unknown bench command")
@@ -227,6 +249,8 @@ var flagHelp = map[string]flagMeta{
 	"message":           {Name: "message", Value: "text", Usage: "telegram message"},
 	"execute":           {Name: "execute", Usage: "execute benchmark"},
 	"out":               {Name: "out", Value: "path", Usage: "output path"},
+	"state-path":        {Name: "state-path", Value: "path", Usage: "server sqlite path"},
+	"env":               {Name: "env", Value: "name", Usage: "server environment"},
 }
 
 func parse(args []string, spec flagSpec) (options, []string, error) {
@@ -284,6 +308,10 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.BoolVar(&opts.execute, name, false, flagHelp[name].Usage)
 		case "out":
 			fs.StringVar(&opts.out, name, "", flagHelp[name].Usage)
+		case "state-path":
+			fs.StringVar(&opts.statePath, name, "", flagHelp[name].Usage)
+		case "env":
+			fs.StringVar(&opts.env, name, "", flagHelp[name].Usage)
 		}
 	}
 	fs.SetOutput(os.Stdout)
@@ -655,6 +683,7 @@ func configSummary(path string, cfg config.Config) map[string]any {
 	return map[string]any{
 		"path":          path,
 		"schemaVersion": cfg.SchemaVersion,
+		"server":        cfg.Server,
 		"telegram":      telegramSummary(path, cfg.Telegram),
 	}
 }
@@ -777,6 +806,164 @@ func runTelegramReset(opts options) error {
 	return output(opts, map[string]any{"enabled": cfg.Telegram.Enabled, "alert": alert, "sent": sent}, "telegram reset alert")
 }
 
+func runServer(command string, opts options) error {
+	cfg, err := load(opts)
+	if err != nil {
+		return err
+	}
+	if opts.statePath != "" {
+		cfg.Server.StatePath = opts.statePath
+	}
+	if opts.env != "" {
+		cfg.Server.Environment = opts.env
+	}
+	switch command {
+	case "run":
+		return runServerRun(cfg, opts)
+	case "status":
+		return runServerStatus(cfg, opts)
+	case "refresh":
+		return runServerRefresh(cfg, opts)
+	case "radar":
+		return runServerRadar(opts)
+	default:
+		return fmt.Errorf("unknown server command: %s", command)
+	}
+}
+
+func runServerRun(cfg config.Config, opts options) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	st, err := store.Open(resolveServerStatePath(cfg.Server.StatePath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	heartbeat, err := shouldSendStartupHeartbeat(ctx, st, cfg.Server)
+	if err != nil {
+		return err
+	}
+	srv := servercore.New(st, nil, nil, servercore.Config{
+		AccountLabel:     cfg.Server.AccountLabel,
+		JokeTone:         cfg.Telegram.ResetJokeTone,
+		StartupHeartbeat: heartbeat,
+	})
+	if cfg.Telegram.Enabled {
+		token := cfg.Telegram.BotToken
+		if token == "" {
+			token = os.Getenv(cfg.Telegram.BotTokenEnv)
+		}
+		if token == "" {
+			return fmt.Errorf("missing Telegram bot token; set telegram.botToken or env %s", cfg.Telegram.BotTokenEnv)
+		}
+		chatID, err := strconv.ParseInt(cfg.Telegram.ChatID, 10, 64)
+		if err != nil || chatID == 0 {
+			return fmt.Errorf("invalid telegram.chatId: %q", cfg.Telegram.ChatID)
+		}
+		tg, err := telegram.NewBotService(telegram.BotConfig{
+			Token:          token,
+			ChatID:         chatID,
+			AllowedUserIDs: cfg.Telegram.AllowedUserIDs,
+		}, srv, st, st, radar.Client{})
+		if err != nil {
+			return err
+		}
+		srv.SetNotifier(tg)
+		go func() {
+			if err := srv.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				fmt.Fprintln(os.Stderr, err)
+				stop()
+			}
+		}()
+		tg.Start(ctx)
+		return nil
+	}
+	return srv.Run(ctx)
+}
+
+func runServerStatus(cfg config.Config, opts options) error {
+	st, err := store.Open(resolveServerStatePath(cfg.Server.StatePath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+	version, err := st.SchemaVersion(ctx)
+	if err != nil {
+		return err
+	}
+	srv := servercore.New(st, nil, nil, servercore.Config{AccountLabel: cfg.Server.AccountLabel, JokeTone: cfg.Telegram.ResetJokeTone})
+	interval, err := srv.PollInterval(ctx)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"statePath":       st.Path(),
+		"schemaVersion":   version,
+		"pollInterval":    interval.String(),
+		"telegramEnabled": cfg.Telegram.Enabled,
+		"environment":     cfg.Server.Environment,
+	}
+	return output(opts, payload, fmt.Sprintf("scriba server · %s · poll %s", st.Path(), interval))
+}
+
+func runServerRefresh(cfg config.Config, opts options) error {
+	st, err := store.Open(resolveServerStatePath(cfg.Server.StatePath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	srv := servercore.New(st, nil, nil, servercore.Config{AccountLabel: cfg.Server.AccountLabel, JokeTone: cfg.Telegram.ResetJokeTone})
+	result, err := srv.RefreshNow(context.Background())
+	if err != nil {
+		return err
+	}
+	return output(opts, result, telegram.RenderLimits(result.Observation))
+}
+
+func runServerRadar(opts options) error {
+	client := radar.Client{}
+	current, err := client.Fetch(context.Background())
+	if err != nil {
+		return err
+	}
+	return output(opts, current, client.RenderText(current))
+}
+
+func shouldSendStartupHeartbeat(ctx context.Context, st *store.Store, cfg config.ServerConfig) (bool, error) {
+	if cfg.Environment == "dev" {
+		return true, nil
+	}
+	limit := time.Duration(cfg.StartupHeartbeatRateLimitMinutes) * time.Minute
+	if limit <= 0 {
+		limit = 30 * time.Minute
+	}
+	const key = "startup_heartbeat_at"
+	value, ok, err := st.GetSetting(ctx, key)
+	if err != nil {
+		return false, err
+	}
+	now := time.Now().UTC()
+	if ok {
+		last, err := time.Parse(time.RFC3339Nano, value)
+		if err == nil && now.Sub(last) < limit {
+			return false, nil
+		}
+	}
+	return true, st.SetSetting(ctx, key, now.Format(time.RFC3339Nano))
+}
+
+func resolveServerStatePath(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+		return filepath.Join(xdg, "scriba", "server.sqlite")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "scriba", "server.sqlite")
+}
+
 func runBench(opts options) error {
 	payload := bench.Build(opts.provider, opts.execute)
 	if opts.out != "" {
@@ -838,13 +1025,14 @@ func title(value string) string {
 
 func commands() map[string][]string {
 	return map[string][]string{
-		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "cache", "bench", "telegram"},
+		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "cache", "bench", "telegram", "server"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks"},
 		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits"},
 		"config":   {"path", "show", "init", "telegram"},
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
 		"telegram": {"alerts", "reset"},
+		"server":   {"run", "status", "refresh", "radar"},
 	}
 }
 
@@ -859,6 +1047,7 @@ Commands:
   scriba config path|show|init|telegram
   scriba cache status|reset|prune|vacuum
   scriba telegram alerts|reset
+  scriba server run|status|refresh|radar
   scriba bench ccusage
 `
 }

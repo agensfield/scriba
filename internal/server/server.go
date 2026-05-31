@@ -42,8 +42,9 @@ type Notifier interface {
 }
 
 type Config struct {
-	AccountLabel string
-	JokeTone     string
+	AccountLabel     string
+	JokeTone         string
+	StartupHeartbeat bool
 }
 
 type Server struct {
@@ -92,6 +93,13 @@ func New(st Store, fetcher Fetcher, notifier Notifier, cfg Config) *Server {
 		cfg:      cfg,
 		logger:   slog.Default(),
 	}
+}
+
+func (s *Server) SetNotifier(notifier Notifier) {
+	if notifier == nil {
+		notifier = NoopNotifier{}
+	}
+	s.notifier = notifier
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -174,7 +182,7 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 	if err != nil {
 		return PollResult{}, err
 	}
-	if baseline {
+	if baseline || s.cfg.StartupHeartbeat {
 		if err := s.notifier.NotifyBaseline(ctx, BaselineNotice{Account: obs.Account, ObservedAt: obs.ObservedAt, Windows: obs.Windows, SnapshotJSON: obs.SnapshotJSON}); err != nil {
 			return PollResult{}, err
 		}
