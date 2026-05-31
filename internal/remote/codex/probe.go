@@ -1,37 +1,20 @@
 package codex
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/agensfield/scriba/internal/codexauth"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/remote"
 )
 
-const (
-	clientID     = "app_EMoamEEZ73f0CkXaXp7hrann"
-	refreshURL   = "https://auth.openai.com/oauth/token"
-	usageURL     = "https://chatgpt.com/backend-api/wham/usage"
-	refreshAfter = 8 * 24 * time.Hour
-)
-
-type authFile struct {
-	OpenAIAPIKey *string `json:"OPENAI_API_KEY"`
-	Tokens       struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		IDToken      string `json:"id_token"`
-		AccountID    string `json:"account_id"`
-	} `json:"tokens"`
-	LastRefresh string `json:"last_refresh"`
-}
+var usageURL = "https://chatgpt.com/backend-api/wham/usage"
 
 type usageResponse struct {
 	PlanType  string `json:"plan_type"`
@@ -56,20 +39,20 @@ type window struct {
 	LimitWindowSeconds int64   `json:"limit_window_seconds"`
 }
 
-func AuthPaths() []string {
-	home, _ := os.UserHomeDir()
-	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); codexHome != "" {
-		return []string{filepath.Join(codexHome, "auth.json")}
-	}
-	return []string{
-		filepath.Join(home, ".config", "codex", "auth.json"),
-		filepath.Join(home, ".codex", "auth.json"),
-	}
+func Probe(includeHTTP bool) (remote.ProbeResult, error) {
+	return ProbeContext(context.Background(), includeHTTP)
 }
 
-func Probe(includeHTTP bool) (remote.ProbeResult, error) {
+func AuthPaths() []string {
+	return codexauth.AuthPaths()
+}
+
+func ProbeContext(ctx context.Context, includeHTTP bool) (remote.ProbeResult, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	auth := loadAuth()
+	auth, err := loadAuth(ctx, nil, false)
+	if err != nil {
+		return remote.ProbeResult{}, err
+	}
 	if !auth.OK {
 		return remote.ProbeResult{
 			ProviderID: "codex",
@@ -81,25 +64,42 @@ func Probe(includeHTTP bool) (remote.ProbeResult, error) {
 	if !includeHTTP {
 		return remote.ProbeResult{ProviderID: "codex", AuthState: auth}, nil
 	}
-	req, err := http.NewRequest(http.MethodGet, usageURL, nil)
+	result, err := FetchLimits(ctx, http.DefaultClient)
 	if err != nil {
 		return remote.ProbeResult{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
-	req.Header.Set("Accept", "application/json")
-	if auth.AccountID != "" {
-		req.Header.Set("ChatGPT-Account-Id", auth.AccountID)
+	return result, nil
+}
+
+func FetchLimits(ctx context.Context, client *http.Client) (remote.ProbeResult, error) {
+	if client == nil {
+		client = http.DefaultClient
 	}
-	resp, err := http.DefaultClient.Do(req)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	auth, err := loadAuth(ctx, client, false)
 	if err != nil {
 		return remote.ProbeResult{}, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return remote.ProbeResult{}, fmt.Errorf("codex usage request failed: %d", resp.StatusCode)
+	if !auth.OK {
+		return remote.ProbeResult{
+			ProviderID: "codex",
+			Lines:      []model.MetricLine{{Type: "badge", Label: "Codex API", Text: "Auth unavailable"}},
+			Provenance: []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", FetchedAt: now, Error: auth.Error}},
+			AuthState:  auth,
+		}, nil
 	}
-	var parsed usageResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	parsed, err := fetchUsage(ctx, client, auth)
+	if isAuthHTTPError(err) {
+		auth, err = loadAuth(ctx, client, true)
+		if err != nil {
+			return remote.ProbeResult{}, err
+		}
+		if !auth.OK {
+			return remote.ProbeResult{ProviderID: "codex", AuthState: auth}, nil
+		}
+		parsed, err = fetchUsage(ctx, client, auth)
+	}
+	if err != nil {
 		return remote.ProbeResult{}, err
 	}
 	var lines []model.MetricLine
@@ -136,71 +136,57 @@ func Probe(includeHTTP bool) (remote.ProbeResult, error) {
 	}, nil
 }
 
-func loadAuth() remote.AuthState {
-	for _, path := range AuthPaths() {
-		data, err := os.ReadFile(path) // #nosec G304 -- Codex auth path is resolved from CODEX_HOME/default auth locations.
-		if err != nil {
-			continue
-		}
-		var auth authFile
-		if err := json.Unmarshal(data, &auth); err != nil {
-			continue
-		}
-		if auth.OpenAIAPIKey != nil && *auth.OpenAIAPIKey != "" {
-			return remote.AuthState{OK: false, Error: "Usage not available for API key auth.", Source: path}
-		}
-		if auth.Tokens.AccessToken == "" {
-			continue
-		}
-		if auth.Tokens.RefreshToken != "" && needsRefresh(auth.LastRefresh) {
-			if refreshed, err := refresh(auth, auth.Tokens.RefreshToken); err == nil && refreshed.Tokens.AccessToken != "" {
-				_ = os.WriteFile(path, append(pretty(refreshed), '\n'), 0o600)
-				return remote.AuthState{OK: true, AccessToken: refreshed.Tokens.AccessToken, AccountID: refreshed.Tokens.AccountID, Source: path}
-			}
-		}
-		return remote.AuthState{OK: true, AccessToken: auth.Tokens.AccessToken, AccountID: auth.Tokens.AccountID, Source: path}
-	}
-	return remote.AuthState{OK: false, Error: "Not logged in. Run `codex` to authenticate."}
+type usageHTTPError struct {
+	status int
 }
 
-func needsRefresh(lastRefresh string) bool {
-	t, err := time.Parse(time.RFC3339Nano, lastRefresh)
-	if err != nil {
-		t, err = time.Parse(time.RFC3339, lastRefresh)
-	}
-	return err != nil || time.Since(t) > refreshAfter
+func (e usageHTTPError) Error() string {
+	return fmt.Sprintf("codex usage request failed: %d", e.status)
 }
 
-func refresh(auth authFile, token string) (authFile, error) {
-	body := "grant_type=refresh_token&client_id=" + clientID + "&refresh_token=" + token
-	req, err := http.NewRequest(http.MethodPost, refreshURL, bytes.NewBufferString(body))
+func fetchUsage(ctx context.Context, client *http.Client, auth remote.AuthState) (usageResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, usageURL, nil)
 	if err != nil {
-		return auth, err
+		return usageResponse{}, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := http.DefaultClient.Do(req)
+	req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
+	req.Header.Set("Accept", "application/json")
+	if auth.AccountID != "" {
+		req.Header.Set("ChatGPT-Account-Id", auth.AccountID)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
-		return auth, err
+		return usageResponse{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return auth, fmt.Errorf("refresh failed: %d", resp.StatusCode)
+		return usageResponse{}, usageHTTPError{status: resp.StatusCode}
 	}
-	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return auth, err
+	var parsed usageResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return usageResponse{}, err
 	}
-	if text, ok := payload["access_token"].(string); ok {
-		auth.Tokens.AccessToken = text
+	return parsed, nil
+}
+
+func isAuthHTTPError(err error) bool {
+	var httpErr usageHTTPError
+	return err != nil && (errors.As(err, &httpErr) && (httpErr.status == http.StatusUnauthorized || httpErr.status == http.StatusForbidden))
+}
+
+func loadAuth(ctx context.Context, client *http.Client, forceRefresh bool) (remote.AuthState, error) {
+	creds, err := codexauth.Load(ctx, codexauth.LoadOptions{Client: client, ForceRefresh: forceRefresh})
+	if err != nil {
+		return remote.AuthState{}, err
 	}
-	if text, ok := payload["refresh_token"].(string); ok {
-		auth.Tokens.RefreshToken = text
-	}
-	if text, ok := payload["id_token"].(string); ok {
-		auth.Tokens.IDToken = text
-	}
-	auth.LastRefresh = time.Now().UTC().Format(time.RFC3339Nano)
-	return auth, nil
+	return remote.AuthState{
+		OK:          creds.OK,
+		Error:       creds.Error,
+		Source:      creds.Source,
+		Email:       creds.Email,
+		AccessToken: creds.AccessToken,
+		AccountID:   creds.AccountID,
+	}, nil
 }
 
 func progressLine(label string, w window) model.MetricLine {
@@ -228,9 +214,4 @@ func number(value any) (float64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func pretty(value any) []byte {
-	data, _ := json.MarshalIndent(value, "", "  ")
-	return data
 }

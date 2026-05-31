@@ -6,6 +6,7 @@ type AuthState struct {
 	OK          bool   `json:"ok"`
 	Error       string `json:"error,omitempty"`
 	Source      string `json:"source,omitempty"`
+	Email       string `json:"email,omitempty"`
 	AccessToken string `json:"-"`
 	AccountID   string `json:"-"`
 }
