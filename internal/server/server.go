@@ -288,7 +288,7 @@ func (s *Server) Health(ctx context.Context) (Health, error) {
 	health.ConsecutiveFailures = count
 	if value, ok, err := s.store.GetSetting(ctx, SettingPollFailureError); err != nil {
 		return health, err
-	} else if ok {
+	} else if ok && strings.TrimSpace(value) != "" {
 		health.LastError = value
 		health.FailureKind = classifyPollError(value)
 	}
