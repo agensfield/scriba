@@ -229,7 +229,7 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 		if event, ok, err := s.controller.LastResetEvent(ctx); err == nil && ok {
 			last = fmt.Sprintf("%s · %s -> %s", event.ResetKind, formatTime(event.PreviousResetAt), formatTime(event.CurrentResetAt))
 		}
-		return "<b>Scriba status</b>\n<pre>" + html.EscapeString(fmt.Sprintf("%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s", "alive", "yes", "version", health.Version, "health", health.Status, "poll interval", health.PollInterval.String(), "last reset", last, "details", "/health · /stats")) + "</pre>", mainKeyboard()
+		return "<b>Scriba status</b>\n<pre>" + html.EscapeString(fmt.Sprintf("%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s\n%-14s %s", "alive", "yes", "version", health.Version, "health", health.Status, "poll interval", server.FormatDuration(health.PollInterval), "last reset", last, "details", "/health · /stats")) + "</pre>", mainKeyboard()
 	case "/health":
 		health, err := s.controller.Health(ctx)
 		if err != nil {
@@ -335,7 +335,7 @@ func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuer
 		s.answerCallback(ctx, query.ID, "could not update interval")
 		return
 	}
-	s.answerCallback(ctx, query.ID, "poll interval updated: "+interval.String())
+	s.answerCallback(ctx, query.ID, "poll interval updated: "+server.FormatDuration(interval))
 	s.editCallbackMessage(ctx, query, settingsText(interval), settingsKeyboard(interval))
 }
 
@@ -536,7 +536,7 @@ func settingsKeyboard(current time.Duration) models.InlineKeyboardMarkup {
 		if current == interval {
 			text = "· " + label + " ·"
 		}
-		return models.InlineKeyboardButton{Text: text, CallbackData: "settings:poll:" + interval.String()}
+		return models.InlineKeyboardButton{Text: text, CallbackData: "settings:poll:" + server.FormatDuration(interval)}
 	}
 	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
 		{
@@ -569,7 +569,7 @@ func mainKeyboard() models.InlineKeyboardMarkup {
 }
 
 func settingsText(interval time.Duration) string {
-	return "<b>Polling interval</b>\ncurrent: <code>" + html.EscapeString(interval.String()) + "</code>\n\nChoose how often Scriba polls live Codex limits."
+	return "<b>Polling interval</b>\ncurrent: <code>" + html.EscapeString(server.FormatDuration(interval)) + "</code>\n\nChoose how often Scriba polls live Codex limits."
 }
 
 func helpText() string {

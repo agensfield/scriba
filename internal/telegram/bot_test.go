@@ -106,7 +106,7 @@ func TestRenderStatsShowsStorageFreshnessAndDeliveries(t *testing.T) {
 		"<b>Scriba stats</b>",
 		"<b>Health</b>",
 		"poll",
-		"5m0s",
+		"5m",
 		"<b>Observation</b>",
 		"latest",
 		"latest win",

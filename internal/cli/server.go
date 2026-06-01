@@ -129,12 +129,12 @@ func runServerStatus(cfg config.Config, opts options) error {
 		"schemaVersion":            version,
 		"version":                  buildinfo.Version,
 		"commit":                   buildinfo.Commit,
-		"pollInterval":             interval.String(),
+		"pollInterval":             servercore.FormatDuration(interval),
 		"telegramEnabled":          cfg.Telegram.Enabled,
 		"environment":              cfg.Server.Environment,
 		"observationRetentionDays": cfg.Server.ObservationRetentionDays,
 	}
-	return output(opts, payload, fmt.Sprintf("scriba server · %s · %s · poll %s", buildinfo.Version, st.Path(), interval))
+	return output(opts, payload, fmt.Sprintf("scriba server · %s · %s · poll %s", buildinfo.Version, st.Path(), servercore.FormatDuration(interval)))
 }
 
 func runServerHealth(cfg config.Config, opts options) error {
@@ -300,7 +300,7 @@ func serverStatsPayload(stats servercore.Stats, environment string, telegramEnab
 	return map[string]any{
 		"environment":              environment,
 		"telegramEnabled":          telegramEnabled,
-		"pollInterval":             stats.PollInterval.String(),
+		"pollInterval":             servercore.FormatDuration(stats.PollInterval),
 		"observationRetentionDays": stats.ObservationRetentionDays,
 		"version":                  stats.Version,
 		"commit":                   stats.Commit,
@@ -314,7 +314,7 @@ func healthPayload(health servercore.Health) map[string]any {
 		"status":                   health.Status,
 		"version":                  health.Version,
 		"commit":                   health.Commit,
-		"pollInterval":             health.PollInterval.String(),
+		"pollInterval":             servercore.FormatDuration(health.PollInterval),
 		"observationRetentionDays": health.ObservationRetentionDays,
 		"lastSuccessAt":            health.LastSuccessAt,
 		"lastFailureAt":            health.LastFailureAt,
@@ -322,7 +322,7 @@ func healthPayload(health servercore.Health) map[string]any {
 		"failureKind":              health.FailureKind,
 		"consecutiveFailures":      health.ConsecutiveFailures,
 		"nextPollEstimateAt":       health.NextPollEstimateAt,
-		"staleAfter":               health.StaleAfter.String(),
+		"staleAfter":               servercore.FormatDuration(health.StaleAfter),
 		"isStale":                  health.IsStale,
 	}
 }
@@ -333,7 +333,7 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 	writeRows(&b, []string{
 		fmt.Sprintf("%-13s %s", "version", stats.Version),
 		fmt.Sprintf("%-13s %s", "commit", stats.Commit),
-		fmt.Sprintf("%-13s %s", "poll", stats.PollInterval.String()),
+		fmt.Sprintf("%-13s %s", "poll", servercore.FormatDuration(stats.PollInterval)),
 		fmt.Sprintf("%-13s %dd", "retention", stats.ObservationRetentionDays),
 		fmt.Sprintf("%-13s %s", "env", environment),
 		fmt.Sprintf("%-13s %t", "telegram", telegramEnabled),
@@ -402,7 +402,7 @@ func writeHealthRows(b *strings.Builder, health servercore.Health) {
 	rows := []string{
 		fmt.Sprintf("%-13s %s", "status", health.Status),
 		fmt.Sprintf("%-13s %s", "version", health.Version),
-		fmt.Sprintf("%-13s %s", "poll", health.PollInterval.String()),
+		fmt.Sprintf("%-13s %s", "poll", servercore.FormatDuration(health.PollInterval)),
 	}
 	if health.LastSuccessAt != nil {
 		rows = append(rows, fmt.Sprintf("%-13s %s", "last ok", formatCLIStatsTime(*health.LastSuccessAt)))

@@ -77,6 +77,14 @@ func TestPollIntervalSetting(t *testing.T) {
 	if interval != 90*time.Second {
 		t.Fatalf("unexpected custom interval: %s", interval)
 	}
+	select {
+	case <-srv.intervalCh:
+	default:
+		t.Fatal("expected poll interval change signal")
+	}
+	if got := FormatDuration(90 * time.Second); got != "1m30s" {
+		t.Fatalf("unexpected formatted duration: %s", got)
+	}
 }
 
 func TestRefreshEmitsLimitWarningsOncePerCheckpoint(t *testing.T) {

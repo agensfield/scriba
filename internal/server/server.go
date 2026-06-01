@@ -74,6 +74,7 @@ type Server struct {
 	mu         sync.Mutex
 	refreshing bool
 	heartbeat  bool
+	intervalCh chan struct{}
 }
 
 type BaselineNotice struct {
@@ -148,12 +149,13 @@ func New(st Store, fetcher Fetcher, notifier Notifier, cfg Config) *Server {
 		cfg.ObservationRetentionDays = 120
 	}
 	return &Server{
-		store:     st,
-		fetcher:   fetcher,
-		notifier:  notifier,
-		cfg:       cfg,
-		logger:    slog.Default(),
-		heartbeat: cfg.StartupHeartbeat,
+		store:      st,
+		fetcher:    fetcher,
+		notifier:   notifier,
+		cfg:        cfg,
+		logger:     slog.Default(),
+		heartbeat:  cfg.StartupHeartbeat,
+		intervalCh: make(chan struct{}, 1),
 	}
 }
 
@@ -180,7 +182,7 @@ func (s *Server) Run(ctx context.Context) error {
 				s.logger.Warn("scriba poll interval setting failed", "error", err)
 				interval = DefaultPollInterval
 			}
-			if !sleep(ctx, interval) {
+			if !s.waitPollInterval(ctx, interval) {
 				return ctx.Err()
 			}
 		}
@@ -224,7 +226,11 @@ func (s *Server) SetPollInterval(ctx context.Context, interval time.Duration) er
 	if interval <= 0 {
 		return errors.New("poll interval must be positive")
 	}
-	return s.store.SetSetting(ctx, SettingPollInterval, interval.String())
+	if err := s.store.SetSetting(ctx, SettingPollInterval, interval.String()); err != nil {
+		return err
+	}
+	s.notifyIntervalChanged()
+	return nil
 }
 
 func (s *Server) LastResetEvent(ctx context.Context) (resetwatch.Event, bool, error) {
@@ -592,6 +598,26 @@ func sleep(ctx context.Context, d time.Duration) bool {
 		return false
 	case <-timer.C:
 		return true
+	}
+}
+
+func (s *Server) waitPollInterval(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-s.intervalCh:
+		return true
+	case <-timer.C:
+		return true
+	}
+}
+
+func (s *Server) notifyIntervalChanged() {
+	select {
+	case s.intervalCh <- struct{}{}:
+	default:
 	}
 }
 

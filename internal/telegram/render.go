@@ -108,7 +108,7 @@ func renderRuntimeStats(stats server.Stats, environment string, telegramEnabled 
 	rows := []string{
 		fmt.Sprintf("%-12s %s", "version", stats.Version),
 		fmt.Sprintf("%-12s %s", "commit", stats.Commit),
-		fmt.Sprintf("%-12s %s", "poll", stats.PollInterval.String()),
+		fmt.Sprintf("%-12s %s", "poll", server.FormatDuration(stats.PollInterval)),
 		fmt.Sprintf("%-12s %dd", "retention", stats.ObservationRetentionDays),
 	}
 	if environment != "" {
@@ -134,7 +134,7 @@ func renderHealthStats(health server.Health) string {
 	rows := []string{
 		fmt.Sprintf("%-12s %s", "status", health.Status),
 		fmt.Sprintf("%-12s %s", "version", health.Version),
-		fmt.Sprintf("%-12s %s", "poll", health.PollInterval.String()),
+		fmt.Sprintf("%-12s %s", "poll", server.FormatDuration(health.PollInterval)),
 	}
 	if health.LastSuccessAt != nil {
 		rows = append(rows, fmt.Sprintf("%-12s %s", "last ok", formatFreshTime(*health.LastSuccessAt)))
