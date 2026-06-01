@@ -133,11 +133,11 @@ func TestWarningCandidatesUseMostSevereCheckpointPerWindow(t *testing.T) {
 	if len(warnings) != 2 {
 		t.Fatalf("expected two warnings, got %d", len(warnings))
 	}
-	if warnings[0].Label != LabelWeeklyLimit || warnings[0].ThresholdRemaining != 20 || warnings[0].RemainingPercent != 18 {
-		t.Fatalf("unexpected weekly warning: %#v", warnings[0])
+	if warnings[0].Label != LabelFiveHour || warnings[0].ThresholdRemaining != 5 || warnings[0].RemainingPercent != 4 {
+		t.Fatalf("unexpected 5h warning: %#v", warnings[0])
 	}
-	if warnings[1].Label != LabelFiveHour || warnings[1].ThresholdRemaining != 5 || warnings[1].RemainingPercent != 4 {
-		t.Fatalf("unexpected 5h warning: %#v", warnings[1])
+	if warnings[1].Label != LabelWeeklyLimit || warnings[1].ThresholdRemaining != 20 || warnings[1].RemainingPercent != 18 {
+		t.Fatalf("unexpected weekly warning: %#v", warnings[1])
 	}
 }
 

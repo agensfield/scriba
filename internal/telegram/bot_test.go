@@ -69,6 +69,9 @@ func TestRenderLimitsUsesHTMLSectionsAndFreshness(t *testing.T) {
 			t.Fatalf("render missing %q in:\n%s", want, text)
 		}
 	}
+	if five, weekly := strings.Index(text, "5h"), strings.Index(text, "Weekly"); five < 0 || weekly < 0 || five > weekly {
+		t.Fatalf("expected 5h before weekly in:\n%s", text)
+	}
 }
 
 func TestRenderLimitWarningShowsCheckpoint(t *testing.T) {

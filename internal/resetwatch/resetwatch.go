@@ -20,6 +20,7 @@ const (
 	LabelFiveHour    = "5h limit"
 	LabelSparkWeekly = "Spark weekly"
 	LabelSparkFive   = "Spark 5h"
+	LabelReviewFive  = "Review 5h"
 	LabelReviewWeek  = "Review weekly"
 
 	ResetKindScheduled = "scheduled"
@@ -210,7 +211,7 @@ func WarningEventID(providerID, accountRef, label string, resetAt time.Time, thr
 }
 
 func WarningCandidates(obs Observation) []WarningEvent {
-	labels := []string{LabelWeeklyLimit, LabelFiveHour}
+	labels := []string{LabelFiveHour, LabelWeeklyLimit}
 	byLabel := windowsByLabel(obs.Windows)
 	var warnings []WarningEvent
 	for _, label := range labels {
@@ -295,7 +296,7 @@ func windowsByLabel(windows []Window) map[string]Window {
 }
 
 func trackedLabels(byLabel map[string]Window) []string {
-	preferred := []string{LabelWeeklyLimit, LabelFiveHour, LabelSparkWeekly, LabelSparkFive, LabelReviewWeek}
+	preferred := []string{LabelFiveHour, LabelWeeklyLimit, LabelSparkFive, LabelSparkWeekly, LabelReviewFive, LabelReviewWeek}
 	labels := make([]string, 0, len(byLabel))
 	seen := make(map[string]bool, len(byLabel))
 	for _, label := range preferred {

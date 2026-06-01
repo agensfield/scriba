@@ -270,8 +270,8 @@ func renderWindows(windows []resetwatch.Window, rowLabel string) string {
 	for _, window := range windows {
 		byLabel[window.Label] = window
 	}
-	primaryLabels := []string{resetwatch.LabelWeeklyLimit, resetwatch.LabelFiveHour}
-	secondaryLabels := []string{resetwatch.LabelSparkWeekly, resetwatch.LabelSparkFive, resetwatch.LabelReviewWeek}
+	primaryLabels := []string{resetwatch.LabelFiveHour, resetwatch.LabelWeeklyLimit}
+	secondaryLabels := []string{resetwatch.LabelSparkFive, resetwatch.LabelSparkWeekly, resetwatch.LabelReviewFive, resetwatch.LabelReviewWeek}
 	var b strings.Builder
 	if section := renderWindowSection("Primary", primaryLabels, byLabel, rowLabel); section != "" {
 		b.WriteString(section)
@@ -286,7 +286,7 @@ func renderWindows(windows []resetwatch.Window, rowLabel string) string {
 }
 
 func renderBeforeAfter(prev, current []resetwatch.Window) string {
-	labels := []string{resetwatch.LabelWeeklyLimit, resetwatch.LabelFiveHour, resetwatch.LabelSparkWeekly, resetwatch.LabelSparkFive, resetwatch.LabelReviewWeek}
+	labels := []string{resetwatch.LabelFiveHour, resetwatch.LabelWeeklyLimit, resetwatch.LabelSparkFive, resetwatch.LabelSparkWeekly, resetwatch.LabelReviewFive, resetwatch.LabelReviewWeek}
 	prevByLabel := mapWindows(prev)
 	currentByLabel := mapWindows(current)
 	var b strings.Builder
@@ -351,6 +351,8 @@ func sectionLabel(label string) string {
 		return "Spark weekly"
 	case resetwatch.LabelSparkFive:
 		return "Spark 5h"
+	case resetwatch.LabelReviewFive:
+		return "Review 5h"
 	case resetwatch.LabelReviewWeek:
 		return "Review weekly"
 	default:
