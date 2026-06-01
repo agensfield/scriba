@@ -16,6 +16,9 @@ func Status(snapshot model.StatusSnapshot) string {
 	for _, provider := range snapshot.Providers {
 		fmt.Fprintf(&b, "\n%s\n", providerHeader(provider.DisplayName))
 		for _, line := range provider.Lines {
+			if !showMetricLine(line) {
+				continue
+			}
 			fmt.Fprintf(&b, "  %s\n", MetricLine(line))
 		}
 		for _, source := range provider.Provenance {
@@ -38,13 +41,23 @@ func CodexLimits(lines []model.MetricLine, cached bool) string {
 		suffix = "cached"
 	}
 	fmt.Fprintf(&b, "%s\n%s\n", header("Codex Limits"), muted(suffix+" ChatGPT/Codex backend usage"))
+	rendered := 0
 	for _, line := range lines {
+		if !showMetricLine(line) {
+			continue
+		}
 		fmt.Fprintf(&b, "  %s\n", MetricLine(line))
+		rendered++
 	}
-	if len(lines) == 0 {
+	if rendered == 0 {
 		fmt.Fprintf(&b, "  %s\n", yellow("no limit lines available"))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func showMetricLine(line model.MetricLine) bool {
+	label := strings.ToLower(line.Label)
+	return !strings.Contains(label, "spark")
 }
 
 func Doctor(state string) string {

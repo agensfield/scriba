@@ -58,16 +58,17 @@ func TestRenderLimitsUsesHTMLSectionsAndFreshness(t *testing.T) {
 		"<b>Codex limits</b>",
 		"<i>observed ",
 		"<b>Primary</b>",
-		"<b>Secondary</b>",
 		"<pre>",
 		"Weekly",
 		"5h",
-		"Spark weekly",
 		"▰▱▱▱▱▱▱▱▱▱",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("render missing %q in:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "Spark") {
+		t.Fatalf("render should hide Spark windows:\n%s", text)
 	}
 	if five, weekly := strings.Index(text, "5h"), strings.Index(text, "Weekly"); five < 0 || weekly < 0 || five > weekly {
 		t.Fatalf("expected 5h before weekly in:\n%s", text)

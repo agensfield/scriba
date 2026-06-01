@@ -271,7 +271,7 @@ func renderWindows(windows []resetwatch.Window, rowLabel string) string {
 		byLabel[window.Label] = window
 	}
 	primaryLabels := []string{resetwatch.LabelFiveHour, resetwatch.LabelWeeklyLimit}
-	secondaryLabels := []string{resetwatch.LabelSparkFive, resetwatch.LabelSparkWeekly, resetwatch.LabelReviewFive, resetwatch.LabelReviewWeek}
+	secondaryLabels := []string{resetwatch.LabelReviewFive, resetwatch.LabelReviewWeek}
 	var b strings.Builder
 	if section := renderWindowSection("Primary", primaryLabels, byLabel, rowLabel); section != "" {
 		b.WriteString(section)
@@ -286,7 +286,7 @@ func renderWindows(windows []resetwatch.Window, rowLabel string) string {
 }
 
 func renderBeforeAfter(prev, current []resetwatch.Window) string {
-	labels := []string{resetwatch.LabelFiveHour, resetwatch.LabelWeeklyLimit, resetwatch.LabelSparkFive, resetwatch.LabelSparkWeekly, resetwatch.LabelReviewFive, resetwatch.LabelReviewWeek}
+	labels := []string{resetwatch.LabelFiveHour, resetwatch.LabelWeeklyLimit, resetwatch.LabelReviewFive, resetwatch.LabelReviewWeek}
 	prevByLabel := mapWindows(prev)
 	currentByLabel := mapWindows(current)
 	var b strings.Builder
