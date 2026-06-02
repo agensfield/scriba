@@ -1,6 +1,7 @@
 package render
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -45,4 +46,30 @@ func TestStatusHidesSparkLines(t *testing.T) {
 	if !strings.Contains(text, "5h limit") {
 		t.Fatalf("expected 5h line to remain:\n%s", text)
 	}
+}
+
+func TestCodexLimitsAlignsProgressBars(t *testing.T) {
+	fiveUsed := 8.0
+	weeklyUsed := 23.0
+	limit := 100.0
+	text := stripANSI(CodexLimits([]model.MetricLine{
+		{Type: "badge", Label: "Plan", Text: "prolite"},
+		{Type: "progress", Label: "5h limit", Used: &fiveUsed, Limit: &limit},
+		{Type: "progress", Label: "Weekly limit", Used: &weeklyUsed, Limit: &limit},
+	}, false))
+
+	lines := strings.Split(text, "\n")
+	barColumns := map[string]int{}
+	for _, line := range lines {
+		if strings.Contains(line, "limit") {
+			barColumns[strings.TrimSpace(line[:strings.Index(line, "▰")])] = strings.Index(line, "▰")
+		}
+	}
+	if barColumns["5h limit"] != barColumns["Weekly limit"] {
+		t.Fatalf("progress bars are not aligned:\n%s", text)
+	}
+}
+
+func stripANSI(text string) string {
+	return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(text, "")
 }

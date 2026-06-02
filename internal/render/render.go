@@ -15,11 +15,10 @@ func Status(snapshot model.StatusSnapshot) string {
 	fmt.Fprintf(&b, "%s\n%s\n", header("Scriba Status"), muted("generated "+snapshot.GeneratedAt))
 	for _, provider := range snapshot.Providers {
 		fmt.Fprintf(&b, "\n%s\n", providerHeader(provider.DisplayName))
-		for _, line := range provider.Lines {
-			if !showMetricLine(line) {
-				continue
-			}
-			fmt.Fprintf(&b, "  %s\n", MetricLine(line))
+		lines := visibleMetricLines(provider.Lines)
+		labelWidth := metricLabelWidth(lines)
+		for _, line := range lines {
+			fmt.Fprintf(&b, "  %s\n", metricLine(line, labelWidth))
 		}
 		for _, source := range provider.Provenance {
 			if source.Error != "" {
@@ -42,11 +41,10 @@ func CodexLimits(lines []model.MetricLine, cached bool) string {
 	}
 	fmt.Fprintf(&b, "%s\n%s\n", header("Codex Limits"), muted(suffix+" ChatGPT/Codex backend usage"))
 	rendered := 0
+	lines = visibleMetricLines(lines)
+	labelWidth := metricLabelWidth(lines)
 	for _, line := range lines {
-		if !showMetricLine(line) {
-			continue
-		}
-		fmt.Fprintf(&b, "  %s\n", MetricLine(line))
+		fmt.Fprintf(&b, "  %s\n", metricLine(line, labelWidth))
 		rendered++
 	}
 	if rendered == 0 {
@@ -58,6 +56,26 @@ func CodexLimits(lines []model.MetricLine, cached bool) string {
 func showMetricLine(line model.MetricLine) bool {
 	label := strings.ToLower(line.Label)
 	return !strings.Contains(label, "spark")
+}
+
+func visibleMetricLines(lines []model.MetricLine) []model.MetricLine {
+	var visible []model.MetricLine
+	for _, line := range lines {
+		if showMetricLine(line) {
+			visible = append(visible, line)
+		}
+	}
+	return visible
+}
+
+func metricLabelWidth(lines []model.MetricLine) int {
+	width := 0
+	for _, line := range lines {
+		if len(line.Label) > width {
+			width = len(line.Label)
+		}
+	}
+	return width
 }
 
 func Doctor(state string) string {
@@ -119,13 +137,17 @@ func DoctorPayload(payload doctor.Payload) string {
 }
 
 func MetricLine(line model.MetricLine) string {
+	return metricLine(line, 0)
+}
+
+func metricLine(line model.MetricLine, labelWidth int) string {
 	switch line.Type {
 	case "text":
-		return fmt.Sprintf("%s %s", label(line.Label), value(fmt.Sprint(line.Value)))
+		return fmt.Sprintf("%s %s", metricLabel(line.Label, labelWidth), value(fmt.Sprint(line.Value)))
 	case "badge":
-		return fmt.Sprintf("%s %s", label(line.Label), badge(line.Text))
+		return fmt.Sprintf("%s %s", metricLabel(line.Label, labelWidth), badge(line.Text))
 	case "amount":
-		return fmt.Sprintf("%s %s", label(line.Label), value(formatMetricValue(line.Value, line.Format)))
+		return fmt.Sprintf("%s %s", metricLabel(line.Label, labelWidth), value(formatMetricValue(line.Value, line.Format)))
 	case "progress":
 		used := 0.0
 		limit := 100.0
@@ -140,10 +162,18 @@ func MetricLine(line model.MetricLine) string {
 		if line.ResetsAt != "" {
 			details += " · " + resetLabel(line.ResetsAt)
 		}
-		return fmt.Sprintf("%s %s %s %s", label(line.Label), bar(percent), percentValue(percent), muted(details))
+		return fmt.Sprintf("%s %s %s %s", metricLabel(line.Label, labelWidth), bar(percent), percentValue(percent), muted(details))
 	default:
-		return fmt.Sprintf("%s %s", label(line.Label), value(fmt.Sprint(line.Value)))
+		return fmt.Sprintf("%s %s", metricLabel(line.Label, labelWidth), value(fmt.Sprint(line.Value)))
 	}
+}
+
+func metricLabel(text string, width int) string {
+	pad := width - len(text)
+	if pad < 0 {
+		pad = 0
+	}
+	return label(text) + strings.Repeat(" ", pad)
 }
 
 func formatMetricValue(input any, format *model.MetricFormat) string {

@@ -47,6 +47,8 @@ Canonical spec:
 - `--no-remote` skips provider API probes.
 - `--fast` reads cached status only.
 - `--redact` removes share-sensitive paths and identifiers from JSON output.
+- Terminal metric rows use a shared label column per rendered provider/output so
+  progress bars align across short and long labels.
 
 ## Verification
 

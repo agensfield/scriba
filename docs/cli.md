@@ -83,6 +83,9 @@ from `${CODEX_HOME:-~/.codex}/auth.json`; OpenAI API key auth cannot expose
 these ChatGPT subscription windows. Pass `--fast` to read the last cached
 `scriba status` snapshot instead of making a network request.
 
+Human metric output aligns labels within each rendered provider/output, so
+progress bars start in the same column even when labels differ in length.
+
 ## Package Execution
 
 Scriba is a Go binary. Build locally with:
