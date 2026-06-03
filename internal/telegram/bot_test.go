@@ -9,6 +9,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/agensfield/scriba/internal/model"
+	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/remote"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server"
@@ -96,6 +97,36 @@ func TestRenderLimitWarningShowsCheckpoint(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("render missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestRenderRadarProbabilityUsesEnglishSummary(t *testing.T) {
+	text := RenderRadarProbability(radar.ProbabilityAlert{
+		Milestone:        50,
+		Probability24H:   0.64,
+		Probability48H:   0.78,
+		Level:            "high",
+		ExpectedWindow:   "未来 24-48 小时",
+		ReasoningSummary: "24小时约64%、48小时约78%，属于高位预警但不是官方确认。",
+		CheckedAt:        "2026-06-03T19:00:36+08:00",
+		DetectedAt:       parseTime("2026-06-03T12:29:47Z"),
+	})
+	for _, want := range []string{
+		"<b>Codex reset radar alert</b>",
+		"checkpoint   50%",
+		"24h          64%",
+		"48h          78%",
+		"window       next 24-48h",
+		"prediction signal, not an official reset confirmation",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("render missing %q in:\n%s", want, text)
+		}
+	}
+	for _, unwanted := range []string{"未来", "小时", "属于高位预警"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("render leaked upstream Chinese %q in:\n%s", unwanted, text)
 		}
 	}
 }

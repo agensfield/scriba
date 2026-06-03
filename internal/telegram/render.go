@@ -91,8 +91,8 @@ func RenderRadarProbability(alert radar.ProbabilityAlert) string {
 	if alert.Level != "" {
 		rows = append(rows, fmt.Sprintf("%-12s %s", "level", alert.Level))
 	}
-	if alert.ExpectedWindow != "" {
-		rows = append(rows, fmt.Sprintf("%-12s %s", "window", alert.ExpectedWindow))
+	if window := radarExpectedWindow(alert.ExpectedWindow); window != "" {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "window", window))
 	}
 	if alert.CheckedAt != "" {
 		rows = append(rows, fmt.Sprintf("%-12s %s", "checked", alert.CheckedAt))
@@ -101,10 +101,29 @@ func RenderRadarProbability(alert radar.ProbabilityAlert) string {
 		rows = append(rows, fmt.Sprintf("%-12s %s", "seen", formatFreshTime(alert.DetectedAt)))
 	}
 	text := "<b>Codex reset radar alert</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
-	if alert.ReasoningSummary != "" {
-		text += "\n\n" + html.EscapeString(truncate(alert.ReasoningSummary, 700))
-	}
+	text += "\n\n" + html.EscapeString(radarProbabilitySummary(alert))
 	return text
+}
+
+func radarExpectedWindow(value string) string {
+	switch strings.TrimSpace(value) {
+	case "未来 24-48 小时":
+		return "next 24-48h"
+	default:
+		return value
+	}
+}
+
+func radarProbabilitySummary(alert radar.ProbabilityAlert) string {
+	level := strings.TrimSpace(alert.Level)
+	if level == "" {
+		level = "unknown"
+	}
+	window := radarExpectedWindow(alert.ExpectedWindow)
+	if window == "" {
+		window = "the near term"
+	}
+	return fmt.Sprintf("Codex Radar estimates a %s reset chance for %s. This is a prediction signal, not an official reset confirmation.", level, window)
 }
 
 func RenderStats(stats server.Stats, environment string, telegramEnabled bool) string {
