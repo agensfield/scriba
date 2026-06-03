@@ -119,6 +119,37 @@ create table if not exists limit_warning_deliveries (
   foreign key (warning_id) references limit_warning_events(id)
 );
 
+create table if not exists radar_alert_events (
+  id text primary key,
+  milestone integer not null,
+  probability_24h real not null,
+  probability_48h real not null,
+  level text not null,
+  expected_window text not null,
+  reasoning_summary text not null,
+  checked_at text not null,
+  detected_at text not null,
+  snapshot_json text not null,
+  created_at text not null
+);
+
+create table if not exists radar_alert_deliveries (
+  id text primary key,
+  alert_id text not null,
+  target text not null,
+  status text not null,
+  attempts integer not null default 0,
+  last_attempt_at text,
+  next_attempt_at text,
+  delivered_at text,
+  provider_message_id text,
+  last_error text,
+  created_at text not null,
+  updated_at text not null,
+  unique (alert_id, target),
+  foreign key (alert_id) references radar_alert_events(id)
+);
+
 create table if not exists server_settings (
   key text primary key,
   value text not null,
@@ -145,4 +176,10 @@ create index if not exists idx_limit_warning_events_account_detected
 
 create index if not exists idx_limit_warning_deliveries_status
   on limit_warning_deliveries(status, created_at);
+
+create index if not exists idx_radar_alert_events_detected
+  on radar_alert_events(detected_at);
+
+create index if not exists idx_radar_alert_deliveries_status
+  on radar_alert_deliveries(status, created_at);
 `

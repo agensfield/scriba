@@ -51,6 +51,10 @@ type DeliveryStore interface {
 	MarkWarningDeliveryAttempt(context.Context, string, string, bool, string, string) error
 	PendingWarningDeliveries(context.Context, string, int) ([]store.Delivery, error)
 	LoadWarningEvent(context.Context, string) (resetwatch.WarningEvent, bool, error)
+	EnsureRadarAlertDelivery(context.Context, string, string) (store.Delivery, error)
+	MarkRadarAlertDeliveryAttempt(context.Context, string, string, bool, string, string) error
+	PendingRadarAlertDeliveries(context.Context, string, int) ([]store.Delivery, error)
+	LoadRadarAlertEvent(context.Context, string) (radar.ProbabilityAlert, bool, error)
 }
 
 type Service struct {
@@ -168,6 +172,28 @@ func (s *Service) NotifyLimitWarning(ctx context.Context, warning resetwatch.War
 		messageID = strconv.Itoa(message.ID)
 	}
 	return s.deliveries.MarkWarningDeliveryAttempt(ctx, warning.ID, target, true, "", messageID)
+}
+
+func (s *Service) NotifyRadarProbability(ctx context.Context, alert radar.ProbabilityAlert) error {
+	target := s.target()
+	if s.deliveries != nil {
+		if _, err := s.deliveries.EnsureRadarAlertDelivery(ctx, alert.ID, target); err != nil {
+			return err
+		}
+	}
+	message, err := s.send(ctx, RenderRadarProbability(alert), mainKeyboard())
+	if s.deliveries == nil {
+		return err
+	}
+	if err != nil {
+		_ = s.deliveries.MarkRadarAlertDeliveryAttempt(ctx, alert.ID, target, false, err.Error(), "")
+		return err
+	}
+	messageID := ""
+	if message != nil {
+		messageID = strconv.Itoa(message.ID)
+	}
+	return s.deliveries.MarkRadarAlertDeliveryAttempt(ctx, alert.ID, target, true, "", messageID)
 }
 
 func (s *Service) NotifyHealth(ctx context.Context, notice server.HealthNotice) error {
@@ -420,6 +446,26 @@ func (s *Service) retryDeliveriesOnce(ctx context.Context) {
 			messageID = strconv.Itoa(message.ID)
 		}
 		_ = s.deliveries.MarkWarningDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
+	}
+	radarDeliveries, err := s.deliveries.PendingRadarAlertDeliveries(ctx, target, 10)
+	if err != nil {
+		return
+	}
+	for _, delivery := range radarDeliveries {
+		alert, ok, err := s.deliveries.LoadRadarAlertEvent(ctx, delivery.EventID)
+		if err != nil || !ok {
+			continue
+		}
+		message, err := s.send(ctx, RenderRadarProbability(alert), mainKeyboard())
+		if err != nil {
+			_ = s.deliveries.MarkRadarAlertDeliveryAttempt(ctx, delivery.EventID, target, false, err.Error(), "")
+			continue
+		}
+		messageID := ""
+		if message != nil {
+			messageID = strconv.Itoa(message.ID)
+		}
+		_ = s.deliveries.MarkRadarAlertDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
 	}
 }
 

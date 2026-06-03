@@ -2,6 +2,8 @@ package radar
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,10 +13,14 @@ import (
 	"github.com/dustin/go-humanize"
 )
 
-const DefaultURL = "https://codex-reset-radar.pages.dev/current.json"
+const (
+	DefaultURL = "https://codexradar.com/current.json"
+	BackupURL  = "https://codex-reset-radar.pages.dev/current.json"
+)
 
 type Client struct {
 	URL        string
+	BackupURL  string
 	HTTPClient *http.Client
 	Now        func() time.Time
 }
@@ -66,14 +72,38 @@ type Prediction struct {
 }
 
 func (c Client) Fetch(ctx context.Context) (Current, error) {
-	url := c.URL
-	if url == "" {
-		url = DefaultURL
-	}
 	client := c.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
 	}
+	urls := c.urls()
+	var lastErr error
+	for _, url := range urls {
+		current, err := fetchURL(ctx, client, url)
+		if err == nil {
+			return current, nil
+		}
+		lastErr = err
+	}
+	return Current{}, lastErr
+}
+
+func (c Client) urls() []string {
+	url := c.URL
+	backup := c.BackupURL
+	if url == "" {
+		url = DefaultURL
+		if backup == "" {
+			backup = BackupURL
+		}
+	}
+	if strings.TrimSpace(backup) == "" || backup == url {
+		return []string{url}
+	}
+	return []string{url, backup}
+}
+
+func fetchURL(ctx context.Context, client *http.Client, url string) (Current, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return Current{}, err
@@ -92,6 +122,60 @@ func (c Client) Fetch(ctx context.Context) (Current, error) {
 		return Current{}, err
 	}
 	return current, nil
+}
+
+type ProbabilityAlert struct {
+	ID               string    `json:"id"`
+	Milestone        int       `json:"milestone"`
+	Probability24H   float64   `json:"probability24h"`
+	Probability48H   float64   `json:"probability48h"`
+	Level            string    `json:"level"`
+	ExpectedWindow   string    `json:"expectedWindow"`
+	ReasoningSummary string    `json:"reasoningSummary"`
+	CheckedAt        string    `json:"checkedAt"`
+	DetectedAt       time.Time `json:"detectedAt"`
+	SnapshotJSON     []byte    `json:"snapshotJson"`
+}
+
+func ProbabilityMilestone(probability float64) int {
+	switch {
+	case probability >= 0.75:
+		return 75
+	case probability >= 0.50:
+		return 50
+	case probability >= 0.25:
+		return 25
+	default:
+		return 0
+	}
+}
+
+func NewProbabilityAlert(current Current, milestone int, detectedAt time.Time) (ProbabilityAlert, error) {
+	if current.Prediction == nil {
+		return ProbabilityAlert{}, fmt.Errorf("radar prediction is missing")
+	}
+	snapshot, err := json.Marshal(current)
+	if err != nil {
+		return ProbabilityAlert{}, err
+	}
+	id := ProbabilityAlertID(current.CheckedAt, milestone)
+	return ProbabilityAlert{
+		ID:               id,
+		Milestone:        milestone,
+		Probability24H:   current.Prediction.Probability24H,
+		Probability48H:   current.Prediction.Probability48H,
+		Level:            current.Prediction.Level,
+		ExpectedWindow:   current.Prediction.ExpectedWindow,
+		ReasoningSummary: current.Prediction.ReasoningSummary,
+		CheckedAt:        current.CheckedAt,
+		DetectedAt:       detectedAt.UTC(),
+		SnapshotJSON:     snapshot,
+	}, nil
+}
+
+func ProbabilityAlertID(checkedAt string, milestone int) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d", checkedAt, milestone)))
+	return "radar_alert_" + hex.EncodeToString(sum[:16])
 }
 
 func (c Client) RenderText(current Current) string {

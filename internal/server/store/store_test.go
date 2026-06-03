@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
 )
 
@@ -220,6 +221,56 @@ func TestWarningEventsAndDeliveriesDedupe(t *testing.T) {
 	}
 	if len(pending) != 0 {
 		t.Fatalf("expected no pending warnings, got %#v", pending)
+	}
+}
+
+func TestRadarAlertEventsAndDeliveries(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	alert := radar.ProbabilityAlert{
+		ID:               radar.ProbabilityAlertID("2026-06-01T12:00:00Z", 50),
+		Milestone:        50,
+		Probability24H:   0.64,
+		Probability48H:   0.78,
+		Level:            "high",
+		ExpectedWindow:   "24-48h",
+		ReasoningSummary: "test",
+		CheckedAt:        "2026-06-01T12:00:00Z",
+		DetectedAt:       parseTime("2026-06-01T12:01:00Z"),
+		SnapshotJSON:     []byte(`{"ok":true}`),
+	}
+	inserted, err := store.InsertRadarAlertEvent(ctx, alert)
+	if err != nil || !inserted {
+		t.Fatalf("insert radar alert: inserted=%t err=%v", inserted, err)
+	}
+	inserted, err = store.InsertRadarAlertEvent(ctx, alert)
+	if err != nil || inserted {
+		t.Fatalf("dedupe radar alert: inserted=%t err=%v", inserted, err)
+	}
+	loaded, ok, err := store.LoadRadarAlertEvent(ctx, alert.ID)
+	if err != nil || !ok || loaded.Milestone != 50 || loaded.Probability24H != 0.64 {
+		t.Fatalf("unexpected radar alert: %#v ok=%v err=%v", loaded, ok, err)
+	}
+	delivery, err := store.EnsureRadarAlertDelivery(ctx, alert.ID, "telegram:123")
+	if err != nil {
+		t.Fatalf("ensure radar delivery: %v", err)
+	}
+	if delivery.Status != "pending" || delivery.EventID != alert.ID {
+		t.Fatalf("unexpected radar delivery: %#v", delivery)
+	}
+	if err := store.MarkRadarAlertDeliveryAttempt(ctx, alert.ID, "telegram:123", true, "", "55"); err != nil {
+		t.Fatalf("mark radar delivery: %v", err)
+	}
+	delivered, ok, err := store.LoadRadarAlertDelivery(ctx, alert.ID, "telegram:123")
+	if err != nil || !ok || delivered.Status != "delivered" || delivered.ProviderMessageID != "55" {
+		t.Fatalf("unexpected delivered radar row: %#v ok=%v err=%v", delivered, ok, err)
+	}
+	pending, err := store.PendingRadarAlertDeliveries(ctx, "telegram:123", 10)
+	if err != nil {
+		t.Fatalf("pending radar deliveries: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending radar deliveries, got %#v", pending)
 	}
 }
 

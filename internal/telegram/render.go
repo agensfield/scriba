@@ -10,6 +10,7 @@ import (
 
 	"github.com/dustin/go-humanize"
 
+	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/remote"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server"
@@ -81,6 +82,31 @@ func RenderLimitWarning(warning resetwatch.WarningEvent) string {
 	return b.String()
 }
 
+func RenderRadarProbability(alert radar.ProbabilityAlert) string {
+	rows := []string{
+		fmt.Sprintf("%-12s %d%%", "checkpoint", alert.Milestone),
+		fmt.Sprintf("%-12s %.0f%%", "24h", alert.Probability24H*100),
+		fmt.Sprintf("%-12s %.0f%%", "48h", alert.Probability48H*100),
+	}
+	if alert.Level != "" {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "level", alert.Level))
+	}
+	if alert.ExpectedWindow != "" {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "window", alert.ExpectedWindow))
+	}
+	if alert.CheckedAt != "" {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "checked", alert.CheckedAt))
+	}
+	if !alert.DetectedAt.IsZero() {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "seen", formatFreshTime(alert.DetectedAt)))
+	}
+	text := "<b>Codex reset radar alert</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+	if alert.ReasoningSummary != "" {
+		text += "\n\n" + html.EscapeString(truncate(alert.ReasoningSummary, 700))
+	}
+	return text
+}
+
 func RenderStats(stats server.Stats, environment string, telegramEnabled bool) string {
 	var b strings.Builder
 	b.WriteString("<b>Scriba stats</b>\n")
@@ -97,6 +123,8 @@ func RenderStats(stats server.Stats, environment string, telegramEnabled bool) s
 	b.WriteString(renderDeliveryStats("Reset deliveries", stats.Store.ResetDeliveries))
 	b.WriteString("\n\n")
 	b.WriteString(renderDeliveryStats("Warning deliveries", stats.Store.WarningDeliveries))
+	b.WriteString("\n\n")
+	b.WriteString(renderDeliveryStats("Radar deliveries", stats.Store.RadarDeliveries))
 	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil {
 		b.WriteString("\n\n")
 		b.WriteString(renderRecentStats(stats.Store))
@@ -184,6 +212,7 @@ func renderStorageStats(stats store.Stats) string {
 		fmt.Sprintf("%-13s %d", "tracked win", counts["limit_windows"]),
 		fmt.Sprintf("%-13s %d", "resets", counts["reset_events"]),
 		fmt.Sprintf("%-13s %d", "warnings", counts["limit_warning_events"]),
+		fmt.Sprintf("%-13s %d", "radar", counts["radar_alert_events"]),
 	}
 	return "<b>Storage</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
 }

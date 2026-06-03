@@ -15,6 +15,7 @@ type Stats struct {
 	Counts            map[string]int64          `json:"counts"`
 	ResetDeliveries   map[string]DeliveryCounts `json:"resetDeliveries"`
 	WarningDeliveries map[string]DeliveryCounts `json:"warningDeliveries"`
+	RadarDeliveries   map[string]DeliveryCounts `json:"radarDeliveries"`
 	LatestObservation *ObservationSummary       `json:"latestObservation,omitempty"`
 	LastReset         *ResetSummary             `json:"lastReset,omitempty"`
 	LastWarning       *WarningSummary           `json:"lastWarning,omitempty"`
@@ -64,6 +65,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		Counts:            map[string]int64{},
 		ResetDeliveries:   map[string]DeliveryCounts{},
 		WarningDeliveries: map[string]DeliveryCounts{},
+		RadarDeliveries:   map[string]DeliveryCounts{},
 		DBFiles:           dbFileStats(s.path),
 	}
 	version, err := s.SchemaVersion(ctx)
@@ -80,6 +82,8 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		"notification_deliveries",
 		"limit_warning_events",
 		"limit_warning_deliveries",
+		"radar_alert_events",
+		"radar_alert_deliveries",
 		"server_settings",
 		"telegram_offsets",
 	} {
@@ -99,6 +103,11 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		return stats, err
 	}
 	stats.WarningDeliveries = warningDeliveries
+	radarDeliveries, err := s.deliveryCounts(ctx, "radar_alert_deliveries")
+	if err != nil {
+		return stats, err
+	}
+	stats.RadarDeliveries = radarDeliveries
 	latest, ok, err := s.latestObservationSummary(ctx)
 	if err != nil {
 		return stats, err
@@ -157,6 +166,8 @@ func deliveryCountsQuery(table string) (string, error) {
 		return `select status, count(*), coalesce(sum(attempts), 0) from notification_deliveries group by status`, nil
 	case "limit_warning_deliveries":
 		return `select status, count(*), coalesce(sum(attempts), 0) from limit_warning_deliveries group by status`, nil
+	case "radar_alert_deliveries":
+		return `select status, count(*), coalesce(sum(attempts), 0) from radar_alert_deliveries group by status`, nil
 	default:
 		return "", errors.New("unknown delivery table")
 	}

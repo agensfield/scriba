@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/agensfield/scriba/internal/model"
+	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/remote"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server/store"
@@ -111,6 +112,36 @@ func TestRefreshEmitsLimitWarningsOncePerCheckpoint(t *testing.T) {
 	}
 	if len(second.Warnings) != 0 || len(notifier.warnings) != 1 {
 		t.Fatalf("expected deduped warning, result=%#v notifications=%d", second.Warnings, len(notifier.warnings))
+	}
+}
+
+func TestRefreshEmitsRadarProbabilityAlertsOnUpwardMilestones(t *testing.T) {
+	ctx := context.Background()
+	fetcher := &fakeFetcher{results: []remote.ProbeResult{
+		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
+		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
+		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
+		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
+	}}
+	notifier := &fakeNotifier{}
+	radarFetcher := &fakeRadarFetcher{currents: []radar.Current{
+		radarCurrent("2026-06-01T12:00:00Z", 0.26),
+		radarCurrent("2026-06-01T12:05:00Z", 0.49),
+		radarCurrent("2026-06-01T12:10:00Z", 0.76),
+		radarCurrent("2026-06-01T12:15:00Z", 0.30),
+	}}
+	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal"})
+	srv.SetRadarFetcher(radarFetcher)
+	for i := 0; i < 4; i++ {
+		if _, err := srv.RefreshNow(ctx); err != nil {
+			t.Fatalf("refresh %d: %v", i, err)
+		}
+	}
+	if len(notifier.radarAlerts) != 2 {
+		t.Fatalf("expected two radar alerts, got %#v", notifier.radarAlerts)
+	}
+	if notifier.radarAlerts[0].Milestone != 25 || notifier.radarAlerts[1].Milestone != 75 {
+		t.Fatalf("unexpected radar milestones: %#v", notifier.radarAlerts)
 	}
 }
 
@@ -232,10 +263,11 @@ func (f fakeFetcherFunc) FetchLimits(ctx context.Context) (remote.ProbeResult, e
 }
 
 type fakeNotifier struct {
-	baselines []BaselineNotice
-	resets    []resetwatch.Event
-	warnings  []resetwatch.WarningEvent
-	health    []HealthNotice
+	baselines   []BaselineNotice
+	resets      []resetwatch.Event
+	warnings    []resetwatch.WarningEvent
+	radarAlerts []radar.ProbabilityAlert
+	health      []HealthNotice
 }
 
 func (n *fakeNotifier) NotifyBaseline(_ context.Context, notice BaselineNotice) error {
@@ -253,9 +285,41 @@ func (n *fakeNotifier) NotifyLimitWarning(_ context.Context, warning resetwatch.
 	return nil
 }
 
+func (n *fakeNotifier) NotifyRadarProbability(_ context.Context, alert radar.ProbabilityAlert) error {
+	n.radarAlerts = append(n.radarAlerts, alert)
+	return nil
+}
+
 func (n *fakeNotifier) NotifyHealth(_ context.Context, notice HealthNotice) error {
 	n.health = append(n.health, notice)
 	return nil
+}
+
+type fakeRadarFetcher struct {
+	currents []radar.Current
+	index    int
+}
+
+func (f *fakeRadarFetcher) Fetch(context.Context) (radar.Current, error) {
+	if f.index >= len(f.currents) {
+		return f.currents[len(f.currents)-1], nil
+	}
+	current := f.currents[f.index]
+	f.index++
+	return current, nil
+}
+
+func radarCurrent(checkedAt string, probability float64) radar.Current {
+	return radar.Current{
+		SchemaVersion: "1.0",
+		Service:       "codex-reset-radar",
+		CheckedAt:     checkedAt,
+		Status:        "none",
+		Prediction: &radar.Prediction{
+			Level:          "high",
+			Probability24H: probability,
+		},
+	}
 }
 
 func probeResult(weeklyReset, fiveReset string) remote.ProbeResult {

@@ -66,6 +66,40 @@ func TestFetchRejectsHTTPError(t *testing.T) {
 	}
 }
 
+func TestFetchFallsBackToBackupURL(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_version":"1.0","service":"codex-reset-radar","status":"none"}`))
+	}))
+	defer backup.Close()
+	current, err := (Client{URL: primary.URL, BackupURL: backup.URL}).Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("fetch fallback: %v", err)
+	}
+	if current.Service != "codex-reset-radar" {
+		t.Fatalf("unexpected fallback payload: %#v", current)
+	}
+}
+
+func TestProbabilityMilestones(t *testing.T) {
+	tests := map[float64]int{
+		0.24: 0,
+		0.25: 25,
+		0.49: 25,
+		0.50: 50,
+		0.74: 50,
+		0.75: 75,
+	}
+	for probability, want := range tests {
+		if got := ProbabilityMilestone(probability); got != want {
+			t.Fatalf("milestone %.2f: got %d want %d", probability, got, want)
+		}
+	}
+}
+
 func parseTime(value string) time.Time {
 	t, err := time.Parse(time.RFC3339, value)
 	if err != nil {

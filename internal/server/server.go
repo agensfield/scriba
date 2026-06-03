@@ -13,6 +13,7 @@ import (
 
 	"github.com/agensfield/scriba/internal/buildinfo"
 	"github.com/agensfield/scriba/internal/model"
+	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/remote"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
@@ -29,6 +30,7 @@ const (
 	SettingPollFailureCount = "poll_failure_count"
 	SettingPollFailureError = "poll_failure_error"
 	SettingHealthAlertState = "health_alert_state"
+	SettingRadarMilestone   = "radar_probability_milestone"
 	FailureAlertThreshold   = 3
 )
 
@@ -43,6 +45,7 @@ type Store interface {
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
 	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
 	InsertWarningEvents(context.Context, []resetwatch.WarningEvent) ([]resetwatch.WarningEvent, error)
+	InsertRadarAlertEvent(context.Context, radar.ProbabilityAlert) (bool, error)
 	Stats(context.Context) (store.Stats, error)
 }
 
@@ -50,10 +53,15 @@ type Fetcher interface {
 	FetchLimits(context.Context) (remote.ProbeResult, error)
 }
 
+type RadarFetcher interface {
+	Fetch(context.Context) (radar.Current, error)
+}
+
 type Notifier interface {
 	NotifyBaseline(context.Context, BaselineNotice) error
 	NotifyReset(context.Context, resetwatch.Event) error
 	NotifyLimitWarning(context.Context, resetwatch.WarningEvent) error
+	NotifyRadarProbability(context.Context, radar.ProbabilityAlert) error
 	NotifyHealth(context.Context, HealthNotice) error
 }
 
@@ -67,6 +75,7 @@ type Config struct {
 type Server struct {
 	store    Store
 	fetcher  Fetcher
+	radar    RadarFetcher
 	notifier Notifier
 	cfg      Config
 	logger   *slog.Logger
@@ -89,6 +98,7 @@ type PollResult struct {
 	Decision    resetwatch.Decision
 	Inserted    int
 	Warnings    []resetwatch.WarningEvent
+	RadarAlerts []radar.ProbabilityAlert
 	Baseline    bool
 }
 
@@ -157,6 +167,10 @@ func New(st Store, fetcher Fetcher, notifier Notifier, cfg Config) *Server {
 		heartbeat:  cfg.StartupHeartbeat,
 		intervalCh: make(chan struct{}, 1),
 	}
+}
+
+func (s *Server) SetRadarFetcher(fetcher RadarFetcher) {
+	s.radar = fetcher
 }
 
 func (s *Server) SetNotifier(notifier Notifier) {
@@ -441,7 +455,61 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 			s.logger.Warn("scriba limit warning notification failed", "warning_id", warning.ID, "error", err)
 		}
 	}
-	return PollResult{Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, Baseline: baseline}, nil
+	radarAlerts, err := s.pollRadar(ctx)
+	if err != nil {
+		s.logger.Warn("scriba radar poll failed", "error", err)
+	}
+	for _, alert := range radarAlerts {
+		if err := s.notifier.NotifyRadarProbability(ctx, alert); err != nil {
+			s.logger.Warn("scriba radar probability notification failed", "alert_id", alert.ID, "error", err)
+		}
+	}
+	return PollResult{Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, RadarAlerts: radarAlerts, Baseline: baseline}, nil
+}
+
+func (s *Server) pollRadar(ctx context.Context) ([]radar.ProbabilityAlert, error) {
+	if s.radar == nil {
+		return nil, nil
+	}
+	current, err := s.radar.Fetch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	milestone := 0
+	if current.Prediction != nil {
+		milestone = radar.ProbabilityMilestone(current.Prediction.Probability24H)
+	}
+	previous := 0
+	if raw, ok, err := s.store.GetSetting(ctx, SettingRadarMilestone); err != nil {
+		return nil, err
+	} else if ok && strings.TrimSpace(raw) != "" {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil {
+			previous = parsed
+		}
+	}
+	if milestone <= previous {
+		if milestone != previous {
+			if err := s.store.SetSetting(ctx, SettingRadarMilestone, strconv.Itoa(milestone)); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
+	alert, err := radar.NewProbabilityAlert(current, milestone, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	inserted, err := s.store.InsertRadarAlertEvent(ctx, alert)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.SetSetting(ctx, SettingRadarMilestone, strconv.Itoa(milestone)); err != nil {
+		return nil, err
+	}
+	if !inserted {
+		return nil, nil
+	}
+	return []radar.ProbabilityAlert{alert}, nil
 }
 
 func (s *Server) PruneObservations(ctx context.Context, compact bool) (store.PruneResult, error) {
@@ -559,6 +627,10 @@ func (NoopNotifier) NotifyReset(context.Context, resetwatch.Event) error {
 }
 
 func (NoopNotifier) NotifyLimitWarning(context.Context, resetwatch.WarningEvent) error {
+	return nil
+}
+
+func (NoopNotifier) NotifyRadarProbability(context.Context, radar.ProbabilityAlert) error {
 	return nil
 }
 

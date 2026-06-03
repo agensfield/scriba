@@ -12,11 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 type Store struct {
 	db   *sql.DB
@@ -270,6 +271,45 @@ where id = ?`, id).Scan(
 	return warning, true, nil
 }
 
+func (s *Store) InsertRadarAlertEvent(ctx context.Context, alert radar.ProbabilityAlert) (bool, error) {
+	now := formatTime(time.Now())
+	result, err := s.db.ExecContext(ctx, `
+insert into radar_alert_events (
+  id, milestone, probability_24h, probability_48h, level, expected_window,
+  reasoning_summary, checked_at, detected_at, snapshot_json, created_at
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(id) do nothing`,
+		alert.ID, alert.Milestone, alert.Probability24H, alert.Probability48H, alert.Level, alert.ExpectedWindow,
+		alert.ReasoningSummary, alert.CheckedAt, formatTime(alert.DetectedAt), string(alert.SnapshotJSON), now)
+	if err != nil {
+		return false, err
+	}
+	affected, _ := result.RowsAffected()
+	return affected > 0, nil
+}
+
+func (s *Store) LoadRadarAlertEvent(ctx context.Context, id string) (radar.ProbabilityAlert, bool, error) {
+	var alert radar.ProbabilityAlert
+	var detected, snapshot string
+	err := s.db.QueryRowContext(ctx, `
+select id, milestone, probability_24h, probability_48h, level, expected_window,
+  reasoning_summary, checked_at, detected_at, snapshot_json
+from radar_alert_events
+where id = ?`, id).Scan(
+		&alert.ID, &alert.Milestone, &alert.Probability24H, &alert.Probability48H, &alert.Level, &alert.ExpectedWindow,
+		&alert.ReasoningSummary, &alert.CheckedAt, &detected, &snapshot,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return alert, false, nil
+	}
+	if err != nil {
+		return alert, false, err
+	}
+	alert.DetectedAt = parseDBTime(detected)
+	alert.SnapshotJSON = []byte(snapshot)
+	return alert, true, nil
+}
+
 func (s *Store) LoadResetEvent(ctx context.Context, id string) (resetwatch.Event, bool, error) {
 	var event resetwatch.Event
 	var secondaryJSON, prev, current, detected, prevSnapshot, currentSnapshot string
@@ -455,6 +495,26 @@ on conflict(warning_id, target) do nothing`, id, warningID, target, now, now)
 	return delivery, nil
 }
 
+func (s *Store) EnsureRadarAlertDelivery(ctx context.Context, alertID, target string) (Delivery, error) {
+	now := formatTime(time.Now())
+	id := RadarAlertDeliveryID(alertID, target)
+	_, err := s.db.ExecContext(ctx, `
+insert into radar_alert_deliveries (id, alert_id, target, status, attempts, created_at, updated_at)
+values (?, ?, ?, 'pending', 0, ?, ?)
+on conflict(alert_id, target) do nothing`, id, alertID, target, now, now)
+	if err != nil {
+		return Delivery{}, err
+	}
+	delivery, ok, err := s.LoadRadarAlertDelivery(ctx, alertID, target)
+	if err != nil {
+		return Delivery{}, err
+	}
+	if !ok {
+		return Delivery{}, errors.New("radar alert delivery not found after insert")
+	}
+	return delivery, nil
+}
+
 func (s *Store) LoadDelivery(ctx context.Context, eventID, target string) (Delivery, bool, error) {
 	return scanDelivery(s.db.QueryRowContext(ctx, `
 select id, event_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
@@ -466,7 +526,14 @@ func (s *Store) LoadWarningDelivery(ctx context.Context, warningID, target strin
 	return scanDelivery(s.db.QueryRowContext(ctx, `
 select id, warning_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
 from limit_warning_deliveries
-where warning_id = ? and target = ?`, warningID, target))
+	where warning_id = ? and target = ?`, warningID, target))
+}
+
+func (s *Store) LoadRadarAlertDelivery(ctx context.Context, alertID, target string) (Delivery, bool, error) {
+	return scanDelivery(s.db.QueryRowContext(ctx, `
+select id, alert_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
+from radar_alert_deliveries
+where alert_id = ? and target = ?`, alertID, target))
 }
 
 func (s *Store) PendingDeliveries(ctx context.Context, target string, limit int) ([]Delivery, error) {
@@ -501,6 +568,31 @@ func (s *Store) PendingWarningDeliveries(ctx context.Context, target string, lim
 	rows, err := s.db.QueryContext(ctx, `
 select id, warning_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
 from limit_warning_deliveries
+where target = ? and status != 'delivered' and (next_attempt_at is null or next_attempt_at = '' or next_attempt_at <= ?)
+order by coalesce(next_attempt_at, created_at), created_at
+limit ?`, target, formatTime(time.Now()), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var deliveries []Delivery
+	for rows.Next() {
+		delivery, err := scanDeliveryRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, rows.Err()
+}
+
+func (s *Store) PendingRadarAlertDeliveries(ctx context.Context, target string, limit int) ([]Delivery, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+select id, alert_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
+from radar_alert_deliveries
 where target = ? and status != 'delivered' and (next_attempt_at is null or next_attempt_at = '' or next_attempt_at <= ?)
 order by coalesce(next_attempt_at, created_at), created_at
 limit ?`, target, formatTime(time.Now()), limit)
@@ -565,6 +657,29 @@ where warning_id = ? and target = ?`, status, now, nextAttemptAt, deliveredAt, p
 	return err
 }
 
+func (s *Store) MarkRadarAlertDeliveryAttempt(ctx context.Context, alertID, target string, delivered bool, message string, providerMessageID string) error {
+	now := formatTime(time.Now())
+	status := "failed"
+	var deliveredAt any
+	var nextAttemptAt any
+	var lastError any = message
+	if delivered {
+		status = "delivered"
+		deliveredAt = now
+		nextAttemptAt = nil
+		lastError = nil
+	} else {
+		var attempts int
+		_ = s.db.QueryRowContext(ctx, `select attempts from radar_alert_deliveries where alert_id = ? and target = ?`, alertID, target).Scan(&attempts)
+		nextAttemptAt = formatTime(time.Now().Add(deliveryBackoff(attempts + 1)))
+	}
+	_, err := s.db.ExecContext(ctx, `
+update radar_alert_deliveries
+set status = ?, attempts = attempts + 1, last_attempt_at = ?, next_attempt_at = ?, delivered_at = coalesce(?, delivered_at), provider_message_id = coalesce(nullif(?, ''), provider_message_id), last_error = ?, updated_at = ?
+where alert_id = ? and target = ?`, status, now, nextAttemptAt, deliveredAt, providerMessageID, lastError, now, alertID, target)
+	return err
+}
+
 func (s *Store) GetSetting(ctx context.Context, key string) (string, bool, error) {
 	var value string
 	err := s.db.QueryRowContext(ctx, `select value from server_settings where key = ?`, key).Scan(&value)
@@ -617,6 +732,11 @@ func DeliveryID(eventID, target string) string {
 func WarningDeliveryID(warningID, target string) string {
 	sum := sha256.Sum256([]byte(warningID + "\x00" + target))
 	return "warning_delivery_" + hex.EncodeToString(sum[:16])
+}
+
+func RadarAlertDeliveryID(alertID, target string) string {
+	sum := sha256.Sum256([]byte(alertID + "\x00" + target))
+	return "radar_delivery_" + hex.EncodeToString(sum[:16])
 }
 
 type rowScanner interface {

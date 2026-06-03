@@ -1,6 +1,6 @@
 # Scriba Current State
 
-Date: 2026-05-16
+Date: 2026-06-03
 
 Scriba is the first child project under Agensfield. It is a fast, minimal
 Claude Code and Codex usage tracker.
@@ -22,16 +22,25 @@ Claude Code and Codex usage tracker.
   the settings window when available.
 - Packaging supports host-arch and universal app/helper builds. Debug builds use
   a separate bundle identifier from release builds.
+- `scriba server run` is the resident devbox process for live Codex limit
+  polling, reset detection, Telegram commands, warning notifications, health,
+  stats, pruning, and radar probability alerts.
+- `internal/radar` reads `https://codexradar.com/current.json` first and falls
+  back to the old `https://codex-reset-radar.pages.dev/current.json` endpoint.
 
 ## Current Shipping Lane
 
-The next shippable lane is the devbox server and Telegram bot:
+The devbox server and Telegram bot lane is implemented:
 
 - `scriba server run` as one resident process.
 - Live Codex backend limit polling from local Codex auth.
 - SQLite server state.
 - Weekly reset detection from `resetsAt` timestamp advances.
-- Telegram long polling, commands, and reset notifications.
+- Telegram long polling, commands, reset notifications, low-limit warnings,
+  health/recovery alerts, stats, and radar probability milestone alerts.
+- Radar probability alerts fire on upward 24h probability checkpoint crossings
+  at 25%, 50%, and 75%; drops update the stored checkpoint silently so later
+  increases can alert again.
 
 Canonical spec:
 
@@ -49,6 +58,10 @@ Canonical spec:
 - `--redact` removes share-sensitive paths and identifiers from JSON output.
 - Terminal metric rows use a shared label column per rendered provider/output so
   progress bars align across short and long labels.
+- Radar alerts are derived notification state; Codex Radar JSON remains the
+  source of truth.
+- Server unit tests keep radar polling opt-in; the real resident server wires a
+  live radar client in `scriba server run`.
 
 ## Verification
 

@@ -71,6 +71,7 @@ func runServerRun(cfg config.Config, opts options) error {
 		StartupHeartbeat:         heartbeat,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
 	})
+	srv.SetRadarFetcher(radar.Client{})
 	if cfg.Telegram.Enabled {
 		token := cfg.Telegram.BotToken
 		if token == "" {
