@@ -38,6 +38,30 @@ func TestEarlyWeeklyResetEmitsOnce(t *testing.T) {
 	}
 }
 
+func TestLowUsageResetWindowDriftDoesNotEmit(t *testing.T) {
+	prev := seededStateWithUsage("2026-06-04T00:27:48Z", "2026-06-11T00:27:48Z", 0)
+	obs := observation("2026-06-04T00:32:50Z", "2026-06-11T00:32:50Z", "2026-06-04T05:32:50Z")
+	*obs.Windows[0].UsedPercent = 0
+	decision := Decide(obs, prev, testOptions())
+	if len(decision.Events) != 0 {
+		t.Fatalf("expected no drift event, got %#v", decision.Events)
+	}
+	state := stateFor(decision, LabelWeeklyLimit)
+	if state.StableResetAt.Format(time.RFC3339) != "2026-06-11T00:32:50Z" {
+		t.Fatalf("expected stable reset to advance with backend drift, got %s", state.StableResetAt.Format(time.RFC3339))
+	}
+}
+
+func TestUsageDropStillEmitsReset(t *testing.T) {
+	prev := seededStateWithUsage("2026-06-04T00:22:47Z", "2026-06-07T16:39:20Z", 34)
+	obs := observation("2026-06-04T00:27:48Z", "2026-06-11T00:27:48Z", "2026-06-04T05:27:48Z")
+	*obs.Windows[0].UsedPercent = 0
+	decision := Decide(obs, prev, testOptions())
+	if len(decision.Events) != 1 {
+		t.Fatalf("expected reset event after usage drop, got %#v", decision.Events)
+	}
+}
+
 func TestScheduledWeeklyResetEmitsScheduled(t *testing.T) {
 	prev := seededState("2026-05-31T12:00:00Z", "2026-06-06T21:00:00Z")
 	obs := observation("2026-06-06T21:01:00Z", "2026-06-13T21:00:00Z", "2026-06-07T02:00:00Z")
@@ -199,6 +223,26 @@ func seededState(observedAt, weeklyReset string) map[string]WindowState {
 			LastSnapshotJSON: []byte(`{"snapshot":"old"}`),
 		},
 	}
+}
+
+func seededStateWithUsage(observedAt, weeklyReset string, used float64) map[string]WindowState {
+	state := seededState(observedAt, weeklyReset)
+	key := StateKey("acct", LabelWeeklyLimit)
+	weekly := state[key]
+	weekly.LastSnapshotJSON = snapshotWithWeeklyUsage(weeklyReset, used)
+	state[key] = weekly
+	return state
+}
+
+func snapshotWithWeeklyUsage(weeklyReset string, used float64) []byte {
+	limit := 100.0
+	return SnapshotJSON(struct {
+		Lines []model.MetricLine `json:"lines"`
+	}{
+		Lines: []model.MetricLine{
+			{Type: "progress", Label: LabelWeeklyLimit, Used: &used, Limit: &limit, ResetsAt: weeklyReset},
+		},
+	})
 }
 
 func stateFor(decision Decision, label string) WindowState {
