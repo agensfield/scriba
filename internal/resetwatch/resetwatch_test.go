@@ -68,6 +68,22 @@ func TestNearDueSyntheticZeroResetDoesNotEmitOrAdvanceStable(t *testing.T) {
 	}
 }
 
+func TestConsecutiveNearDueSyntheticZeroDoesNotAdvanceStable(t *testing.T) {
+	prev := seededStateWithUsage("2026-06-10T20:18:02Z", "2026-06-11T10:15:21Z", 0)
+	obs := observation("2026-06-10T20:23:02Z", "2026-06-17T20:23:02Z", "2026-06-11T01:23:02Z")
+	*obs.Windows[0].UsedPercent = 0
+	weeklyPeriod := int64((7 * 24 * time.Hour) / time.Millisecond)
+	obs.Windows[0].PeriodDurationMs = &weeklyPeriod
+	decision := Decide(obs, prev, testOptions())
+	if len(decision.Events) != 0 {
+		t.Fatalf("expected no consecutive synthetic zero event, got %#v", decision.Events)
+	}
+	state := stateFor(decision, LabelWeeklyLimit)
+	if state.StableResetAt.Format(time.RFC3339) != "2026-06-11T10:15:21Z" {
+		t.Fatalf("consecutive synthetic zero advanced stable reset: %s", state.StableResetAt.Format(time.RFC3339))
+	}
+}
+
 func TestUsageDropStillEmitsReset(t *testing.T) {
 	prev := seededStateWithUsage("2026-06-04T00:22:47Z", "2026-06-07T16:39:20Z", 34)
 	obs := observation("2026-06-04T00:27:48Z", "2026-06-11T00:27:48Z", "2026-06-04T05:27:48Z")

@@ -270,17 +270,13 @@ func isNearDueSyntheticZeroReset(prev WindowState, current Window, observedAt ti
 	if current.UsedPercent == nil || clampPercent(*current.UsedPercent) > lowUsageResetDriftPercent {
 		return false
 	}
-	prevWindow, ok := snapshotWindow(prev.LastSnapshotJSON, current.Label)
-	if !ok || prevWindow.UsedPercent == nil || prevWindow.ResetAt.IsZero() {
+	if prev.StableResetAt.IsZero() {
 		return false
 	}
-	if clampPercent(*prevWindow.UsedPercent) <= lowUsageResetDriftPercent {
+	if !observedAt.Before(prev.StableResetAt.Add(-opts.DueJitter)) {
 		return false
 	}
-	if !observedAt.Before(prevWindow.ResetAt.Add(-opts.DueJitter)) {
-		return false
-	}
-	if prevWindow.ResetAt.Sub(observedAt) > nearDueZeroResetDriftWindow {
+	if prev.StableResetAt.Sub(observedAt) > nearDueZeroResetDriftWindow {
 		return false
 	}
 	return resetAnchoredAtObservedPeriod(current, observedAt, opts.ClockJitter)
