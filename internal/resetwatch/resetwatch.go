@@ -26,7 +26,8 @@ const (
 	ResetKindScheduled = "scheduled"
 	ResetKindEarly     = "early"
 
-	lowUsageResetDriftPercent = 5
+	lowUsageResetDriftPercent   = 5
+	nearDueZeroResetDriftWindow = 24 * time.Hour
 )
 
 type Window struct {
@@ -140,13 +141,20 @@ func Decide(obs Observation, existing map[string]WindowState, opts Options) Deci
 			continue
 		}
 		if window.ResetAt.After(prev.StableResetAt.Add(opts.ClockJitter)) {
-			next.StableResetAt = window.ResetAt
+			syntheticNearDueZero := false
 			if label == LabelWeeklyLimit {
-				if !isLowUsageResetDrift(prev, window) {
+				syntheticNearDueZero = isNearDueSyntheticZeroReset(prev, window, obs.ObservedAt, opts)
+				if !syntheticNearDueZero {
+					next.StableResetAt = window.ResetAt
+				}
+				if !syntheticNearDueZero && !isLowUsageResetDrift(prev, window) {
 					ev := newEvent(obs, prev, window.ResetAt, opts)
 					event = &ev
 				}
-			} else if event != nil && isSecondaryWeekly(label) {
+			} else {
+				next.StableResetAt = window.ResetAt
+			}
+			if label != LabelWeeklyLimit && event != nil && isSecondaryWeekly(label) {
 				event.SecondaryTriggerLabels = append(event.SecondaryTriggerLabels, label)
 			}
 		}
@@ -250,27 +258,59 @@ func isLowUsageResetDrift(prev WindowState, current Window) bool {
 	if current.UsedPercent == nil {
 		return false
 	}
-	prevUsed, ok := snapshotUsedPercent(prev.LastSnapshotJSON, current.Label)
-	if !ok {
+	prevWindow, ok := snapshotWindow(prev.LastSnapshotJSON, current.Label)
+	if !ok || prevWindow.UsedPercent == nil {
 		return false
 	}
-	return clampPercent(prevUsed) <= lowUsageResetDriftPercent &&
+	return clampPercent(*prevWindow.UsedPercent) <= lowUsageResetDriftPercent &&
 		clampPercent(*current.UsedPercent) <= lowUsageResetDriftPercent
 }
 
-func snapshotUsedPercent(snapshot []byte, label string) (float64, bool) {
+func isNearDueSyntheticZeroReset(prev WindowState, current Window, observedAt time.Time, opts Options) bool {
+	if current.UsedPercent == nil || clampPercent(*current.UsedPercent) > lowUsageResetDriftPercent {
+		return false
+	}
+	prevWindow, ok := snapshotWindow(prev.LastSnapshotJSON, current.Label)
+	if !ok || prevWindow.UsedPercent == nil || prevWindow.ResetAt.IsZero() {
+		return false
+	}
+	if clampPercent(*prevWindow.UsedPercent) <= lowUsageResetDriftPercent {
+		return false
+	}
+	if !observedAt.Before(prevWindow.ResetAt.Add(-opts.DueJitter)) {
+		return false
+	}
+	if prevWindow.ResetAt.Sub(observedAt) > nearDueZeroResetDriftWindow {
+		return false
+	}
+	return resetAnchoredAtObservedPeriod(current, observedAt, opts.ClockJitter)
+}
+
+func resetAnchoredAtObservedPeriod(current Window, observedAt time.Time, tolerance time.Duration) bool {
+	if current.PeriodDurationMs == nil || *current.PeriodDurationMs <= 0 || observedAt.IsZero() || current.ResetAt.IsZero() {
+		return false
+	}
+	expected := observedAt.Add(time.Duration(*current.PeriodDurationMs) * time.Millisecond)
+	delta := current.ResetAt.Sub(expected)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= tolerance
+}
+
+func snapshotWindow(snapshot []byte, label string) (Window, bool) {
 	var decoded struct {
 		Lines []model.MetricLine `json:"lines"`
 	}
 	if err := json.Unmarshal(snapshot, &decoded); err != nil {
-		return 0, false
+		return Window{}, false
 	}
-	for _, line := range decoded.Lines {
-		if line.Type == "progress" && line.Label == label && line.Used != nil {
-			return *line.Used, true
+	for _, window := range FromMetricLines(decoded.Lines) {
+		if window.Label == label {
+			return window, true
 		}
 	}
-	return 0, false
+	return Window{}, false
 }
 
 func warningThreshold(remaining float64) (int, bool) {
