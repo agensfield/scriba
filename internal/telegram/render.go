@@ -18,11 +18,12 @@ import (
 )
 
 func RenderBaseline(notice server.BaselineNotice) string {
-	return "<b>Scriba is alive</b>\nstarted tracking Codex limits.\n" + renderFreshness(notice.ObservedAt) + "\n\n" + renderAccount(notice.Account) + "\n\n" + renderWindows(notice.Windows, "current")
+	grants := resetwatch.ResetGrantsFromSnapshotJSON(notice.SnapshotJSON)
+	return "<b>Scriba is alive</b>\nstarted tracking Codex limits.\n" + renderFreshness(notice.ObservedAt) + "\n\n" + renderAccount(notice.Account) + "\n\n" + renderLimitDetails(notice.Windows, grants, "current")
 }
 
 func RenderLimits(obs resetwatch.Observation) string {
-	return "<b>Codex limits</b>\n" + renderFreshness(obs.ObservedAt) + "\n\n" + renderAccount(obs.Account) + "\n\n" + renderWindows(obs.Windows, "current")
+	return "<b>Codex limits</b>\n" + renderFreshness(obs.ObservedAt) + "\n\n" + renderAccount(obs.Account) + "\n\n" + renderLimitDetails(obs.Windows, obs.ResetGrants, "current")
 }
 
 func RenderReset(event resetwatch.Event) string {
@@ -331,6 +332,31 @@ func renderWindows(windows []resetwatch.Window, rowLabel string) string {
 		b.WriteString(section)
 	}
 	return b.String()
+}
+
+func renderLimitDetails(windows []resetwatch.Window, grants resetwatch.ResetGrants, rowLabel string) string {
+	sections := []string{}
+	if rendered := renderWindows(windows, rowLabel); rendered != "" {
+		sections = append(sections, rendered)
+	}
+	if rendered := renderResetGrants(grants); rendered != "" {
+		sections = append(sections, rendered)
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+func renderResetGrants(grants resetwatch.ResetGrants) string {
+	rows := []string{}
+	if grants.AvailableCount != nil {
+		rows = append(rows, fmt.Sprintf("%-9s %d", "available", *grants.AvailableCount))
+	}
+	if !grants.ExpiresAt.IsZero() {
+		rows = append(rows, fmt.Sprintf("%-9s %s", "expires", formatTime(grants.ExpiresAt)))
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	return "<b>Reset grants</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
 }
 
 func renderBeforeAfter(prev, current []resetwatch.Window) string {

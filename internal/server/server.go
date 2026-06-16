@@ -584,6 +584,7 @@ func (s *Server) observation(result remote.ProbeResult) resetwatch.Observation {
 		Account:      account,
 		ObservedAt:   time.Now().UTC(),
 		Windows:      resetwatch.FromMetricLines(result.Lines),
+		ResetGrants:  resetwatch.ResetGrantsFromMetricLines(result.Lines),
 		SnapshotJSON: resetwatch.SnapshotJSON(result),
 	}
 }

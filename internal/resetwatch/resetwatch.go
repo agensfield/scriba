@@ -22,6 +22,8 @@ const (
 	LabelSparkFive   = "Spark 5h"
 	LabelReviewFive  = "Review 5h"
 	LabelReviewWeek  = "Review weekly"
+	LabelResetGrants = "Reset grants"
+	LabelGrantExpiry = "Grant expiry"
 
 	ResetKindScheduled = "scheduled"
 	ResetKindEarly     = "early"
@@ -49,7 +51,13 @@ type Observation struct {
 	Account      Account
 	ObservedAt   time.Time
 	Windows      []Window
+	ResetGrants  ResetGrants
 	SnapshotJSON []byte
+}
+
+type ResetGrants struct {
+	AvailableCount *int
+	ExpiresAt      time.Time
 }
 
 type WindowState struct {
@@ -192,9 +200,61 @@ func FromMetricLines(lines []model.MetricLine) []Window {
 	return windows
 }
 
+func ResetGrantsFromMetricLines(lines []model.MetricLine) ResetGrants {
+	var grants ResetGrants
+	for _, line := range lines {
+		switch line.Label {
+		case LabelResetGrants:
+			if count, ok := intValue(line.Value); ok {
+				grants.AvailableCount = &count
+			}
+		case LabelGrantExpiry:
+			value, ok := line.Value.(string)
+			if !ok || value == "" {
+				continue
+			}
+			expiresAt, err := time.Parse(time.RFC3339Nano, value)
+			if err != nil {
+				expiresAt, err = time.Parse(time.RFC3339, value)
+			}
+			if err == nil {
+				grants.ExpiresAt = expiresAt.UTC()
+			}
+		}
+	}
+	return grants
+}
+
+func ResetGrantsFromSnapshotJSON(data []byte) ResetGrants {
+	var payload struct {
+		Lines []model.MetricLine `json:"lines"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return ResetGrants{}
+	}
+	return ResetGrantsFromMetricLines(payload.Lines)
+}
+
 func SnapshotJSON(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data
+}
+
+func intValue(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		if math.Trunc(v) == v {
+			return int(v), true
+		}
+	case json.Number:
+		parsed, err := v.Int64()
+		return int(parsed), err == nil
+	}
+	return 0, false
 }
 
 func StateKey(accountRef, label string) string {

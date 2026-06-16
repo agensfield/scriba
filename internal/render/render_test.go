@@ -25,6 +25,17 @@ func TestCodexLimitsHidesSparkLines(t *testing.T) {
 	}
 }
 
+func TestCodexLimitsShowsResetGrants(t *testing.T) {
+	grants := 1.0
+	text := stripANSI(CodexLimits([]model.MetricLine{
+		{Type: "amount", Label: "Reset grants", Value: grants, Format: &model.MetricFormat{Kind: "count", Suffix: "available"}},
+	}, false))
+
+	if !strings.Contains(text, "Reset grants") || !strings.Contains(text, "1 available") {
+		t.Fatalf("expected reset grants to render:\n%s", text)
+	}
+}
+
 func TestStatusHidesSparkLines(t *testing.T) {
 	used := 12.0
 	limit := 100.0

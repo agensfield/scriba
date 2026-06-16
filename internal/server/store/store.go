@@ -376,6 +376,7 @@ limit 1`).Scan(
 		return obs, false, err
 	}
 	obs.Windows = windows
+	obs.ResetGrants = resetwatch.ResetGrantsFromSnapshotJSON(obs.SnapshotJSON)
 	return obs, true, nil
 }
 

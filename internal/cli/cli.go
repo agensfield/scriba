@@ -530,7 +530,8 @@ func filterCodexLimitLines(lines []model.MetricLine) []model.MetricLine {
 			strings.Contains(label, "limit") ||
 			strings.Contains(label, "spark") ||
 			strings.Contains(label, "review") ||
-			strings.Contains(label, "credit") {
+			strings.Contains(label, "credit") ||
+			strings.Contains(label, "grant") {
 			filtered = append(filtered, line)
 		}
 	}

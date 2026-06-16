@@ -49,6 +49,10 @@ func TestRenderLimitsUsesHTMLSectionsAndFreshness(t *testing.T) {
 	text := RenderLimits(resetwatch.Observation{
 		Account:    resetwatch.Account{Label: "personal", Email: "arda@example.com", Plan: "prolite"},
 		ObservedAt: parseTime("2026-06-01T00:00:00Z"),
+		ResetGrants: resetwatch.ResetGrants{
+			AvailableCount: ptrInt(1),
+			ExpiresAt:      parseTimeNano("2026-07-12T01:20:48.728491Z"),
+		},
 		Windows: []resetwatch.Window{
 			{Label: resetwatch.LabelWeeklyLimit, UsedPercent: ptrFloat(3), ResetAt: parseTime("2026-06-07T16:39:00Z")},
 			{Label: resetwatch.LabelFiveHour, UsedPercent: ptrFloat(6), ResetAt: parseTime("2026-06-01T02:39:00Z")},
@@ -63,6 +67,9 @@ func TestRenderLimitsUsesHTMLSectionsAndFreshness(t *testing.T) {
 		"Weekly",
 		"5h",
 		"▰▱▱▱▱▱▱▱▱▱",
+		"<b>Reset grants</b>",
+		"available 1",
+		"expires",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("render missing %q in:\n%s", want, text)
@@ -187,6 +194,10 @@ func TestLimitsCommandUsesCachedObservation(t *testing.T) {
 		latest: resetwatch.Observation{
 			Account:    resetwatch.Account{Label: "personal"},
 			ObservedAt: parseTime("2026-06-01T00:00:00Z"),
+			ResetGrants: resetwatch.ResetGrants{
+				AvailableCount: ptrInt(1),
+				ExpiresAt:      parseTimeNano("2026-07-12T01:20:48.728491Z"),
+			},
 			Windows: []resetwatch.Window{
 				{Label: resetwatch.LabelWeeklyLimit, UsedPercent: ptrFloat(3), ResetAt: parseTime("2026-06-07T16:39:00Z")},
 			},
@@ -197,6 +208,9 @@ func TestLimitsCommandUsesCachedObservation(t *testing.T) {
 	reply, _ := svc.handleCommand(context.Background(), "/limits")
 	if !strings.Contains(reply, "<b>Codex limits</b>") {
 		t.Fatalf("unexpected limits reply: %s", reply)
+	}
+	if !strings.Contains(reply, "<b>Reset grants</b>") || !strings.Contains(reply, "available 1") {
+		t.Fatalf("limits reply missing reset grants: %s", reply)
 	}
 	if controller.refreshes != 0 {
 		t.Fatalf("/limits should not force refresh, got %d refreshes", controller.refreshes)
@@ -326,6 +340,18 @@ func parseTime(value string) time.Time {
 	return t.UTC()
 }
 
+func parseTimeNano(value string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		panic(err)
+	}
+	return t.UTC()
+}
+
 func ptrFloat(value float64) *float64 {
+	return &value
+}
+
+func ptrInt(value int) *int {
 	return &value
 }

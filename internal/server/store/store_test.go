@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
 )
@@ -94,6 +95,12 @@ func TestApplyDecisionStoresObservationWindowsAndDedupesEvents(t *testing.T) {
 	}
 	if len(latest.Windows) != 2 {
 		t.Fatalf("expected two latest windows, got %#v", latest.Windows)
+	}
+	if latest.ResetGrants.AvailableCount == nil || *latest.ResetGrants.AvailableCount != 1 {
+		t.Fatalf("expected latest reset grants from snapshot, got %#v", latest.ResetGrants)
+	}
+	if got := latest.ResetGrants.ExpiresAt.Format(time.RFC3339Nano); got != "2026-07-12T01:20:48.728491Z" {
+		t.Fatalf("unexpected latest grant expiry: %s", got)
 	}
 }
 
@@ -409,6 +416,7 @@ func countRows(t *testing.T, store *Store, table string) int {
 func observation(observedAt, weeklyReset, fiveReset string) resetwatch.Observation {
 	weekly := 51.0
 	five := 96.0
+	grants := 1.0
 	return resetwatch.Observation{
 		ProviderID: "codex",
 		Account:    resetwatch.Account{Ref: "acct", Label: "personal", Email: "arda@example.com", Plan: "Plus"},
@@ -417,7 +425,14 @@ func observation(observedAt, weeklyReset, fiveReset string) resetwatch.Observati
 			{Label: resetwatch.LabelWeeklyLimit, UsedPercent: &weekly, ResetAt: parseTime(weeklyReset)},
 			{Label: resetwatch.LabelFiveHour, UsedPercent: &five, ResetAt: parseTime(fiveReset)},
 		},
-		SnapshotJSON: []byte(`{"snapshot":true}`),
+		SnapshotJSON: resetwatch.SnapshotJSON(struct {
+			Lines []model.MetricLine `json:"lines"`
+		}{
+			Lines: []model.MetricLine{
+				{Type: "amount", Label: resetwatch.LabelResetGrants, Value: grants, Format: &model.MetricFormat{Kind: "count", Suffix: "available"}},
+				{Type: "text", Label: resetwatch.LabelGrantExpiry, Value: "2026-07-12T01:20:48.728491Z"},
+			},
+		}),
 	}
 }
 

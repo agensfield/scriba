@@ -25,6 +25,9 @@ Claude Code and Codex usage tracker.
 - `scriba server run` is the resident devbox process for live Codex limit
   polling, reset detection, Telegram commands, warning notifications, health,
   stats, pruning, and radar probability alerts.
+- Codex limit polling reads explicit additional-rate-limit buckets, including
+  Spark, and exposes the available reset-grant count plus earliest available
+  grant expiry when the ChatGPT backend exposes reset-credit metadata.
 - `internal/radar` reads `https://codexradar.com/current.json` first and falls
   back to the old `https://codex-reset-radar.pages.dev/current.json` endpoint.
 

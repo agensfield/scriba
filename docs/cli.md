@@ -80,8 +80,12 @@ Report commands support `--since` and `--until`, accepting full timestamps or
 `scriba codex limits` skips local log scanning and only fetches Codex usage
 windows from the logged-in ChatGPT/Codex backend. It reads Codex OAuth state
 from `${CODEX_HOME:-~/.codex}/auth.json`; OpenAI API key auth cannot expose
-these ChatGPT subscription windows. Pass `--fast` to read the last cached
-`scriba status` snapshot instead of making a network request.
+these ChatGPT subscription windows. The live payload includes primary Codex
+windows, explicit additional model windows such as Spark, and the available
+rate-limit reset grant count. When the read-only reset-credit metadata endpoint
+answers, Scriba also shows the earliest available grant expiry. Pass `--fast`
+to read the last cached `scriba status` snapshot instead of making a network
+request.
 
 Human metric output aligns labels within each rendered provider/output, so
 progress bars start in the same column even when labels differ in length.
