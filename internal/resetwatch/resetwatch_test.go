@@ -209,6 +209,56 @@ func TestWarningCandidatesSkipComfortableUsage(t *testing.T) {
 	}
 }
 
+func TestResetGrantsFromSnapshotJSONKeepsPerCreditExpiry(t *testing.T) {
+	grants := ResetGrantsFromSnapshotJSON([]byte(`{
+		"lines": [
+			{"type":"amount","label":"Reset grants","value":2},
+			{"type":"text","label":"Grant expiry","value":"2026-07-13T01:20:48Z"}
+		],
+		"resetCredits": [
+			{"id":"redeemed","status":"redeemed","expiresAt":"2026-07-01T00:00:00Z"},
+			{"id":"credit_2","status":"available","title":"Rate limit reset","grantedAt":"2026-06-13T01:20:48Z","expiresAt":"2026-07-13T01:20:48Z"},
+			{"id":"credit_1","status":"available","title":"Rate limit reset","grantedAt":"2026-06-12T01:20:48Z","expiresAt":"2026-07-12T01:20:48Z"}
+		]
+	}`))
+	if grants.AvailableCount == nil || *grants.AvailableCount != 2 {
+		t.Fatalf("unexpected count: %#v", grants.AvailableCount)
+	}
+	if got := grants.ExpiresAt.Format(time.RFC3339); got != "2026-07-12T01:20:48Z" {
+		t.Fatalf("unexpected earliest expiry: %s", got)
+	}
+	if len(grants.Credits) != 2 || grants.Credits[0].ID != "credit_2" || grants.Credits[1].ID != "credit_1" {
+		t.Fatalf("unexpected credits: %#v", grants.Credits)
+	}
+}
+
+func TestGrantExpiryWarningCandidatesUsePerCreditThresholds(t *testing.T) {
+	obs := observation("2026-06-01T12:00:00Z", "2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")
+	obs.ResetGrants = ResetGrants{
+		Credits: []ResetCredit{
+			{ID: "credit_1", Status: "available", Title: "Rate limit reset", ExpiresAt: parseTime("2026-06-06T11:00:00Z")},
+			{ID: "credit_2", Status: "available", Title: "Rate limit reset", ExpiresAt: parseTime("2026-06-04T11:00:00Z")},
+			{ID: "credit_3", Status: "redeemed", Title: "Rate limit reset", ExpiresAt: parseTime("2026-06-02T11:00:00Z")},
+		},
+	}
+	warnings := GrantExpiryWarningCandidates(obs)
+	if len(warnings) != 3 {
+		t.Fatalf("expected three warnings, got %#v", warnings)
+	}
+	if warnings[0].CreditID != "credit_2" || warnings[0].ThresholdDays != 5 {
+		t.Fatalf("unexpected first warning: %#v", warnings[0])
+	}
+	if warnings[1].CreditID != "credit_2" || warnings[1].ThresholdDays != 3 {
+		t.Fatalf("unexpected second warning: %#v", warnings[1])
+	}
+	if warnings[2].CreditID != "credit_1" || warnings[2].ThresholdDays != 5 {
+		t.Fatalf("unexpected third warning: %#v", warnings[2])
+	}
+	if warnings[0].ID == warnings[1].ID || warnings[1].ID == warnings[2].ID {
+		t.Fatalf("warning IDs should be per credit and threshold: %#v", warnings)
+	}
+}
+
 func TestCatalogJokeChooserIsDeterministicAndToneAware(t *testing.T) {
 	event := Event{ID: "reset_test"}
 	chooser := CatalogJokeChooser{

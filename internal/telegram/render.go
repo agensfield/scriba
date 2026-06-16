@@ -83,6 +83,33 @@ func RenderLimitWarning(warning resetwatch.WarningEvent) string {
 	return b.String()
 }
 
+func RenderGrantExpiryWarning(warning resetwatch.GrantExpiryWarning) string {
+	var b strings.Builder
+	b.WriteString("<b>Codex reset grant expiry</b>\n")
+	b.WriteString(renderAccount(warning.Account))
+	b.WriteString("\n\n")
+	rows := []string{
+		fmt.Sprintf("%-10s %dd", "checkpoint", warning.ThresholdDays),
+		fmt.Sprintf("%-10s %s", "expires", formatGrantExpiry(warning.ExpiresAt)),
+	}
+	if left := warning.ExpiresAt.Sub(warning.DetectedAt); !warning.DetectedAt.IsZero() && left > 0 {
+		rows = append(rows, fmt.Sprintf("%-10s %s", "left", formatGrantTimeLeft(left)))
+	}
+	if warning.CreditTitle != "" {
+		rows = append(rows, fmt.Sprintf("%-10s %s", "grant", warning.CreditTitle))
+	}
+	if warning.CreditID != "" {
+		rows = append(rows, fmt.Sprintf("%-10s %s", "id", shortID(warning.CreditID)))
+	}
+	if !warning.DetectedAt.IsZero() {
+		rows = append(rows, fmt.Sprintf("%-10s %s", "seen", formatFreshTime(warning.DetectedAt)))
+	}
+	b.WriteString("<pre>")
+	b.WriteString(html.EscapeString(strings.Join(rows, "\n")))
+	b.WriteString("</pre>")
+	return b.String()
+}
+
 func RenderRadarProbability(alert radar.ProbabilityAlert) string {
 	rows := []string{
 		fmt.Sprintf("%-12s %d%%", "checkpoint", alert.Milestone),
@@ -144,8 +171,10 @@ func RenderStats(stats server.Stats, environment string, telegramEnabled bool) s
 	b.WriteString("\n\n")
 	b.WriteString(renderDeliveryStats("Warning deliveries", stats.Store.WarningDeliveries))
 	b.WriteString("\n\n")
+	b.WriteString(renderDeliveryStats("Grant warning deliveries", stats.Store.GrantWarningDeliveries))
+	b.WriteString("\n\n")
 	b.WriteString(renderDeliveryStats("Radar deliveries", stats.Store.RadarDeliveries))
-	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil {
+	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil || stats.Store.LastGrantWarning != nil {
 		b.WriteString("\n\n")
 		b.WriteString(renderRecentStats(stats.Store))
 	}
@@ -232,6 +261,7 @@ func renderStorageStats(stats store.Stats) string {
 		fmt.Sprintf("%-13s %d", "tracked win", counts["limit_windows"]),
 		fmt.Sprintf("%-13s %d", "resets", counts["reset_events"]),
 		fmt.Sprintf("%-13s %d", "warnings", counts["limit_warning_events"]),
+		fmt.Sprintf("%-13s %d", "grant warn", counts["reset_grant_warning_events"]),
 		fmt.Sprintf("%-13s %d", "radar", counts["radar_alert_events"]),
 	}
 	return "<b>Storage</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
@@ -253,6 +283,9 @@ func renderRecentStats(stats store.Stats) string {
 	}
 	if stats.LastWarning != nil {
 		rows = append(rows, fmt.Sprintf("%-8s %s · %d%% left · %s", "warning", sectionLabel(stats.LastWarning.Label), stats.LastWarning.ThresholdRemaining, formatFreshTime(stats.LastWarning.DetectedAt)))
+	}
+	if stats.LastGrantWarning != nil {
+		rows = append(rows, fmt.Sprintf("%-8s %dd · %s · %s", "grant", stats.LastGrantWarning.ThresholdDays, formatGrantExpiry(stats.LastGrantWarning.ExpiresAt), formatFreshTime(stats.LastGrantWarning.DetectedAt)))
 	}
 	return "<b>Recent</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
 }
@@ -481,4 +514,24 @@ func formatGrantExpiry(t time.Time) string {
 		return "unknown"
 	}
 	return t.UTC().Format("2006-01-02 15:04 UTC")
+}
+
+func formatGrantTimeLeft(d time.Duration) string {
+	d = d.Round(time.Hour)
+	if d < 24*time.Hour {
+		hours := int(math.Ceil(d.Hours()))
+		if hours < 1 {
+			hours = 1
+		}
+		return fmt.Sprintf("%dh", hours)
+	}
+	days := int(math.Ceil(d.Hours() / 24))
+	return fmt.Sprintf("%dd", days)
+}
+
+func shortID(value string) string {
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
 }

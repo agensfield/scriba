@@ -12,8 +12,18 @@ type AuthState struct {
 }
 
 type ProbeResult struct {
-	ProviderID string                   `json:"providerId"`
-	Lines      []model.MetricLine       `json:"lines"`
-	Provenance []model.SourceProvenance `json:"provenance"`
-	AuthState  AuthState                `json:"authState"`
+	ProviderID   string                   `json:"providerId"`
+	Lines        []model.MetricLine       `json:"lines"`
+	ResetCredits []ResetCredit            `json:"resetCredits,omitempty"`
+	Provenance   []model.SourceProvenance `json:"provenance"`
+	AuthState    AuthState                `json:"authState"`
+}
+
+type ResetCredit struct {
+	ID        string `json:"id,omitempty"`
+	Status    string `json:"status,omitempty"`
+	ResetType string `json:"resetType,omitempty"`
+	Title     string `json:"title,omitempty"`
+	GrantedAt string `json:"grantedAt,omitempty"`
+	ExpiresAt string `json:"expiresAt,omitempty"`
 }

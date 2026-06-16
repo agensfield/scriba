@@ -49,15 +49,19 @@ func TestLinesFromUsageResponseShowsResetCreditExpiry(t *testing.T) {
 		AvailableCount: 1,
 		Credits: []resetCredit{
 			{Status: "redeemed", ExpiresAt: "2026-07-01T00:00:00Z"},
-			{Status: "available", GrantedAt: "2026-06-12T01:20:48.728491Z", ExpiresAt: "2026-07-12T01:20:48.728491Z"},
-			{Status: "available", GrantedAt: "2026-06-13T01:20:48.728491Z", ExpiresAt: "2026-07-13T01:20:48.728491Z"},
+			{ID: "credit_1", Status: "available", ResetType: "rate_limit_reset", Title: "Rate limit reset", GrantedAt: "2026-06-12T01:20:48.728491Z", ExpiresAt: "2026-07-12T01:20:48.728491Z"},
+			{ID: "credit_2", Status: "available", ResetType: "rate_limit_reset", Title: "Rate limit reset", GrantedAt: "2026-06-13T01:20:48.728491Z", ExpiresAt: "2026-07-13T01:20:48.728491Z"},
 		},
 	}
 
 	lines := linesFromUsageResponse(parsed, resetCredits, true)
+	remoteCredits := remoteResetCredits(resetCredits, true)
 
 	assertAmount(t, lines, "Reset grants", 1, "available")
 	assertText(t, lines, "Grant expiry", "2026-07-12T01:20:48.728491Z")
+	if len(remoteCredits) != 3 || remoteCredits[1].ID != "credit_1" || remoteCredits[1].ResetType != "rate_limit_reset" {
+		t.Fatalf("unexpected remote credits: %#v", remoteCredits)
+	}
 }
 
 func assertProgress(t *testing.T, lines []model.MetricLine, label string, used float64, resetsAt string) {

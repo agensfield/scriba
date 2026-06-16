@@ -58,6 +58,16 @@ type Observation struct {
 type ResetGrants struct {
 	AvailableCount *int
 	ExpiresAt      time.Time
+	Credits        []ResetCredit
+}
+
+type ResetCredit struct {
+	ID        string
+	Status    string
+	ResetType string
+	Title     string
+	GrantedAt time.Time
+	ExpiresAt time.Time
 }
 
 type WindowState struct {
@@ -95,6 +105,18 @@ type WarningEvent struct {
 	ResetAt            time.Time
 	SnapshotJSON       []byte
 	DetectedAt         time.Time
+}
+
+type GrantExpiryWarning struct {
+	ID            string
+	ProviderID    string
+	Account       Account
+	CreditID      string
+	CreditTitle   string
+	ThresholdDays int
+	ExpiresAt     time.Time
+	SnapshotJSON  []byte
+	DetectedAt    time.Time
 }
 
 type Decision struct {
@@ -227,12 +249,46 @@ func ResetGrantsFromMetricLines(lines []model.MetricLine) ResetGrants {
 
 func ResetGrantsFromSnapshotJSON(data []byte) ResetGrants {
 	var payload struct {
-		Lines []model.MetricLine `json:"lines"`
+		Lines        []model.MetricLine `json:"lines"`
+		ResetCredits []struct {
+			ID        string `json:"id"`
+			Status    string `json:"status"`
+			ResetType string `json:"resetType"`
+			Title     string `json:"title"`
+			GrantedAt string `json:"grantedAt"`
+			ExpiresAt string `json:"expiresAt"`
+		} `json:"resetCredits"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return ResetGrants{}
 	}
-	return ResetGrantsFromMetricLines(payload.Lines)
+	grants := ResetGrantsFromMetricLines(payload.Lines)
+	for _, credit := range payload.ResetCredits {
+		if credit.Status != "" && credit.Status != "available" {
+			continue
+		}
+		expiresAt, ok := parseRFC3339Time(credit.ExpiresAt)
+		if !ok {
+			continue
+		}
+		grantedAt, _ := parseRFC3339Time(credit.GrantedAt)
+		grants.Credits = append(grants.Credits, ResetCredit{
+			ID:        credit.ID,
+			Status:    credit.Status,
+			ResetType: credit.ResetType,
+			Title:     credit.Title,
+			GrantedAt: grantedAt,
+			ExpiresAt: expiresAt,
+		})
+		if grants.ExpiresAt.IsZero() || expiresAt.Before(grants.ExpiresAt) {
+			grants.ExpiresAt = expiresAt
+		}
+	}
+	if grants.AvailableCount == nil && len(grants.Credits) > 0 {
+		count := len(grants.Credits)
+		grants.AvailableCount = &count
+	}
+	return grants
 }
 
 func SnapshotJSON(value any) []byte {
@@ -282,6 +338,17 @@ func WarningEventID(providerID, accountRef, label string, resetAt time.Time, thr
 	return "warning_" + hex.EncodeToString(sum[:16])
 }
 
+func GrantExpiryWarningID(providerID, accountRef, creditID string, expiresAt time.Time, thresholdDays int) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		providerID,
+		accountRef,
+		creditID,
+		expiresAt.UTC().Format(time.RFC3339Nano),
+		fmt.Sprintf("%d", thresholdDays),
+	}, "\x00")))
+	return "grant_warning_" + hex.EncodeToString(sum[:16])
+}
+
 func WarningCandidates(obs Observation) []WarningEvent {
 	labels := []string{LabelFiveHour, LabelWeeklyLimit}
 	byLabel := windowsByLabel(obs.Windows)
@@ -314,6 +381,61 @@ func WarningCandidates(obs Observation) []WarningEvent {
 	return warnings
 }
 
+func GrantExpiryWarningCandidates(obs Observation) []GrantExpiryWarning {
+	now := obs.ObservedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	thresholds := []int{5, 3, 1}
+	warnings := []GrantExpiryWarning{}
+	for _, credit := range obs.ResetGrants.Credits {
+		if credit.Status != "" && credit.Status != "available" {
+			continue
+		}
+		if credit.ExpiresAt.IsZero() || !credit.ExpiresAt.After(now) {
+			continue
+		}
+		creditID := credit.ID
+		if creditID == "" {
+			creditID = resetCreditFallbackID(credit)
+		}
+		remaining := credit.ExpiresAt.Sub(now)
+		for _, thresholdDays := range thresholds {
+			if remaining > time.Duration(thresholdDays)*24*time.Hour {
+				continue
+			}
+			warning := GrantExpiryWarning{
+				ProviderID:    providerID(obs.ProviderID),
+				Account:       obs.Account,
+				CreditID:      creditID,
+				CreditTitle:   credit.Title,
+				ThresholdDays: thresholdDays,
+				ExpiresAt:     credit.ExpiresAt,
+				SnapshotJSON:  cloneBytes(obs.SnapshotJSON),
+				DetectedAt:    now,
+			}
+			warning.ID = GrantExpiryWarningID(warning.ProviderID, warning.Account.Ref, warning.CreditID, warning.ExpiresAt, warning.ThresholdDays)
+			warnings = append(warnings, warning)
+		}
+	}
+	sort.SliceStable(warnings, func(i, j int) bool {
+		if !warnings[i].ExpiresAt.Equal(warnings[j].ExpiresAt) {
+			return warnings[i].ExpiresAt.Before(warnings[j].ExpiresAt)
+		}
+		return warnings[i].ThresholdDays > warnings[j].ThresholdDays
+	})
+	return warnings
+}
+
+func resetCreditFallbackID(credit ResetCredit) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		credit.Title,
+		credit.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		credit.GrantedAt.UTC().Format(time.RFC3339Nano),
+	}, "\x00")))
+	return "credit_" + hex.EncodeToString(sum[:8])
+}
+
 func isLowUsageResetDrift(prev WindowState, current Window) bool {
 	if current.UsedPercent == nil {
 		return false
@@ -324,6 +446,20 @@ func isLowUsageResetDrift(prev WindowState, current Window) bool {
 	}
 	return clampPercent(*prevWindow.UsedPercent) <= lowUsageResetDriftPercent &&
 		clampPercent(*current.UsedPercent) <= lowUsageResetDriftPercent
+}
+
+func parseRFC3339Time(value string) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, value)
+	}
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed.UTC(), true
 }
 
 func isNearDueSyntheticZeroReset(prev WindowState, current Window, observedAt time.Time, opts Options) bool {

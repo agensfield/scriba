@@ -23,11 +23,14 @@ Claude Code and Codex usage tracker.
 - Packaging supports host-arch and universal app/helper builds. Debug builds use
   a separate bundle identifier from release builds.
 - `scriba server run` is the resident devbox process for live Codex limit
-  polling, reset detection, Telegram commands, warning notifications, health,
-  stats, pruning, and radar probability alerts.
+  polling, reset detection, Telegram commands, limit/grant warning
+  notifications, health, stats, pruning, and radar probability alerts.
 - Codex limit polling reads explicit additional-rate-limit buckets, including
   Spark, and exposes the available reset-grant count plus earliest available
   grant expiry when the ChatGPT backend exposes reset-credit metadata.
+- Telegram reset-grant expiry alerts are tracked per available grant credit and
+  fire once at the 5-day, 3-day, and 1-day checkpoints before each credit's own
+  `expires_at`.
 - `scriba codex summary` appends live Codex limit/reset-grant metadata unless
   `--no-remote` is passed.
 - `internal/radar` reads `https://codexradar.com/current.json` first and falls
@@ -42,7 +45,8 @@ The devbox server and Telegram bot lane is implemented:
 - SQLite server state.
 - Weekly reset detection from `resetsAt` timestamp advances.
 - Telegram long polling, commands, reset notifications, low-limit warnings,
-  health/recovery alerts, stats, and radar probability milestone alerts.
+  reset-grant expiry warnings, health/recovery alerts, stats, and radar
+  probability milestone alerts.
 - Radar probability alerts fire on upward 24h probability checkpoint crossings
   at 25%, 50%, and 75%; drops update the stored checkpoint silently so later
   increases can alert again.

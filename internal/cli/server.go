@@ -287,13 +287,25 @@ func serverRefreshPayload(result servercore.PollResult) map[string]any {
 			"detectedAt":         warning.DetectedAt,
 		})
 	}
+	grantWarnings := make([]map[string]any, 0, len(result.GrantWarnings))
+	for _, warning := range result.GrantWarnings {
+		grantWarnings = append(grantWarnings, map[string]any{
+			"id":            warning.ID,
+			"creditId":      warning.CreditID,
+			"creditTitle":   warning.CreditTitle,
+			"thresholdDays": warning.ThresholdDays,
+			"expiresAt":     warning.ExpiresAt,
+			"detectedAt":    warning.DetectedAt,
+		})
+	}
 	return map[string]any{
-		"baseline": result.Baseline,
-		"inserted": result.Inserted,
-		"account":  result.Observation.Account,
-		"windows":  result.Observation.Windows,
-		"events":   events,
-		"warnings": warnings,
+		"baseline":      result.Baseline,
+		"inserted":      result.Inserted,
+		"account":       result.Observation.Account,
+		"windows":       result.Observation.Windows,
+		"events":        events,
+		"warnings":      warnings,
+		"grantWarnings": grantWarnings,
 	}
 }
 
@@ -371,12 +383,15 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 		fmt.Sprintf("%-13s %d", "tracked win", counts["limit_windows"]),
 		fmt.Sprintf("%-13s %d", "resets", counts["reset_events"]),
 		fmt.Sprintf("%-13s %d", "warnings", counts["limit_warning_events"]),
+		fmt.Sprintf("%-13s %d", "grant warn", counts["reset_grant_warning_events"]),
 	})
 	b.WriteString("\nReset deliveries\n")
 	writeDeliveryRows(&b, stats.Store.ResetDeliveries)
 	b.WriteString("\nWarning deliveries\n")
 	writeDeliveryRows(&b, stats.Store.WarningDeliveries)
-	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil {
+	b.WriteString("\nGrant warning deliveries\n")
+	writeDeliveryRows(&b, stats.Store.GrantWarningDeliveries)
+	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil || stats.Store.LastGrantWarning != nil {
 		b.WriteString("\nRecent\n")
 		var rows []string
 		if stats.Store.LastReset != nil {
@@ -386,6 +401,10 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 		if stats.Store.LastWarning != nil {
 			warning := stats.Store.LastWarning
 			rows = append(rows, fmt.Sprintf("%-13s %s · %d%% left · %s", "warning", warning.Label, warning.ThresholdRemaining, formatCLIStatsTime(warning.DetectedAt)))
+		}
+		if stats.Store.LastGrantWarning != nil {
+			warning := stats.Store.LastGrantWarning
+			rows = append(rows, fmt.Sprintf("%-13s %dd · %s · %s", "grant", warning.ThresholdDays, warning.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC"), formatCLIStatsTime(warning.DetectedAt)))
 		}
 		writeRows(&b, rows)
 	}

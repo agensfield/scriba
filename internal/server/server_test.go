@@ -115,6 +115,34 @@ func TestRefreshEmitsLimitWarningsOncePerCheckpoint(t *testing.T) {
 	}
 }
 
+func TestRefreshEmitsGrantExpiryWarningsOncePerCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	expiresAt := time.Now().UTC().Add(23 * time.Hour).Format(time.RFC3339Nano)
+	fetcher := &fakeFetcher{results: []remote.ProbeResult{
+		probeResultWithGrant("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z", expiresAt),
+		probeResultWithGrant("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z", expiresAt),
+	}}
+	notifier := &fakeNotifier{}
+	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal"})
+	first, err := srv.RefreshNow(ctx)
+	if err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	if len(first.GrantWarnings) != 3 {
+		t.Fatalf("expected three grant warnings, got %#v", first.GrantWarnings)
+	}
+	if len(notifier.grantWarnings) != 3 {
+		t.Fatalf("expected grant warning notifications, got %d", len(notifier.grantWarnings))
+	}
+	second, err := srv.RefreshNow(ctx)
+	if err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if len(second.GrantWarnings) != 0 || len(notifier.grantWarnings) != 3 {
+		t.Fatalf("expected deduped grant warnings, result=%#v notifications=%d", second.GrantWarnings, len(notifier.grantWarnings))
+	}
+}
+
 func TestRefreshEmitsRadarProbabilityAlertsOnUpwardMilestones(t *testing.T) {
 	ctx := context.Background()
 	fetcher := &fakeFetcher{results: []remote.ProbeResult{
@@ -263,11 +291,12 @@ func (f fakeFetcherFunc) FetchLimits(ctx context.Context) (remote.ProbeResult, e
 }
 
 type fakeNotifier struct {
-	baselines   []BaselineNotice
-	resets      []resetwatch.Event
-	warnings    []resetwatch.WarningEvent
-	radarAlerts []radar.ProbabilityAlert
-	health      []HealthNotice
+	baselines     []BaselineNotice
+	resets        []resetwatch.Event
+	warnings      []resetwatch.WarningEvent
+	grantWarnings []resetwatch.GrantExpiryWarning
+	radarAlerts   []radar.ProbabilityAlert
+	health        []HealthNotice
 }
 
 func (n *fakeNotifier) NotifyBaseline(_ context.Context, notice BaselineNotice) error {
@@ -282,6 +311,11 @@ func (n *fakeNotifier) NotifyReset(_ context.Context, event resetwatch.Event) er
 
 func (n *fakeNotifier) NotifyLimitWarning(_ context.Context, warning resetwatch.WarningEvent) error {
 	n.warnings = append(n.warnings, warning)
+	return nil
+}
+
+func (n *fakeNotifier) NotifyGrantExpiryWarning(_ context.Context, warning resetwatch.GrantExpiryWarning) error {
+	n.grantWarnings = append(n.grantWarnings, warning)
 	return nil
 }
 
@@ -340,4 +374,12 @@ func probeResult(weeklyReset, fiveReset string) remote.ProbeResult {
 			{Type: "progress", Label: resetwatch.LabelWeeklyLimit, Used: &weeklyUsed, Limit: &limit, ResetsAt: weeklyReset},
 		},
 	}
+}
+
+func probeResultWithGrant(weeklyReset, fiveReset, expiresAt string) remote.ProbeResult {
+	result := probeResult(weeklyReset, fiveReset)
+	result.ResetCredits = []remote.ResetCredit{
+		{ID: "credit_1", Status: "available", Title: "Rate limit reset", GrantedAt: "2026-05-07T12:00:00Z", ExpiresAt: expiresAt},
+	}
+	return result
 }

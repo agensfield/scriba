@@ -20,6 +20,7 @@ import (
 	localcodex "github.com/agensfield/scriba/internal/local/codex"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/privacy"
+	"github.com/agensfield/scriba/internal/remote"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/render"
 	"github.com/agensfield/scriba/internal/reports"
@@ -507,6 +508,7 @@ func liveCodexLimitsPayload() (codexLimitsPayload, error) {
 		Source:        "chatgpt-codex-backend",
 		Mode:          "live",
 		Lines:         filterCodexLimitLines(result.Lines),
+		ResetCredits:  result.ResetCredits,
 		Provenance:    result.Provenance,
 		AuthState:     result.AuthState,
 	}, nil
@@ -519,6 +521,7 @@ type codexLimitsPayload struct {
 	Mode          string                   `json:"mode"`
 	GeneratedAt   string                   `json:"generatedAt,omitempty"`
 	Lines         []model.MetricLine       `json:"lines"`
+	ResetCredits  []remote.ResetCredit     `json:"resetCredits,omitempty"`
 	Provenance    []model.SourceProvenance `json:"provenance,omitempty"`
 	AuthState     any                      `json:"authState,omitempty"`
 }

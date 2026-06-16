@@ -58,7 +58,10 @@ type resetCreditsResponse struct {
 }
 
 type resetCredit struct {
+	ID        string `json:"id"`
 	Status    string `json:"status"`
+	ResetType string `json:"reset_type"`
+	Title     string `json:"title"`
 	GrantedAt string `json:"granted_at"`
 	ExpiresAt string `json:"expires_at"`
 }
@@ -128,10 +131,11 @@ func FetchLimits(ctx context.Context, client *http.Client) (remote.ProbeResult, 
 	}
 	resetCredits, resetCreditsOK := fetchResetCreditsIfAvailable(ctx, client, auth, parsed)
 	return remote.ProbeResult{
-		ProviderID: "codex",
-		Lines:      linesFromUsageResponse(parsed, resetCredits, resetCreditsOK),
-		Provenance: []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", FetchedAt: now}},
-		AuthState:  auth,
+		ProviderID:   "codex",
+		Lines:        linesFromUsageResponse(parsed, resetCredits, resetCreditsOK),
+		ResetCredits: remoteResetCredits(resetCredits, resetCreditsOK),
+		Provenance:   []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", FetchedAt: now}},
+		AuthState:    auth,
 	}, nil
 }
 
@@ -266,6 +270,24 @@ func earliestAvailableResetExpiry(credits []resetCredit) string {
 		return ""
 	}
 	return earliest.UTC().Format(time.RFC3339Nano)
+}
+
+func remoteResetCredits(resetCredits resetCreditsResponse, ok bool) []remote.ResetCredit {
+	if !ok || len(resetCredits.Credits) == 0 {
+		return nil
+	}
+	credits := make([]remote.ResetCredit, 0, len(resetCredits.Credits))
+	for _, credit := range resetCredits.Credits {
+		credits = append(credits, remote.ResetCredit{
+			ID:        credit.ID,
+			Status:    credit.Status,
+			ResetType: credit.ResetType,
+			Title:     credit.Title,
+			GrantedAt: credit.GrantedAt,
+			ExpiresAt: credit.ExpiresAt,
+		})
+	}
+	return credits
 }
 
 type usageHTTPError struct {

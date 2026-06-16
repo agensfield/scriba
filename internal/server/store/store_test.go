@@ -231,6 +231,61 @@ func TestWarningEventsAndDeliveriesDedupe(t *testing.T) {
 	}
 }
 
+func TestGrantExpiryWarningEventsAndDeliveriesDedupe(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	warning := resetwatch.GrantExpiryWarning{
+		ID:            resetwatch.GrantExpiryWarningID("codex", "acct", "credit_1", parseTime("2026-07-12T01:20:48Z"), 5),
+		ProviderID:    "codex",
+		Account:       resetwatch.Account{Ref: "acct", Label: "personal", Email: "arda@example.com", Plan: "Plus"},
+		CreditID:      "credit_1",
+		CreditTitle:   "Rate limit reset",
+		ThresholdDays: 5,
+		ExpiresAt:     parseTime("2026-07-12T01:20:48Z"),
+		SnapshotJSON:  []byte(`{"snapshot":true}`),
+		DetectedAt:    parseTime("2026-07-07T01:20:48Z"),
+	}
+	inserted, err := store.InsertGrantExpiryWarningEvents(ctx, []resetwatch.GrantExpiryWarning{warning})
+	if err != nil {
+		t.Fatalf("insert grant warning: %v", err)
+	}
+	if len(inserted) != 1 {
+		t.Fatalf("expected inserted grant warning, got %#v", inserted)
+	}
+	inserted, err = store.InsertGrantExpiryWarningEvents(ctx, []resetwatch.GrantExpiryWarning{warning})
+	if err != nil {
+		t.Fatalf("reinsert grant warning: %v", err)
+	}
+	if len(inserted) != 0 {
+		t.Fatalf("expected grant warning dedupe, got %#v", inserted)
+	}
+	loaded, ok, err := store.LoadGrantExpiryWarningEvent(ctx, warning.ID)
+	if err != nil || !ok || loaded.ThresholdDays != 5 || loaded.CreditID != "credit_1" {
+		t.Fatalf("unexpected loaded grant warning: %#v ok=%v err=%v", loaded, ok, err)
+	}
+	delivery, err := store.EnsureGrantExpiryWarningDelivery(ctx, warning.ID, "telegram:123")
+	if err != nil {
+		t.Fatalf("ensure grant warning delivery: %v", err)
+	}
+	if delivery.Status != "pending" || delivery.EventID != warning.ID {
+		t.Fatalf("unexpected grant warning delivery: %#v", delivery)
+	}
+	if err := store.MarkGrantExpiryWarningDeliveryAttempt(ctx, warning.ID, "telegram:123", true, "", "77"); err != nil {
+		t.Fatalf("mark grant warning delivered: %v", err)
+	}
+	delivered, ok, err := store.LoadGrantExpiryWarningDelivery(ctx, warning.ID, "telegram:123")
+	if err != nil || !ok || delivered.ProviderMessageID != "77" {
+		t.Fatalf("unexpected grant warning delivered row: %#v ok=%v err=%v", delivered, ok, err)
+	}
+	pending, err := store.PendingGrantExpiryWarningDeliveries(ctx, "telegram:123", 10)
+	if err != nil {
+		t.Fatalf("pending grant warning deliveries: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending grant warnings, got %#v", pending)
+	}
+}
+
 func TestRadarAlertEventsAndDeliveries(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
@@ -366,6 +421,22 @@ func TestStatsSummarizesStorageDeliveriesAndRecentRows(t *testing.T) {
 	if _, err := store.InsertWarningEvents(ctx, []resetwatch.WarningEvent{warning}); err != nil {
 		t.Fatalf("insert warning: %v", err)
 	}
+	grantWarning := resetwatch.GrantExpiryWarning{
+		ID:            resetwatch.GrantExpiryWarningID("codex", "acct", "credit_1", parseTime("2026-07-12T01:20:48Z"), 5),
+		ProviderID:    "codex",
+		Account:       resetwatch.Account{Ref: "acct", Label: "personal", Email: "arda@example.com", Plan: "Plus"},
+		CreditID:      "credit_1",
+		ThresholdDays: 5,
+		ExpiresAt:     parseTime("2026-07-12T01:20:48Z"),
+		SnapshotJSON:  []byte(`{"snapshot":true}`),
+		DetectedAt:    parseTime("2026-07-07T01:20:48Z"),
+	}
+	if _, err := store.InsertGrantExpiryWarningEvents(ctx, []resetwatch.GrantExpiryWarning{grantWarning}); err != nil {
+		t.Fatalf("insert grant warning: %v", err)
+	}
+	if _, err := store.EnsureGrantExpiryWarningDelivery(ctx, grantWarning.ID, "telegram:123"); err != nil {
+		t.Fatalf("ensure grant warning delivery: %v", err)
+	}
 
 	stats, err := store.Stats(ctx)
 	if err != nil {
@@ -388,6 +459,9 @@ func TestStatsSummarizesStorageDeliveriesAndRecentRows(t *testing.T) {
 	}
 	if stats.LastWarning == nil || stats.LastWarning.ThresholdRemaining != 5 {
 		t.Fatalf("unexpected last warning: %#v", stats.LastWarning)
+	}
+	if stats.LastGrantWarning == nil || stats.LastGrantWarning.ThresholdDays != 5 {
+		t.Fatalf("unexpected last grant warning: %#v", stats.LastGrantWarning)
 	}
 	if stats.DBFiles.MainBytes == 0 {
 		t.Fatalf("expected db file size, got %#v", stats.DBFiles)

@@ -90,6 +90,11 @@ request.
 `scriba codex summary` keeps the local usage summary and, unless `--no-remote`
 is passed, appends the same live Codex limits and reset-grant metadata.
 
+The resident server stores every available reset credit from the read-only
+metadata endpoint when present. Telegram grant-expiry warnings are deduped by
+grant id, expiry timestamp, and checkpoint, and fire once at 5 days, 3 days,
+and 1 day before that grant's own expiry.
+
 Human metric output aligns labels within each rendered provider/output, so
 progress bars start in the same column even when labels differ in length.
 

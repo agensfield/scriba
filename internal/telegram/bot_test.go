@@ -108,6 +108,29 @@ func TestRenderLimitWarningShowsCheckpoint(t *testing.T) {
 	}
 }
 
+func TestRenderGrantExpiryWarningShowsExpiryCheckpoint(t *testing.T) {
+	text := RenderGrantExpiryWarning(resetwatch.GrantExpiryWarning{
+		Account:       resetwatch.Account{Label: "personal", Email: "arda@example.com", Plan: "prolite"},
+		CreditID:      "credit_1234567890",
+		CreditTitle:   "Rate limit reset",
+		ThresholdDays: 5,
+		ExpiresAt:     parseTime("2026-07-12T01:20:48Z"),
+		DetectedAt:    parseTime("2026-07-07T02:20:48Z"),
+	})
+	for _, want := range []string{
+		"<b>Codex reset grant expiry</b>",
+		"checkpoint 5d",
+		"expires    2026-07-12 01:20 UTC",
+		"left       5d",
+		"grant      Rate limit reset",
+		"id         credit_12345",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("render missing %q in:\n%s", want, text)
+		}
+	}
+}
+
 func TestRenderRadarProbabilityUsesEnglishSummary(t *testing.T) {
 	text := RenderRadarProbability(radar.ProbabilityAlert{
 		Milestone:        50,
@@ -159,6 +182,7 @@ func TestRenderStatsShowsStorageFreshnessAndDeliveries(t *testing.T) {
 		"<b>Reset deliveries</b>",
 		"delivered",
 		"<b>Warning deliveries</b>",
+		"<b>Grant warning deliveries</b>",
 		"<b>Recent</b>",
 	} {
 		if !strings.Contains(text, want) {
@@ -289,14 +313,16 @@ func storeStatsFixture() store.Stats {
 		SchemaVersion: 3,
 		DBFiles:       store.DBFileStats{MainBytes: 1024, WALBytes: 512, TotalBytes: 1536},
 		Counts: map[string]int64{
-			"accounts":                 1,
-			"limit_observations":       9,
-			"observed_windows":         36,
-			"limit_windows":            4,
-			"reset_events":             2,
-			"limit_warning_events":     3,
-			"notification_deliveries":  2,
-			"limit_warning_deliveries": 3,
+			"accounts":                       1,
+			"limit_observations":             9,
+			"observed_windows":               36,
+			"limit_windows":                  4,
+			"reset_events":                   2,
+			"limit_warning_events":           3,
+			"reset_grant_warning_events":     1,
+			"notification_deliveries":        2,
+			"limit_warning_deliveries":       3,
+			"reset_grant_warning_deliveries": 1,
 		},
 		ResetDeliveries: map[string]store.DeliveryCounts{
 			"delivered": {Count: 2, Attempts: 2},
@@ -304,6 +330,9 @@ func storeStatsFixture() store.Stats {
 		WarningDeliveries: map[string]store.DeliveryCounts{
 			"pending":   {Count: 1, Attempts: 0},
 			"delivered": {Count: 2, Attempts: 2},
+		},
+		GrantWarningDeliveries: map[string]store.DeliveryCounts{
+			"pending": {Count: 1, Attempts: 0},
 		},
 		LatestObservation: &store.ObservationSummary{
 			ObservedAt:   parseTime("2026-06-01T00:00:00Z"),
@@ -321,6 +350,12 @@ func storeStatsFixture() store.Stats {
 			Label:              resetwatch.LabelFiveHour,
 			ThresholdRemaining: 5,
 			DetectedAt:         parseTime("2026-06-01T00:00:00Z"),
+		},
+		LastGrantWarning: &store.GrantWarningSummary{
+			CreditID:      "credit_1",
+			ThresholdDays: 5,
+			ExpiresAt:     parseTime("2026-07-12T01:20:48Z"),
+			DetectedAt:    parseTime("2026-07-07T01:20:48Z"),
 		},
 	}
 }

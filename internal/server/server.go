@@ -45,6 +45,7 @@ type Store interface {
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
 	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
 	InsertWarningEvents(context.Context, []resetwatch.WarningEvent) ([]resetwatch.WarningEvent, error)
+	InsertGrantExpiryWarningEvents(context.Context, []resetwatch.GrantExpiryWarning) ([]resetwatch.GrantExpiryWarning, error)
 	InsertRadarAlertEvent(context.Context, radar.ProbabilityAlert) (bool, error)
 	Stats(context.Context) (store.Stats, error)
 }
@@ -61,6 +62,7 @@ type Notifier interface {
 	NotifyBaseline(context.Context, BaselineNotice) error
 	NotifyReset(context.Context, resetwatch.Event) error
 	NotifyLimitWarning(context.Context, resetwatch.WarningEvent) error
+	NotifyGrantExpiryWarning(context.Context, resetwatch.GrantExpiryWarning) error
 	NotifyRadarProbability(context.Context, radar.ProbabilityAlert) error
 	NotifyHealth(context.Context, HealthNotice) error
 }
@@ -94,12 +96,13 @@ type BaselineNotice struct {
 }
 
 type PollResult struct {
-	Observation resetwatch.Observation
-	Decision    resetwatch.Decision
-	Inserted    int
-	Warnings    []resetwatch.WarningEvent
-	RadarAlerts []radar.ProbabilityAlert
-	Baseline    bool
+	Observation   resetwatch.Observation
+	Decision      resetwatch.Decision
+	Inserted      int
+	Warnings      []resetwatch.WarningEvent
+	GrantWarnings []resetwatch.GrantExpiryWarning
+	RadarAlerts   []radar.ProbabilityAlert
+	Baseline      bool
 }
 
 type HealthStatus string
@@ -443,6 +446,10 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 	if err != nil {
 		return PollResult{}, err
 	}
+	grantWarnings, err := s.store.InsertGrantExpiryWarningEvents(ctx, resetwatch.GrantExpiryWarningCandidates(obs))
+	if err != nil {
+		return PollResult{}, err
+	}
 	if inserted > 0 {
 		for _, event := range decision.Events {
 			if err := s.notifier.NotifyReset(ctx, event); err != nil {
@@ -455,6 +462,11 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 			s.logger.Warn("scriba limit warning notification failed", "warning_id", warning.ID, "error", err)
 		}
 	}
+	for _, warning := range grantWarnings {
+		if err := s.notifier.NotifyGrantExpiryWarning(ctx, warning); err != nil {
+			s.logger.Warn("scriba reset grant warning notification failed", "warning_id", warning.ID, "error", err)
+		}
+	}
 	radarAlerts, err := s.pollRadar(ctx)
 	if err != nil {
 		s.logger.Warn("scriba radar poll failed", "error", err)
@@ -464,7 +476,7 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 			s.logger.Warn("scriba radar probability notification failed", "alert_id", alert.ID, "error", err)
 		}
 	}
-	return PollResult{Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, RadarAlerts: radarAlerts, Baseline: baseline}, nil
+	return PollResult{Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, GrantWarnings: grantWarnings, RadarAlerts: radarAlerts, Baseline: baseline}, nil
 }
 
 func (s *Server) pollRadar(ctx context.Context) ([]radar.ProbabilityAlert, error) {
@@ -579,13 +591,14 @@ func (s *Server) observation(result remote.ProbeResult) resetwatch.Observation {
 		Email: auth.Email,
 		Plan:  plan,
 	}
+	snapshotJSON := resetwatch.SnapshotJSON(result)
 	return resetwatch.Observation{
 		ProviderID:   resetwatch.ProviderCodex,
 		Account:      account,
 		ObservedAt:   time.Now().UTC(),
 		Windows:      resetwatch.FromMetricLines(result.Lines),
-		ResetGrants:  resetwatch.ResetGrantsFromMetricLines(result.Lines),
-		SnapshotJSON: resetwatch.SnapshotJSON(result),
+		ResetGrants:  resetwatch.ResetGrantsFromSnapshotJSON(snapshotJSON),
+		SnapshotJSON: snapshotJSON,
 	}
 }
 
@@ -628,6 +641,10 @@ func (NoopNotifier) NotifyReset(context.Context, resetwatch.Event) error {
 }
 
 func (NoopNotifier) NotifyLimitWarning(context.Context, resetwatch.WarningEvent) error {
+	return nil
+}
+
+func (NoopNotifier) NotifyGrantExpiryWarning(context.Context, resetwatch.GrantExpiryWarning) error {
 	return nil
 }
 
