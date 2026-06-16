@@ -87,6 +87,9 @@ answers, Scriba also shows the earliest available grant expiry. Pass `--fast`
 to read the last cached `scriba status` snapshot instead of making a network
 request.
 
+`scriba codex summary` keeps the local usage summary and, unless `--no-remote`
+is passed, appends the same live Codex limits and reset-grant metadata.
+
 Human metric output aligns labels within each rendered provider/output, so
 progress bars start in the same column even when labels differ in length.
 

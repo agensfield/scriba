@@ -69,7 +69,7 @@ func TestRenderLimitsUsesHTMLSectionsAndFreshness(t *testing.T) {
 		"▰▱▱▱▱▱▱▱▱▱",
 		"<b>Reset grants</b>",
 		"available 1",
-		"expires",
+		"expires   2026-07-12 01:20 UTC",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("render missing %q in:\n%s", want, text)

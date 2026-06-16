@@ -28,6 +28,8 @@ Claude Code and Codex usage tracker.
 - Codex limit polling reads explicit additional-rate-limit buckets, including
   Spark, and exposes the available reset-grant count plus earliest available
   grant expiry when the ChatGPT backend exposes reset-credit metadata.
+- `scriba codex summary` appends live Codex limit/reset-grant metadata unless
+  `--no-remote` is passed.
 - `internal/radar` reads `https://codexradar.com/current.json` first and falls
   back to the old `https://codex-reset-radar.pages.dev/current.json` endpoint.
 

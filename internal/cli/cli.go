@@ -429,9 +429,17 @@ func runReport(provider, command string, opts options) error {
 	filtered := reports.ApplyFilters(events, reports.Filters{Since: opts.since, Until: opts.until})
 	payload := map[string]any{"providerId": provider, "stats": stats}
 	var rows any
+	var limits *codexLimitsPayload
 	switch command {
 	case "summary":
 		rows = reports.Daily(filtered, true)
+		if provider == "codex" && !opts.noRemote {
+			remoteLimits, err := liveCodexLimitsPayload()
+			if err != nil {
+				return err
+			}
+			limits = &remoteLimits
+		}
 	case "daily":
 		rows = reports.Daily(filtered, true)
 	case "weekly":
@@ -449,7 +457,12 @@ func runReport(provider, command string, opts options) error {
 		return fmt.Errorf("unknown report: %s", command)
 	}
 	payload["rows"] = rows
-	return output(opts, payload, render.Report(title(provider)+" "+title(command), rowCount(rows)))
+	human := render.Report(title(provider)+" "+title(command), rowCount(rows))
+	if limits != nil {
+		payload["limits"] = limits
+		human += "\n\n" + render.CodexLimits(limits.Lines, false)
+	}
+	return output(opts, payload, human)
 }
 
 func runCodexLimits(opts options) error {
@@ -476,11 +489,19 @@ func runCodexLimits(opts options) error {
 		}
 		return output(opts, payload, render.CodexLimits(payload.Lines, true))
 	}
-	result, err := remotecodex.Probe(true)
+	payload, err := liveCodexLimitsPayload()
 	if err != nil {
 		return err
 	}
-	payload := codexLimitsPayload{
+	return output(opts, payload, render.CodexLimits(payload.Lines, false))
+}
+
+func liveCodexLimitsPayload() (codexLimitsPayload, error) {
+	result, err := remotecodex.Probe(true)
+	if err != nil {
+		return codexLimitsPayload{}, err
+	}
+	return codexLimitsPayload{
 		SchemaVersion: model.SchemaVersion,
 		ProviderID:    result.ProviderID,
 		Source:        "chatgpt-codex-backend",
@@ -488,8 +509,7 @@ func runCodexLimits(opts options) error {
 		Lines:         filterCodexLimitLines(result.Lines),
 		Provenance:    result.Provenance,
 		AuthState:     result.AuthState,
-	}
-	return output(opts, payload, render.CodexLimits(payload.Lines, false))
+	}, nil
 }
 
 type codexLimitsPayload struct {

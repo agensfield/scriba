@@ -351,7 +351,7 @@ func renderResetGrants(grants resetwatch.ResetGrants) string {
 		rows = append(rows, fmt.Sprintf("%-9s %d", "available", *grants.AvailableCount))
 	}
 	if !grants.ExpiresAt.IsZero() {
-		rows = append(rows, fmt.Sprintf("%-9s %s", "expires", formatTime(grants.ExpiresAt)))
+		rows = append(rows, fmt.Sprintf("%-9s %s", "expires", formatGrantExpiry(grants.ExpiresAt)))
 	}
 	if len(rows) == 0 {
 		return ""
@@ -474,4 +474,11 @@ func formatTime(t time.Time) string {
 		return "unknown"
 	}
 	return t.Local().Format("Mon 15:04")
+}
+
+func formatGrantExpiry(t time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	return t.UTC().Format("2006-01-02 15:04 UTC")
 }
