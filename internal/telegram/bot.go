@@ -44,18 +44,22 @@ type OffsetStore interface {
 
 type DeliveryStore interface {
 	EnsureDelivery(context.Context, string, string) (store.Delivery, error)
+	MarkDeliverySending(context.Context, string, string) error
 	MarkDeliveryAttempt(context.Context, string, string, bool, string, string) error
 	PendingDeliveries(context.Context, string, int) ([]store.Delivery, error)
 	LoadResetEvent(context.Context, string) (resetwatch.Event, bool, error)
 	EnsureWarningDelivery(context.Context, string, string) (store.Delivery, error)
+	MarkWarningDeliverySending(context.Context, string, string) error
 	MarkWarningDeliveryAttempt(context.Context, string, string, bool, string, string) error
 	PendingWarningDeliveries(context.Context, string, int) ([]store.Delivery, error)
 	LoadWarningEvent(context.Context, string) (resetwatch.WarningEvent, bool, error)
 	EnsureGrantExpiryWarningDelivery(context.Context, string, string) (store.Delivery, error)
+	MarkGrantExpiryWarningDeliverySending(context.Context, string, string) error
 	MarkGrantExpiryWarningDeliveryAttempt(context.Context, string, string, bool, string, string) error
 	PendingGrantExpiryWarningDeliveries(context.Context, string, int) ([]store.Delivery, error)
 	LoadGrantExpiryWarningEvent(context.Context, string) (resetwatch.GrantExpiryWarning, bool, error)
 	EnsureRadarAlertDelivery(context.Context, string, string) (store.Delivery, error)
+	MarkRadarAlertDeliverySending(context.Context, string, string) error
 	MarkRadarAlertDeliveryAttempt(context.Context, string, string, bool, string, string) error
 	PendingRadarAlertDeliveries(context.Context, string, int) ([]store.Delivery, error)
 	LoadRadarAlertEvent(context.Context, string) (radar.ProbabilityAlert, bool, error)
@@ -140,6 +144,9 @@ func (s *Service) NotifyReset(ctx context.Context, event resetwatch.Event) error
 		if _, err := s.deliveries.EnsureDelivery(ctx, event.ID, target); err != nil {
 			return err
 		}
+		if err := s.deliveries.MarkDeliverySending(ctx, event.ID, target); err != nil {
+			return err
+		}
 	}
 	message, err := s.send(ctx, RenderReset(event), nil)
 	if s.deliveries == nil {
@@ -160,6 +167,9 @@ func (s *Service) NotifyLimitWarning(ctx context.Context, warning resetwatch.War
 	target := s.target()
 	if s.deliveries != nil {
 		if _, err := s.deliveries.EnsureWarningDelivery(ctx, warning.ID, target); err != nil {
+			return err
+		}
+		if err := s.deliveries.MarkWarningDeliverySending(ctx, warning.ID, target); err != nil {
 			return err
 		}
 	}
@@ -184,6 +194,9 @@ func (s *Service) NotifyGrantExpiryWarning(ctx context.Context, warning resetwat
 		if _, err := s.deliveries.EnsureGrantExpiryWarningDelivery(ctx, warning.ID, target); err != nil {
 			return err
 		}
+		if err := s.deliveries.MarkGrantExpiryWarningDeliverySending(ctx, warning.ID, target); err != nil {
+			return err
+		}
 	}
 	message, err := s.send(ctx, RenderGrantExpiryWarning(warning), nil)
 	if s.deliveries == nil {
@@ -204,6 +217,9 @@ func (s *Service) NotifyRadarProbability(ctx context.Context, alert radar.Probab
 	target := s.target()
 	if s.deliveries != nil {
 		if _, err := s.deliveries.EnsureRadarAlertDelivery(ctx, alert.ID, target); err != nil {
+			return err
+		}
+		if err := s.deliveries.MarkRadarAlertDeliverySending(ctx, alert.ID, target); err != nil {
 			return err
 		}
 	}
@@ -442,6 +458,9 @@ func (s *Service) retryDeliveriesOnce(ctx context.Context) {
 		if err != nil || !ok {
 			continue
 		}
+		if err := s.deliveries.MarkDeliverySending(ctx, delivery.EventID, target); err != nil {
+			continue
+		}
 		message, err := s.send(ctx, RenderReset(event), nil)
 		if err != nil {
 			_ = s.deliveries.MarkDeliveryAttempt(ctx, delivery.EventID, target, false, err.Error(), "")
@@ -460,6 +479,9 @@ func (s *Service) retryDeliveriesOnce(ctx context.Context) {
 	for _, delivery := range warningDeliveries {
 		warning, ok, err := s.deliveries.LoadWarningEvent(ctx, delivery.EventID)
 		if err != nil || !ok {
+			continue
+		}
+		if err := s.deliveries.MarkWarningDeliverySending(ctx, delivery.EventID, target); err != nil {
 			continue
 		}
 		message, err := s.send(ctx, RenderLimitWarning(warning), nil)
@@ -482,6 +504,9 @@ func (s *Service) retryDeliveriesOnce(ctx context.Context) {
 		if err != nil || !ok {
 			continue
 		}
+		if err := s.deliveries.MarkGrantExpiryWarningDeliverySending(ctx, delivery.EventID, target); err != nil {
+			continue
+		}
 		message, err := s.send(ctx, RenderGrantExpiryWarning(warning), nil)
 		if err != nil {
 			_ = s.deliveries.MarkGrantExpiryWarningDeliveryAttempt(ctx, delivery.EventID, target, false, err.Error(), "")
@@ -500,6 +525,9 @@ func (s *Service) retryDeliveriesOnce(ctx context.Context) {
 	for _, delivery := range radarDeliveries {
 		alert, ok, err := s.deliveries.LoadRadarAlertEvent(ctx, delivery.EventID)
 		if err != nil || !ok {
+			continue
+		}
+		if err := s.deliveries.MarkRadarAlertDeliverySending(ctx, delivery.EventID, target); err != nil {
 			continue
 		}
 		message, err := s.send(ctx, RenderRadarProbability(alert), mainKeyboard())
@@ -549,7 +577,7 @@ func (s *Service) send(ctx context.Context, text string, markup models.ReplyMark
 		s.logger.Info("telegram send completed", "duration", time.Since(started).Round(time.Millisecond), "formatted", parseMode(text) != "")
 		return message, nil
 	}
-	if parseMode(text) == "" {
+	if parseMode(text) == "" || isUncertainSendError(err) {
 		return message, err
 	}
 	s.logger.Warn("telegram formatted send failed; retrying plain text", "error", err)
@@ -562,6 +590,20 @@ func (s *Service) send(ctx context.Context, text string, markup models.ReplyMark
 		s.logger.Info("telegram send completed", "duration", time.Since(started).Round(time.Millisecond), "formatted", false, "fallback", true)
 	}
 	return message, err
+}
+
+func isUncertainSendError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "context deadline exceeded") ||
+		strings.Contains(message, "client.timeout") ||
+		strings.Contains(message, "i/o timeout") ||
+		strings.Contains(message, "timeout awaiting")
 }
 
 func (s *Service) authorized(update *models.Update) bool {

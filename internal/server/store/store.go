@@ -19,6 +19,8 @@ import (
 
 const SchemaVersion = 5
 
+const deliverySendLease = 10 * time.Minute
+
 type Store struct {
 	db   *sql.DB
 	path string
@@ -743,6 +745,10 @@ where event_id = ? and target = ?`, status, now, nextAttemptAt, deliveredAt, pro
 	return err
 }
 
+func (s *Store) MarkDeliverySending(ctx context.Context, eventID, target string) error {
+	return s.markDeliverySending(ctx, "notification_deliveries", "event_id", eventID, target)
+}
+
 func (s *Store) MarkWarningDeliveryAttempt(ctx context.Context, warningID, target string, delivered bool, message string, providerMessageID string) error {
 	now := formatTime(time.Now())
 	status := "failed"
@@ -764,6 +770,10 @@ update limit_warning_deliveries
 set status = ?, attempts = attempts + 1, last_attempt_at = ?, next_attempt_at = ?, delivered_at = coalesce(?, delivered_at), provider_message_id = coalesce(nullif(?, ''), provider_message_id), last_error = ?, updated_at = ?
 where warning_id = ? and target = ?`, status, now, nextAttemptAt, deliveredAt, providerMessageID, lastError, now, warningID, target)
 	return err
+}
+
+func (s *Store) MarkWarningDeliverySending(ctx context.Context, warningID, target string) error {
+	return s.markDeliverySending(ctx, "limit_warning_deliveries", "warning_id", warningID, target)
 }
 
 func (s *Store) MarkGrantExpiryWarningDeliveryAttempt(ctx context.Context, warningID, target string, delivered bool, message string, providerMessageID string) error {
@@ -789,6 +799,10 @@ where warning_id = ? and target = ?`, status, now, nextAttemptAt, deliveredAt, p
 	return err
 }
 
+func (s *Store) MarkGrantExpiryWarningDeliverySending(ctx context.Context, warningID, target string) error {
+	return s.markDeliverySending(ctx, "reset_grant_warning_deliveries", "warning_id", warningID, target)
+}
+
 func (s *Store) MarkRadarAlertDeliveryAttempt(ctx context.Context, alertID, target string, delivered bool, message string, providerMessageID string) error {
 	now := formatTime(time.Now())
 	status := "failed"
@@ -809,6 +823,20 @@ func (s *Store) MarkRadarAlertDeliveryAttempt(ctx context.Context, alertID, targ
 update radar_alert_deliveries
 set status = ?, attempts = attempts + 1, last_attempt_at = ?, next_attempt_at = ?, delivered_at = coalesce(?, delivered_at), provider_message_id = coalesce(nullif(?, ''), provider_message_id), last_error = ?, updated_at = ?
 where alert_id = ? and target = ?`, status, now, nextAttemptAt, deliveredAt, providerMessageID, lastError, now, alertID, target)
+	return err
+}
+
+func (s *Store) MarkRadarAlertDeliverySending(ctx context.Context, alertID, target string) error {
+	return s.markDeliverySending(ctx, "radar_alert_deliveries", "alert_id", alertID, target)
+}
+
+func (s *Store) markDeliverySending(ctx context.Context, table, idColumn, eventID, target string) error {
+	now := formatTime(time.Now())
+	nextAttemptAt := formatTime(time.Now().Add(deliverySendLease))
+	_, err := s.db.ExecContext(ctx, `
+update `+table+`
+set status = 'sending', last_attempt_at = ?, next_attempt_at = ?, last_error = null, updated_at = ?
+where `+idColumn+` = ? and target = ? and status != 'delivered'`, now, nextAttemptAt, now, eventID, target)
 	return err
 }
 

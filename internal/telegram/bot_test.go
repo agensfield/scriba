@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -246,6 +247,21 @@ func TestStripTelegramHTMLFallback(t *testing.T) {
 	got := stripTelegramHTML(text)
 	if got != "Codex limits\nWeekly <ok>" {
 		t.Fatalf("unexpected stripped text: %q", got)
+	}
+}
+
+func TestUncertainSendErrorSkipsPlainTextFallback(t *testing.T) {
+	for _, err := range []error{
+		context.DeadlineExceeded,
+		errors.New(`error do request for method sendMessage, Post "https://api.telegram.org/bot***/sendMessage": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`),
+		errors.New("read tcp 127.0.0.1:123->1.2.3.4:443: i/o timeout"),
+	} {
+		if !isUncertainSendError(err) {
+			t.Fatalf("expected uncertain send error for %v", err)
+		}
+	}
+	if isUncertainSendError(errors.New("Bad Request: can't parse entities")) {
+		t.Fatal("formatting errors should still allow plain text fallback")
 	}
 }
 

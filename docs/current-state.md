@@ -31,6 +31,9 @@ Claude Code and Codex usage tracker.
 - Telegram reset-grant expiry alerts are tracked per available grant credit and
   fire once at the 5-day, 3-day, and 1-day checkpoints before each credit's own
   `expires_at`.
+- Telegram delivery rows are leased as `sending` before network sends, so the
+  retry loop cannot concurrently resend an in-flight notification. Send
+  timeouts are treated as ambiguous and do not trigger HTML-to-plain fallback.
 - `scriba codex summary` appends live Codex limit/reset-grant metadata unless
   `--no-remote` is passed.
 - `internal/radar` reads `https://codexradar.com/current.json` first and falls
