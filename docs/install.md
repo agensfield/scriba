@@ -2,6 +2,47 @@
 
 Scriba is distributed as one Go binary named `scriba`.
 
+## Homebrew
+
+Recommended for macOS developers:
+
+```sh
+brew install agensfield/tap/scriba
+scriba --version
+scriba doctor
+```
+
+The tap lives at [agensfield/homebrew-tap](https://github.com/agensfield/homebrew-tap).
+
+## Install Script
+
+Recommended for macOS/Linux machines without Homebrew:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/agensfield/scriba/main/scripts/install.sh | sh
+```
+
+The script detects `darwin`/`linux` and `arm64`/`amd64`, downloads the matching
+GitHub release tarball, verifies it against `checksums.txt`, and installs
+`scriba` to:
+
+1. `$SCRIBA_INSTALL_DIR`, when set
+2. `$GOBIN`, when set
+3. `$GOPATH/bin`, when set
+4. `~/.local/bin`
+
+Pin a version:
+
+```sh
+SCRIBA_VERSION=v0.2.1 curl -fsSL https://raw.githubusercontent.com/agensfield/scriba/main/scripts/install.sh | sh
+```
+
+Choose an install directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/agensfield/scriba/main/scripts/install.sh | SCRIBA_INSTALL_DIR=/usr/local/bin sh
+```
+
 ## Go Install
 
 Requires Go 1.26 or newer:
@@ -15,7 +56,7 @@ scriba doctor
 For a pinned release:
 
 ```sh
-go install github.com/agensfield/scriba/cmd/scriba@v0.2.0
+go install github.com/agensfield/scriba/cmd/scriba@v0.2.1
 ```
 
 ## From Source
@@ -45,17 +86,6 @@ main macOS and Linux targets. Download the archive for your platform, place the
 scriba --version
 scriba doctor
 ```
-
-## Homebrew
-
-The intended Homebrew path is:
-
-```sh
-brew install agensfield/tap/scriba
-```
-
-Use `go install` or GitHub release binaries until the tap formula is published
-for the release you want.
 
 ## Updates
 

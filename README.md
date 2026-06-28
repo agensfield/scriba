@@ -31,6 +31,20 @@ product surface is now the CLI plus the resident `scriba server` process.
 
 ## Install
 
+On macOS with Homebrew:
+
+```sh
+brew install agensfield/tap/scriba
+scriba --version
+scriba doctor
+```
+
+On macOS or Linux with the install script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/agensfield/scriba/main/scripts/install.sh | sh
+```
+
 With Go 1.26+:
 
 ```sh
@@ -47,7 +61,8 @@ go test ./...
 go vet ./...
 ```
 
-See [Install](docs/install.md) for GitHub binary and Homebrew tap notes.
+See [Install](docs/install.md) for GitHub binaries and alternate install
+paths.
 
 ## Quick Start
 

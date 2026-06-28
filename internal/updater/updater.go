@@ -57,7 +57,7 @@ func CheckLatest(ctx context.Context, current string) (Check, error) {
 		InstallManager:      target.Manager,
 		SelfUpdateSupported: target.SelfUpdateSupported,
 		SelfUpdateReason:    target.Reason,
-		UpdateCommand:       InstallCommand(latest),
+		UpdateCommand:       UpdateCommand(latest, target),
 	}, nil
 }
 
@@ -98,6 +98,13 @@ func InstallCommand(tag string) string {
 		tag = "latest"
 	}
 	return "go install " + ModulePath + "@" + tag
+}
+
+func UpdateCommand(tag string, target InstallTarget) string {
+	if target.Manager == "homebrew" {
+		return "brew upgrade scriba"
+	}
+	return InstallCommand(tag)
 }
 
 func LatestTagFromLsRemote(output []byte) (string, bool) {

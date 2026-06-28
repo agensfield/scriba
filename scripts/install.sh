@@ -1,0 +1,94 @@
+#!/bin/sh
+set -eu
+
+repo="agensfield/scriba"
+version="${SCRIBA_VERSION:-latest}"
+install_dir="${SCRIBA_INSTALL_DIR:-}"
+
+log() {
+  printf '%s\n' "$*" >&2
+}
+
+fail() {
+  log "error: $*"
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
+}
+
+need curl
+need tar
+
+os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+case "$os" in
+  darwin|linux) ;;
+  *) fail "unsupported OS: $os" ;;
+esac
+
+arch="$(uname -m)"
+case "$arch" in
+  arm64|aarch64) arch="arm64" ;;
+  x86_64|amd64) arch="amd64" ;;
+  *) fail "unsupported architecture: $arch" ;;
+esac
+
+if [ "$version" = "latest" ]; then
+  latest_url="https://api.github.com/repos/${repo}/releases/latest"
+  version="$(curl -fsSL "$latest_url" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  [ -n "$version" ] || fail "could not resolve latest release"
+fi
+
+tag="$version"
+version="${version#v}"
+asset="scriba_${version}_${os}_${arch}.tar.gz"
+base_url="https://github.com/${repo}/releases/download/${tag}"
+
+if [ -z "$install_dir" ]; then
+  if [ -n "${GOBIN:-}" ]; then
+    install_dir="$GOBIN"
+  elif [ -n "${GOPATH:-}" ]; then
+    install_dir="$GOPATH/bin"
+  else
+    install_dir="$HOME/.local/bin"
+  fi
+fi
+
+tmp="${TMPDIR:-/tmp}/scriba-install.$$"
+cleanup() {
+  rm -rf "$tmp"
+}
+trap cleanup EXIT INT TERM
+mkdir -p "$tmp"
+
+log "downloading scriba ${tag} for ${os}/${arch}"
+curl -fsSL "${base_url}/${asset}" -o "$tmp/$asset"
+curl -fsSL "${base_url}/checksums.txt" -o "$tmp/checksums.txt"
+
+expected="$(grep "  ${asset}\$" "$tmp/checksums.txt" | awk '{print $1}')"
+[ -n "$expected" ] || fail "checksum for ${asset} not found"
+
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$tmp/$asset" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual="$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')"
+else
+  fail "missing sha256sum or shasum"
+fi
+
+[ "$actual" = "$expected" ] || fail "checksum mismatch for ${asset}"
+
+tar -xzf "$tmp/$asset" -C "$tmp"
+[ -f "$tmp/scriba" ] || fail "archive did not contain scriba binary"
+chmod +x "$tmp/scriba"
+mkdir -p "$install_dir"
+cp "$tmp/scriba" "$install_dir/scriba"
+
+log "installed $install_dir/scriba"
+"$install_dir/scriba" --version
+
+case ":$PATH:" in
+  *":$install_dir:"*) ;;
+  *) log "note: $install_dir is not on PATH" ;;
+esac

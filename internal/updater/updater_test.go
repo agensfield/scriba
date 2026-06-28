@@ -48,4 +48,7 @@ func TestResolveInstallTargetDetectsHomebrew(t *testing.T) {
 	if target.SelfUpdateSupported {
 		t.Fatal("expected Homebrew install to disable self-update")
 	}
+	if got := UpdateCommand("v0.2.1", target); got != "brew upgrade scriba" {
+		t.Fatalf("UpdateCommand() = %q, want brew upgrade", got)
+	}
 }
