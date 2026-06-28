@@ -39,6 +39,9 @@ Claude Code and Codex usage tracker.
   `--no-remote` is passed.
 - `scriba codex reset-grants` shows every available reset grant and each
   grant's own expiration timestamp.
+- `scriba update --check` compares the local binary to the latest GitHub tag;
+  `scriba update` uses `go install` for regular installs and refuses
+  Homebrew-managed binaries in favor of `brew upgrade scriba`.
 - `internal/radar` reads `https://codexradar.com/current.json` first and falls
   back to the old `https://codex-reset-radar.pages.dev/current.json` endpoint.
 

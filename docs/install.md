@@ -57,6 +57,31 @@ brew install agensfield/tap/scriba
 Use `go install` or GitHub release binaries until the tap formula is published
 for the release you want.
 
+## Updates
+
+Check the latest tagged release:
+
+```sh
+scriba update --check
+scriba update --check --json
+```
+
+For regular Go installs, `scriba update` installs the latest tagged release
+with:
+
+```sh
+go install github.com/agensfield/scriba/cmd/scriba@<latest-tag>
+```
+
+For Homebrew installs, self-update is intentionally disabled. Use:
+
+```sh
+brew upgrade scriba
+```
+
+Scriba detects Homebrew by resolving its executable path and checking whether it
+lives under a Homebrew `Cellar/scriba` path.
+
 ## Auth Paths
 
 Scriba reads local app auth and logs. It does not use OpenAI API keys for

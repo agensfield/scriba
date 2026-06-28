@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,6 +28,7 @@ import (
 	"github.com/agensfield/scriba/internal/reports"
 	"github.com/agensfield/scriba/internal/status"
 	"github.com/agensfield/scriba/internal/telegram"
+	"github.com/agensfield/scriba/internal/updater"
 )
 
 type options struct {
@@ -54,13 +56,14 @@ type options struct {
 	label           string
 	message         string
 	execute         bool
+	check           bool
 	out             string
 	statePath       string
 	env             string
 }
 
 func Run(args []string) int {
-	if len(args) > 0 && (args[0] == "--version" || args[0] == "-v") {
+	if len(args) > 0 && (args[0] == "--version" || args[0] == "-v" || args[0] == "version") {
 		fmt.Println(buildinfo.Version)
 		return 0
 	}
@@ -132,6 +135,18 @@ func dispatch(args []string) error {
 		return runReport(args[0], args[1], opts)
 	case "schema":
 		return printJSON(map[string]any{"schemaVersion": model.SchemaVersion, "commands": commands()}, false)
+	case "update", "upgrade":
+		opts, rest, err := parse(args[1:], flagSpec{
+			Use:   "scriba update [flags]",
+			Flags: []string{"json", "check"},
+		})
+		if err != nil {
+			return err
+		}
+		if len(rest) > 0 {
+			return fmt.Errorf("scriba update does not accept positional arguments")
+		}
+		return runUpdate(opts)
 	case "config":
 		if len(args) < 2 || isHelpArg(args[1]) {
 			fmt.Println(groupHelp("config"))
@@ -265,6 +280,7 @@ var flagHelp = map[string]flagMeta{
 	"label":             {Name: "label", Value: "text", Usage: "alert label"},
 	"message":           {Name: "message", Value: "text", Usage: "telegram message"},
 	"execute":           {Name: "execute", Usage: "execute benchmark"},
+	"check":             {Name: "check", Usage: "check for updates without installing"},
 	"out":               {Name: "out", Value: "path", Usage: "output path"},
 	"state-path":        {Name: "state-path", Value: "path", Usage: "server sqlite path"},
 	"env":               {Name: "env", Value: "name", Usage: "server environment"},
@@ -323,6 +339,8 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.StringVar(&opts.message, name, "", flagHelp[name].Usage)
 		case "execute":
 			fs.BoolVar(&opts.execute, name, false, flagHelp[name].Usage)
+		case "check":
+			fs.BoolVar(&opts.check, name, false, flagHelp[name].Usage)
 		case "out":
 			fs.StringVar(&opts.out, name, "", flagHelp[name].Usage)
 		case "state-path":
@@ -527,6 +545,49 @@ func runCodexResetGrants(opts options) error {
 		return err
 	}
 	return output(opts, resetGrantsPayload(payload), renderResetGrants(payload))
+}
+
+func runUpdate(opts options) error {
+	check, err := updater.CheckLatest(context.Background(), buildinfo.Version)
+	if err != nil {
+		return err
+	}
+	human := renderUpdateCheck(check)
+	if opts.check || check.Status == updater.Current || check.Status == updater.Ahead {
+		return output(opts, check, human)
+	}
+	if !check.SelfUpdateSupported {
+		return errors.New(check.SelfUpdateReason)
+	}
+	fmt.Println(human)
+	fmt.Printf("installing %s...\n", check.Latest)
+	if err := updater.Install(context.Background(), check.Latest, os.Stdout, os.Stderr); err != nil {
+		return err
+	}
+	fmt.Printf("installed scriba %s\n", check.Latest)
+	return nil
+}
+
+func renderUpdateCheck(check updater.Check) string {
+	lines := []string{
+		"Scriba update",
+		fmt.Sprintf("%-13s %s", "current", emptyAsUnset(check.Current)),
+		fmt.Sprintf("%-13s %s", "latest", emptyAsUnset(check.Latest)),
+		fmt.Sprintf("%-13s %s", "status", emptyAsUnset(check.StatusText)),
+		fmt.Sprintf("%-13s %s", "install", emptyAsUnset(check.InstallManager)),
+	}
+	if check.InstallPath != "" {
+		lines = append(lines, fmt.Sprintf("%-13s %s", "path", check.InstallPath))
+	}
+	if check.SelfUpdateReason != "" {
+		lines = append(lines, fmt.Sprintf("%-13s %s", "self-update", check.SelfUpdateReason))
+	} else if check.SelfUpdateSupported {
+		lines = append(lines, fmt.Sprintf("%-13s %s", "self-update", "supported"))
+	}
+	if check.UpdateCommand != "" {
+		lines = append(lines, fmt.Sprintf("%-13s %s", "command", check.UpdateCommand))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func liveCodexLimitsPayload() (codexLimitsPayload, error) {
@@ -1006,7 +1067,7 @@ func title(value string) string {
 
 func commands() map[string][]string {
 	return map[string][]string{
-		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "cache", "bench", "telegram", "server"},
+		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "cache", "bench", "telegram", "server", "update", "version"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks"},
 		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants"},
 		"config":   {"path", "show", "init", "telegram"},
@@ -1033,7 +1094,11 @@ Commands:
 Common flags:
   --since time       start date or timestamp
   --until time       end date or timestamp
-  --json             emit JSON`
+  --json             emit JSON
+
+Examples:
+  scriba claude weekly
+  scriba claude sessions --since 2026-06-01`
 	case "codex":
 		return `scriba codex - Local Codex reports and live ChatGPT/Codex limit checks.
 
@@ -1046,10 +1111,19 @@ Commands:
   scriba codex limits
   scriba codex reset-grants
 
+Live commands:
+  limits           fetch current Codex windows from ChatGPT/Codex auth
+  reset-grants     show available reset grants and their expirations
+
 Common flags:
   --since time       start date or timestamp
   --until time       end date or timestamp
-  --json             emit JSON`
+  --json             emit JSON
+
+Examples:
+  scriba codex summary
+  scriba codex limits --json
+  scriba codex reset-grants`
 	case "config":
 		return `scriba config - Manage Scriba configuration.
 
@@ -1057,7 +1131,11 @@ Commands:
   scriba config path
   scriba config show
   scriba config init
-  scriba config telegram`
+  scriba config telegram
+
+Examples:
+  scriba config init
+  scriba config telegram --enable --chat-id "$TELEGRAM_CHAT_ID" --bot-token-env SCRIBA_TELEGRAM_BOT_TOKEN`
 	case "cache":
 		return `scriba cache - Inspect and maintain the local derived cache.
 
@@ -1065,13 +1143,17 @@ Commands:
   scriba cache status
   scriba cache reset
   scriba cache prune
-  scriba cache vacuum`
+  scriba cache vacuum
+
+Cache deletion is safe; source logs and provider APIs remain authoritative.`
 	case "telegram":
 		return `scriba telegram - Legacy one-shot Telegram helpers.
 
 Commands:
   scriba telegram alerts
-  scriba telegram reset`
+  scriba telegram reset
+
+Use scriba server run for the resident Telegram bot.`
 	case "server":
 		return `scriba server - Run and inspect the resident Codex limit watcher.
 
@@ -1082,7 +1164,12 @@ Commands:
   scriba server stats
   scriba server refresh
   scriba server radar
-  scriba server prune`
+  scriba server prune
+
+Examples:
+  scriba server run --env prod
+  scriba server health --env prod
+  scriba server refresh --env prod --json`
 	case "bench":
 		return `scriba bench - Benchmark helpers.
 
@@ -1096,15 +1183,30 @@ Commands:
 func help() string {
 	return `scriba - Fast local usage tracking for Claude Code and Codex.
 
+Usage:
+  scriba [command] [flags]
+
 Commands:
-  scriba [status]
+  status            combined local usage and remote limit snapshot
+  doctor            auth, paths, cache, and provider diagnostics
+  claude            Claude Code usage reports
+  codex             Codex usage reports, live limits, reset grants
+  server            resident Codex watcher and Telegram bot
+  update            check or install the latest tagged release
+  config            config file and Telegram settings
+  cache             derived cache maintenance
+  telegram          legacy one-shot Telegram helpers
+  bench             comparison helpers
+
+Common flows:
+  scriba
   scriba doctor
-  scriba claude daily|weekly|monthly|sessions|blocks
-  scriba codex daily|weekly|monthly|sessions|limits|reset-grants
-  scriba config path|show|init|telegram
-  scriba cache status|reset|prune|vacuum
-  scriba telegram alerts|reset
-  scriba server run|status|health|stats|refresh|radar|prune
-  scriba bench ccusage
+  scriba codex limits
+  scriba codex reset-grants
+  scriba update --check
+  scriba server run --env prod
+
+Use "scriba <command> --help" for command-specific help.
+Use --json for automation and agents.
 `
 }

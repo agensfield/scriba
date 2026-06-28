@@ -23,6 +23,8 @@ scriba cache status
 scriba cache reset
 scriba cache prune
 scriba cache vacuum
+scriba update --check
+scriba update
 scriba telegram alerts
 scriba telegram alerts --refresh
 scriba telegram reset --send --provider codex --label weekly --message "🎉 Tibo just reset limits! 🎊"
@@ -103,6 +105,19 @@ and 1 day before that grant's own expiry.
 
 Human metric output aligns labels within each rendered provider/output, so
 progress bars start in the same column even when labels differ in length.
+
+## Updates
+
+`scriba update --check` compares the current binary to the latest GitHub tag and
+prints the detected install manager/path. `scriba update` installs the latest
+tag with:
+
+```sh
+go install github.com/agensfield/scriba/cmd/scriba@<latest-tag>
+```
+
+When the binary resolves under a Homebrew `Cellar/scriba` path, Scriba refuses
+self-update and points the user to `brew upgrade scriba`.
 
 ## Package Execution
 

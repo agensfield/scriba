@@ -24,6 +24,8 @@ product surface is now the CLI plus the resident `scriba server` process.
 - Telegram notifications for weekly resets, low remaining limits, reset-grant
   expiry checkpoints, service health, and Codex Radar probability milestones.
 - Local SQLite cache/state. Source logs and provider APIs remain authoritative.
+- `scriba update --check` and `scriba update` for tagged release updates,
+  with Homebrew-managed installs routed to `brew upgrade scriba`.
 - Human-readable terminal output by default, JSON with `--json` for scripts and
   agents.
 
@@ -58,6 +60,7 @@ scriba claude weekly
 scriba codex summary
 scriba codex limits
 scriba codex reset-grants
+scriba update --check
 ```
 
 Use `--json` when another program is consuming the output:
