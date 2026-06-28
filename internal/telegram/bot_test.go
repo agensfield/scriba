@@ -132,6 +132,33 @@ func TestRenderGrantExpiryWarningShowsExpiryCheckpoint(t *testing.T) {
 	}
 }
 
+func TestRenderResetGrantShowsLoadedGrant(t *testing.T) {
+	text := RenderResetGrant(resetwatch.ResetGrantEvent{
+		Account:        resetwatch.Account{Label: "personal", Email: "arda@example.com", Plan: "prolite"},
+		CreditID:       "RateLimitResetCredit_1234567890",
+		CreditTitle:    "Full reset (Weekly + 5 hr)",
+		ResetType:      "codex_rate_limits",
+		GrantedAt:      parseTime("2026-06-18T00:29:25Z"),
+		ExpiresAt:      parseTime("2026-07-18T00:29:25Z"),
+		AvailableCount: 2,
+		DetectedAt:     parseTime("2026-06-18T00:40:25Z"),
+	})
+	for _, want := range []string{
+		"<b>Codex reset grant loaded</b>",
+		"Tibo loaded a reset grant.",
+		"available  2",
+		"grant      Full reset (Weekly + 5 hr)",
+		"type       codex_rate_limits",
+		"granted    2026-06-18 00:29 UTC",
+		"expires    2026-07-18 00:29 UTC",
+		"id         RateLimitRes",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("render missing %q in:\n%s", want, text)
+		}
+	}
+}
+
 func TestRenderRadarProbabilityUsesEnglishSummary(t *testing.T) {
 	text := RenderRadarProbability(radar.ProbabilityAlert{
 		Milestone:        50,

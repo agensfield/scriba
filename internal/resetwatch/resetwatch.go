@@ -119,6 +119,20 @@ type GrantExpiryWarning struct {
 	DetectedAt    time.Time
 }
 
+type ResetGrantEvent struct {
+	ID             string
+	ProviderID     string
+	Account        Account
+	CreditID       string
+	CreditTitle    string
+	ResetType      string
+	GrantedAt      time.Time
+	ExpiresAt      time.Time
+	AvailableCount int
+	SnapshotJSON   []byte
+	DetectedAt     time.Time
+}
+
 type Decision struct {
 	States []WindowState
 	Events []Event
@@ -349,6 +363,17 @@ func GrantExpiryWarningID(providerID, accountRef, creditID string, expiresAt tim
 	return "grant_warning_" + hex.EncodeToString(sum[:16])
 }
 
+func ResetGrantEventID(providerID, accountRef, creditID string, grantedAt, expiresAt time.Time) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		providerID,
+		accountRef,
+		creditID,
+		grantedAt.UTC().Format(time.RFC3339Nano),
+		expiresAt.UTC().Format(time.RFC3339Nano),
+	}, "\x00")))
+	return "grant_" + hex.EncodeToString(sum[:16])
+}
+
 func WarningCandidates(obs Observation) []WarningEvent {
 	labels := []string{LabelFiveHour, LabelWeeklyLimit}
 	byLabel := windowsByLabel(obs.Windows)
@@ -379,6 +404,56 @@ func WarningCandidates(obs Observation) []WarningEvent {
 		warnings = append(warnings, event)
 	}
 	return warnings
+}
+
+func ResetGrantEventCandidates(obs Observation) []ResetGrantEvent {
+	now := obs.ObservedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	available := 0
+	if obs.ResetGrants.AvailableCount != nil {
+		available = *obs.ResetGrants.AvailableCount
+	} else {
+		available = len(obs.ResetGrants.Credits)
+	}
+	events := []ResetGrantEvent{}
+	for _, credit := range obs.ResetGrants.Credits {
+		if credit.Status != "" && credit.Status != "available" {
+			continue
+		}
+		if credit.ExpiresAt.IsZero() {
+			continue
+		}
+		creditID := credit.ID
+		if creditID == "" {
+			creditID = resetCreditFallbackID(credit)
+		}
+		event := ResetGrantEvent{
+			ProviderID:     providerID(obs.ProviderID),
+			Account:        obs.Account,
+			CreditID:       creditID,
+			CreditTitle:    credit.Title,
+			ResetType:      credit.ResetType,
+			GrantedAt:      credit.GrantedAt,
+			ExpiresAt:      credit.ExpiresAt,
+			AvailableCount: available,
+			SnapshotJSON:   cloneBytes(obs.SnapshotJSON),
+			DetectedAt:     now,
+		}
+		event.ID = ResetGrantEventID(event.ProviderID, event.Account.Ref, event.CreditID, event.GrantedAt, event.ExpiresAt)
+		events = append(events, event)
+	}
+	sort.SliceStable(events, func(i, j int) bool {
+		if !events[i].GrantedAt.Equal(events[j].GrantedAt) {
+			return events[i].GrantedAt.Before(events[j].GrantedAt)
+		}
+		if !events[i].ExpiresAt.Equal(events[j].ExpiresAt) {
+			return events[i].ExpiresAt.Before(events[j].ExpiresAt)
+		}
+		return events[i].CreditID < events[j].CreditID
+	})
+	return events
 }
 
 func GrantExpiryWarningCandidates(obs Observation) []GrantExpiryWarning {

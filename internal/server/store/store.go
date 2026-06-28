@@ -17,7 +17,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 const deliverySendLease = 10 * time.Minute
 
@@ -329,6 +329,79 @@ where id = ?`, id).Scan(
 	return warning, true, nil
 }
 
+func (s *Store) InsertResetGrantEvents(ctx context.Context, obs resetwatch.Observation, events []resetwatch.ResetGrantEvent) ([]resetwatch.ResetGrantEvent, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := upsertAccount(ctx, tx, obs); err != nil {
+		return nil, err
+	}
+	trackExisting, previousCount, err := resetGrantTrackingState(ctx, tx, obs.Account.Ref)
+	if err != nil {
+		return nil, err
+	}
+	availableCount := 0
+	if obs.ResetGrants.AvailableCount != nil {
+		availableCount = *obs.ResetGrants.AvailableCount
+	} else {
+		availableCount = len(events)
+	}
+	inserted := make([]resetwatch.ResetGrantEvent, 0, len(events))
+	for _, event := range events {
+		result, err := tx.ExecContext(ctx, `
+insert into reset_grant_events (
+  id, provider_id, account_ref, account_label, account_email, account_plan,
+  credit_id, credit_title, reset_type, granted_at, expires_at, available_count,
+  snapshot_json, detected_at, created_at
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(id) do nothing`,
+			event.ID, providerID(event.ProviderID), event.Account.Ref, event.Account.Label, event.Account.Email, event.Account.Plan,
+			event.CreditID, event.CreditTitle, event.ResetType, formatTime(event.GrantedAt), formatTime(event.ExpiresAt),
+			event.AvailableCount, string(event.SnapshotJSON), formatTime(event.DetectedAt), formatTime(time.Now()))
+		if err != nil {
+			return nil, err
+		}
+		if affected, _ := result.RowsAffected(); affected > 0 && trackExisting && availableCount > previousCount {
+			inserted = append(inserted, event)
+		}
+	}
+	if err := upsertResetGrantTrackingState(ctx, tx, obs, availableCount); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return inserted, nil
+}
+
+func (s *Store) LoadResetGrantEvent(ctx context.Context, id string) (resetwatch.ResetGrantEvent, bool, error) {
+	var event resetwatch.ResetGrantEvent
+	var grantedAt, expiresAt, snapshot, detected string
+	err := s.db.QueryRowContext(ctx, `
+select id, provider_id, account_ref, account_label, account_email, account_plan,
+  credit_id, credit_title, reset_type, granted_at, expires_at, available_count,
+  snapshot_json, detected_at
+from reset_grant_events
+where id = ?`, id).Scan(
+		&event.ID, &event.ProviderID, &event.Account.Ref, &event.Account.Label, &event.Account.Email, &event.Account.Plan,
+		&event.CreditID, &event.CreditTitle, &event.ResetType, &grantedAt, &expiresAt, &event.AvailableCount,
+		&snapshot, &detected,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return event, false, nil
+	}
+	if err != nil {
+		return event, false, err
+	}
+	event.GrantedAt = parseDBTime(grantedAt)
+	event.ExpiresAt = parseDBTime(expiresAt)
+	event.SnapshotJSON = []byte(snapshot)
+	event.DetectedAt = parseDBTime(detected)
+	return event, true, nil
+}
+
 func (s *Store) InsertRadarAlertEvent(ctx context.Context, alert radar.ProbabilityAlert) (bool, error) {
 	now := formatTime(time.Now())
 	result, err := s.db.ExecContext(ctx, `
@@ -574,6 +647,26 @@ on conflict(warning_id, target) do nothing`, id, warningID, target, now, now)
 	return delivery, nil
 }
 
+func (s *Store) EnsureResetGrantDelivery(ctx context.Context, eventID, target string) (Delivery, error) {
+	now := formatTime(time.Now())
+	id := ResetGrantDeliveryID(eventID, target)
+	_, err := s.db.ExecContext(ctx, `
+insert into reset_grant_deliveries (id, event_id, target, status, attempts, created_at, updated_at)
+values (?, ?, ?, 'pending', 0, ?, ?)
+on conflict(event_id, target) do nothing`, id, eventID, target, now, now)
+	if err != nil {
+		return Delivery{}, err
+	}
+	delivery, ok, err := s.LoadResetGrantDelivery(ctx, eventID, target)
+	if err != nil {
+		return Delivery{}, err
+	}
+	if !ok {
+		return Delivery{}, errors.New("reset grant delivery not found after insert")
+	}
+	return delivery, nil
+}
+
 func (s *Store) EnsureRadarAlertDelivery(ctx context.Context, alertID, target string) (Delivery, error) {
 	now := formatTime(time.Now())
 	id := RadarAlertDeliveryID(alertID, target)
@@ -613,6 +706,13 @@ func (s *Store) LoadGrantExpiryWarningDelivery(ctx context.Context, warningID, t
 select id, warning_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
 from reset_grant_warning_deliveries
 where warning_id = ? and target = ?`, warningID, target))
+}
+
+func (s *Store) LoadResetGrantDelivery(ctx context.Context, eventID, target string) (Delivery, bool, error) {
+	return scanDelivery(s.db.QueryRowContext(ctx, `
+select id, event_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
+from reset_grant_deliveries
+where event_id = ? and target = ?`, eventID, target))
 }
 
 func (s *Store) LoadRadarAlertDelivery(ctx context.Context, alertID, target string) (Delivery, bool, error) {
@@ -679,6 +779,31 @@ func (s *Store) PendingGrantExpiryWarningDeliveries(ctx context.Context, target 
 	rows, err := s.db.QueryContext(ctx, `
 select id, warning_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
 from reset_grant_warning_deliveries
+where target = ? and status != 'delivered' and (next_attempt_at is null or next_attempt_at = '' or next_attempt_at <= ?)
+order by coalesce(next_attempt_at, created_at), created_at
+limit ?`, target, formatTime(time.Now()), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var deliveries []Delivery
+	for rows.Next() {
+		delivery, err := scanDeliveryRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, rows.Err()
+}
+
+func (s *Store) PendingResetGrantDeliveries(ctx context.Context, target string, limit int) ([]Delivery, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+select id, event_id, target, status, attempts, last_attempt_at, next_attempt_at, delivered_at, provider_message_id, last_error, created_at, updated_at
+from reset_grant_deliveries
 where target = ? and status != 'delivered' and (next_attempt_at is null or next_attempt_at = '' or next_attempt_at <= ?)
 order by coalesce(next_attempt_at, created_at), created_at
 limit ?`, target, formatTime(time.Now()), limit)
@@ -803,6 +928,33 @@ func (s *Store) MarkGrantExpiryWarningDeliverySending(ctx context.Context, warni
 	return s.markDeliverySending(ctx, "reset_grant_warning_deliveries", "warning_id", warningID, target)
 }
 
+func (s *Store) MarkResetGrantDeliveryAttempt(ctx context.Context, eventID, target string, delivered bool, message string, providerMessageID string) error {
+	now := formatTime(time.Now())
+	status := "failed"
+	var deliveredAt any
+	var nextAttemptAt any
+	var lastError any = message
+	if delivered {
+		status = "delivered"
+		deliveredAt = now
+		nextAttemptAt = nil
+		lastError = nil
+	} else {
+		var attempts int
+		_ = s.db.QueryRowContext(ctx, `select attempts from reset_grant_deliveries where event_id = ? and target = ?`, eventID, target).Scan(&attempts)
+		nextAttemptAt = formatTime(time.Now().Add(deliveryBackoff(attempts + 1)))
+	}
+	_, err := s.db.ExecContext(ctx, `
+update reset_grant_deliveries
+set status = ?, attempts = attempts + 1, last_attempt_at = ?, next_attempt_at = ?, delivered_at = coalesce(?, delivered_at), provider_message_id = coalesce(nullif(?, ''), provider_message_id), last_error = ?, updated_at = ?
+where event_id = ? and target = ?`, status, now, nextAttemptAt, deliveredAt, providerMessageID, lastError, now, eventID, target)
+	return err
+}
+
+func (s *Store) MarkResetGrantDeliverySending(ctx context.Context, eventID, target string) error {
+	return s.markDeliverySending(ctx, "reset_grant_deliveries", "event_id", eventID, target)
+}
+
 func (s *Store) MarkRadarAlertDeliveryAttempt(ctx context.Context, alertID, target string, delivered bool, message string, providerMessageID string) error {
 	now := formatTime(time.Now())
 	status := "failed"
@@ -858,6 +1010,11 @@ where warning_id = ? and target = ? and status != 'delivered'`, true
 update reset_grant_warning_deliveries
 set status = 'sending', last_attempt_at = ?, next_attempt_at = ?, last_error = null, updated_at = ?
 where warning_id = ? and target = ? and status != 'delivered'`, true
+	case table == "reset_grant_deliveries" && idColumn == "event_id":
+		return `
+update reset_grant_deliveries
+set status = 'sending', last_attempt_at = ?, next_attempt_at = ?, last_error = null, updated_at = ?
+where event_id = ? and target = ? and status != 'delivered'`, true
 	case table == "radar_alert_deliveries" && idColumn == "alert_id":
 		return `
 update radar_alert_deliveries
@@ -925,6 +1082,11 @@ func WarningDeliveryID(warningID, target string) string {
 func GrantExpiryWarningDeliveryID(warningID, target string) string {
 	sum := sha256.Sum256([]byte(warningID + "\x00" + target))
 	return "grant_warning_delivery_" + hex.EncodeToString(sum[:16])
+}
+
+func ResetGrantDeliveryID(eventID, target string) string {
+	sum := sha256.Sum256([]byte(eventID + "\x00" + target))
+	return "grant_delivery_" + hex.EncodeToString(sum[:16])
 }
 
 func RadarAlertDeliveryID(alertID, target string) string {
@@ -1121,6 +1283,35 @@ on conflict(account_ref) do update set
   plan = excluded.plan,
   updated_at = excluded.updated_at`,
 		warning.Account.Ref, providerID(warning.ProviderID), warning.Account.Label, warning.Account.Email, warning.Account.Plan, formatTime(time.Now()))
+	return err
+}
+
+func resetGrantTrackingState(ctx context.Context, tx *sql.Tx, accountRef string) (bool, int, error) {
+	if accountRef == "" {
+		return false, 0, nil
+	}
+	var availableCount int
+	err := tx.QueryRowContext(ctx, `select available_count from reset_grant_tracking_state where account_ref = ?`, accountRef).Scan(&availableCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, 0, nil
+	}
+	return err == nil, availableCount, err
+}
+
+func upsertResetGrantTrackingState(ctx context.Context, tx *sql.Tx, obs resetwatch.Observation, availableCount int) error {
+	if obs.Account.Ref == "" {
+		return nil
+	}
+	now := formatTime(time.Now())
+	_, err := tx.ExecContext(ctx, `
+insert into reset_grant_tracking_state (account_ref, provider_id, available_count, last_observed_at, created_at, updated_at)
+values (?, ?, ?, ?, ?, ?)
+on conflict(account_ref) do update set
+  provider_id = excluded.provider_id,
+  available_count = excluded.available_count,
+  last_observed_at = excluded.last_observed_at,
+  updated_at = excluded.updated_at`,
+		obs.Account.Ref, providerID(obs.ProviderID), availableCount, formatTime(obs.ObservedAt), now, now)
 	return err
 }
 

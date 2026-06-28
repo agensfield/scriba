@@ -58,6 +58,11 @@ type DeliveryStore interface {
 	MarkGrantExpiryWarningDeliveryAttempt(context.Context, string, string, bool, string, string) error
 	PendingGrantExpiryWarningDeliveries(context.Context, string, int) ([]store.Delivery, error)
 	LoadGrantExpiryWarningEvent(context.Context, string) (resetwatch.GrantExpiryWarning, bool, error)
+	EnsureResetGrantDelivery(context.Context, string, string) (store.Delivery, error)
+	MarkResetGrantDeliverySending(context.Context, string, string) error
+	MarkResetGrantDeliveryAttempt(context.Context, string, string, bool, string, string) error
+	PendingResetGrantDeliveries(context.Context, string, int) ([]store.Delivery, error)
+	LoadResetGrantEvent(context.Context, string) (resetwatch.ResetGrantEvent, bool, error)
 	EnsureRadarAlertDelivery(context.Context, string, string) (store.Delivery, error)
 	MarkRadarAlertDeliverySending(context.Context, string, string) error
 	MarkRadarAlertDeliveryAttempt(context.Context, string, string, bool, string, string) error
@@ -211,6 +216,31 @@ func (s *Service) NotifyGrantExpiryWarning(ctx context.Context, warning resetwat
 		messageID = strconv.Itoa(message.ID)
 	}
 	return s.deliveries.MarkGrantExpiryWarningDeliveryAttempt(ctx, warning.ID, target, true, "", messageID)
+}
+
+func (s *Service) NotifyResetGrant(ctx context.Context, event resetwatch.ResetGrantEvent) error {
+	target := s.target()
+	if s.deliveries != nil {
+		if _, err := s.deliveries.EnsureResetGrantDelivery(ctx, event.ID, target); err != nil {
+			return err
+		}
+		if err := s.deliveries.MarkResetGrantDeliverySending(ctx, event.ID, target); err != nil {
+			return err
+		}
+	}
+	message, err := s.send(ctx, RenderResetGrant(event), nil)
+	if s.deliveries == nil {
+		return err
+	}
+	if err != nil {
+		_ = s.deliveries.MarkResetGrantDeliveryAttempt(ctx, event.ID, target, false, err.Error(), "")
+		return err
+	}
+	messageID := ""
+	if message != nil {
+		messageID = strconv.Itoa(message.ID)
+	}
+	return s.deliveries.MarkResetGrantDeliveryAttempt(ctx, event.ID, target, true, "", messageID)
 }
 
 func (s *Service) NotifyRadarProbability(ctx context.Context, alert radar.ProbabilityAlert) error {
@@ -517,6 +547,29 @@ func (s *Service) retryDeliveriesOnce(ctx context.Context) {
 			messageID = strconv.Itoa(message.ID)
 		}
 		_ = s.deliveries.MarkGrantExpiryWarningDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
+	}
+	resetGrantDeliveries, err := s.deliveries.PendingResetGrantDeliveries(ctx, target, 10)
+	if err != nil {
+		return
+	}
+	for _, delivery := range resetGrantDeliveries {
+		event, ok, err := s.deliveries.LoadResetGrantEvent(ctx, delivery.EventID)
+		if err != nil || !ok {
+			continue
+		}
+		if err := s.deliveries.MarkResetGrantDeliverySending(ctx, delivery.EventID, target); err != nil {
+			continue
+		}
+		message, err := s.send(ctx, RenderResetGrant(event), nil)
+		if err != nil {
+			_ = s.deliveries.MarkResetGrantDeliveryAttempt(ctx, delivery.EventID, target, false, err.Error(), "")
+			continue
+		}
+		messageID := ""
+		if message != nil {
+			messageID = strconv.Itoa(message.ID)
+		}
+		_ = s.deliveries.MarkResetGrantDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
 	}
 	radarDeliveries, err := s.deliveries.PendingRadarAlertDeliveries(ctx, target, 10)
 	if err != nil {

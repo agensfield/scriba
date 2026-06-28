@@ -300,6 +300,72 @@ func TestGrantExpiryWarningEventsAndDeliveriesDedupe(t *testing.T) {
 	}
 }
 
+func TestResetGrantEventsSeedThenNotifyNewCredits(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	firstObs := observation("2026-06-12T01:30:00Z", "2026-06-14T21:00:00Z", "2026-06-12T06:00:00Z")
+	firstObs.ResetGrants = resetwatch.ResetGrants{
+		AvailableCount: ptrInt(1),
+		Credits: []resetwatch.ResetCredit{
+			{ID: "credit_1", Status: "available", Title: "Full reset", ResetType: "codex_rate_limits", GrantedAt: parseTime("2026-06-12T01:20:48Z"), ExpiresAt: parseTime("2026-07-12T01:20:48Z")},
+		},
+	}
+	inserted, err := store.InsertResetGrantEvents(ctx, firstObs, resetwatch.ResetGrantEventCandidates(firstObs))
+	if err != nil {
+		t.Fatalf("seed reset grants: %v", err)
+	}
+	if len(inserted) != 0 {
+		t.Fatalf("first observation should seed silently, got %#v", inserted)
+	}
+	secondObs := observation("2026-06-18T00:40:00Z", "2026-06-21T21:00:00Z", "2026-06-18T05:00:00Z")
+	secondObs.ResetGrants = resetwatch.ResetGrants{
+		AvailableCount: ptrInt(2),
+		Credits: []resetwatch.ResetCredit{
+			{ID: "credit_1", Status: "available", Title: "Full reset", ResetType: "codex_rate_limits", GrantedAt: parseTime("2026-06-12T01:20:48Z"), ExpiresAt: parseTime("2026-07-12T01:20:48Z")},
+			{ID: "credit_2", Status: "available", Title: "Full reset", ResetType: "codex_rate_limits", GrantedAt: parseTime("2026-06-18T00:29:25Z"), ExpiresAt: parseTime("2026-07-18T00:29:25Z")},
+		},
+	}
+	inserted, err = store.InsertResetGrantEvents(ctx, secondObs, resetwatch.ResetGrantEventCandidates(secondObs))
+	if err != nil {
+		t.Fatalf("insert new reset grant: %v", err)
+	}
+	if len(inserted) != 1 || inserted[0].CreditID != "credit_2" {
+		t.Fatalf("expected only new credit, got %#v", inserted)
+	}
+	inserted, err = store.InsertResetGrantEvents(ctx, secondObs, resetwatch.ResetGrantEventCandidates(secondObs))
+	if err != nil {
+		t.Fatalf("reinsert new reset grant: %v", err)
+	}
+	if len(inserted) != 0 {
+		t.Fatalf("expected grant dedupe, got %#v", inserted)
+	}
+	loaded, ok, err := store.LoadResetGrantEvent(ctx, resetwatch.ResetGrantEventCandidates(secondObs)[1].ID)
+	if err != nil || !ok || loaded.AvailableCount != 2 || loaded.CreditID != "credit_2" {
+		t.Fatalf("unexpected loaded reset grant: %#v ok=%v err=%v", loaded, ok, err)
+	}
+	delivery, err := store.EnsureResetGrantDelivery(ctx, loaded.ID, "telegram:123")
+	if err != nil {
+		t.Fatalf("ensure reset grant delivery: %v", err)
+	}
+	if delivery.Status != "pending" || delivery.EventID != loaded.ID {
+		t.Fatalf("unexpected reset grant delivery: %#v", delivery)
+	}
+	if err := store.MarkResetGrantDeliveryAttempt(ctx, loaded.ID, "telegram:123", true, "", "88"); err != nil {
+		t.Fatalf("mark reset grant delivered: %v", err)
+	}
+	delivered, ok, err := store.LoadResetGrantDelivery(ctx, loaded.ID, "telegram:123")
+	if err != nil || !ok || delivered.ProviderMessageID != "88" {
+		t.Fatalf("unexpected reset grant delivered row: %#v ok=%v err=%v", delivered, ok, err)
+	}
+	pending, err := store.PendingResetGrantDeliveries(ctx, "telegram:123", 10)
+	if err != nil {
+		t.Fatalf("pending reset grant deliveries: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending reset grant deliveries, got %#v", pending)
+	}
+}
+
 func TestRadarAlertEventsAndDeliveries(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
@@ -548,4 +614,8 @@ func parseTime(value string) time.Time {
 		panic(err)
 	}
 	return parsed.UTC()
+}
+
+func ptrInt(value int) *int {
+	return &value
 }

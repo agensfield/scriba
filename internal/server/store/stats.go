@@ -16,11 +16,13 @@ type Stats struct {
 	ResetDeliveries        map[string]DeliveryCounts `json:"resetDeliveries"`
 	WarningDeliveries      map[string]DeliveryCounts `json:"warningDeliveries"`
 	GrantWarningDeliveries map[string]DeliveryCounts `json:"grantWarningDeliveries"`
+	GrantDeliveries        map[string]DeliveryCounts `json:"grantDeliveries"`
 	RadarDeliveries        map[string]DeliveryCounts `json:"radarDeliveries"`
 	LatestObservation      *ObservationSummary       `json:"latestObservation,omitempty"`
 	LastReset              *ResetSummary             `json:"lastReset,omitempty"`
 	LastWarning            *WarningSummary           `json:"lastWarning,omitempty"`
 	LastGrantWarning       *GrantWarningSummary      `json:"lastGrantWarning,omitempty"`
+	LastGrant              *GrantSummary             `json:"lastGrant,omitempty"`
 }
 
 type DBFileStats struct {
@@ -70,6 +72,15 @@ type GrantWarningSummary struct {
 	DetectedAt    time.Time `json:"detectedAt"`
 }
 
+type GrantSummary struct {
+	ID             string    `json:"id"`
+	AccountLabel   string    `json:"accountLabel"`
+	CreditID       string    `json:"creditId"`
+	AvailableCount int       `json:"availableCount"`
+	ExpiresAt      time.Time `json:"expiresAt"`
+	DetectedAt     time.Time `json:"detectedAt"`
+}
+
 func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	stats := Stats{
 		Path:                   s.path,
@@ -77,6 +88,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		ResetDeliveries:        map[string]DeliveryCounts{},
 		WarningDeliveries:      map[string]DeliveryCounts{},
 		GrantWarningDeliveries: map[string]DeliveryCounts{},
+		GrantDeliveries:        map[string]DeliveryCounts{},
 		RadarDeliveries:        map[string]DeliveryCounts{},
 		DBFiles:                dbFileStats(s.path),
 	}
@@ -96,6 +108,9 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		"limit_warning_deliveries",
 		"reset_grant_warning_events",
 		"reset_grant_warning_deliveries",
+		"reset_grant_tracking_state",
+		"reset_grant_events",
+		"reset_grant_deliveries",
 		"radar_alert_events",
 		"radar_alert_deliveries",
 		"server_settings",
@@ -122,6 +137,11 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		return stats, err
 	}
 	stats.GrantWarningDeliveries = grantWarningDeliveries
+	grantDeliveries, err := s.deliveryCounts(ctx, "reset_grant_deliveries")
+	if err != nil {
+		return stats, err
+	}
+	stats.GrantDeliveries = grantDeliveries
 	radarDeliveries, err := s.deliveryCounts(ctx, "radar_alert_deliveries")
 	if err != nil {
 		return stats, err
@@ -154,6 +174,13 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	}
 	if ok {
 		stats.LastGrantWarning = &lastGrantWarning
+	}
+	lastGrant, ok, err := s.lastGrantSummary(ctx)
+	if err != nil {
+		return stats, err
+	}
+	if ok {
+		stats.LastGrant = &lastGrant
 	}
 	return stats, nil
 }
@@ -194,6 +221,8 @@ func deliveryCountsQuery(table string) (string, error) {
 		return `select status, count(*), coalesce(sum(attempts), 0) from limit_warning_deliveries group by status`, nil
 	case "reset_grant_warning_deliveries":
 		return `select status, count(*), coalesce(sum(attempts), 0) from reset_grant_warning_deliveries group by status`, nil
+	case "reset_grant_deliveries":
+		return `select status, count(*), coalesce(sum(attempts), 0) from reset_grant_deliveries group by status`, nil
 	case "radar_alert_deliveries":
 		return `select status, count(*), coalesce(sum(attempts), 0) from radar_alert_deliveries group by status`, nil
 	default:
@@ -266,6 +295,25 @@ select id, account_label, credit_id, threshold_days, expires_at, detected_at
 from reset_grant_warning_events
 order by detected_at desc
 limit 1`).Scan(&summary.ID, &summary.AccountLabel, &summary.CreditID, &summary.ThresholdDays, &expiresAt, &detectedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return summary, false, nil
+	}
+	if err != nil {
+		return summary, false, err
+	}
+	summary.ExpiresAt = parseDBTime(expiresAt)
+	summary.DetectedAt = parseDBTime(detectedAt)
+	return summary, true, nil
+}
+
+func (s *Store) lastGrantSummary(ctx context.Context) (GrantSummary, bool, error) {
+	var summary GrantSummary
+	var detectedAt, expiresAt string
+	err := s.db.QueryRowContext(ctx, `
+select id, account_label, credit_id, available_count, expires_at, detected_at
+from reset_grant_events
+order by detected_at desc
+limit 1`).Scan(&summary.ID, &summary.AccountLabel, &summary.CreditID, &summary.AvailableCount, &expiresAt, &detectedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return summary, false, nil
 	}

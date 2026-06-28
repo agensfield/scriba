@@ -110,6 +110,40 @@ func RenderGrantExpiryWarning(warning resetwatch.GrantExpiryWarning) string {
 	return b.String()
 }
 
+func RenderResetGrant(event resetwatch.ResetGrantEvent) string {
+	var b strings.Builder
+	b.WriteString("<b>Codex reset grant loaded</b>\n")
+	b.WriteString("Tibo loaded a reset grant.\n")
+	b.WriteString(renderAccount(event.Account))
+	b.WriteString("\n\n")
+	rows := []string{}
+	if event.AvailableCount > 0 {
+		rows = append(rows, fmt.Sprintf("%-10s %d", "available", event.AvailableCount))
+	}
+	if event.CreditTitle != "" {
+		rows = append(rows, fmt.Sprintf("%-10s %s", "grant", event.CreditTitle))
+	}
+	if event.ResetType != "" {
+		rows = append(rows, fmt.Sprintf("%-10s %s", "type", event.ResetType))
+	}
+	if !event.GrantedAt.IsZero() {
+		rows = append(rows, fmt.Sprintf("%-10s %s", "granted", formatGrantExpiry(event.GrantedAt)))
+	}
+	if !event.ExpiresAt.IsZero() {
+		rows = append(rows, fmt.Sprintf("%-10s %s", "expires", formatGrantExpiry(event.ExpiresAt)))
+	}
+	if event.CreditID != "" {
+		rows = append(rows, fmt.Sprintf("%-10s %s", "id", shortID(event.CreditID)))
+	}
+	if !event.DetectedAt.IsZero() {
+		rows = append(rows, fmt.Sprintf("%-10s %s", "seen", formatFreshTime(event.DetectedAt)))
+	}
+	b.WriteString("<pre>")
+	b.WriteString(html.EscapeString(strings.Join(rows, "\n")))
+	b.WriteString("</pre>")
+	return b.String()
+}
+
 func RenderRadarProbability(alert radar.ProbabilityAlert) string {
 	rows := []string{
 		fmt.Sprintf("%-12s %d%%", "checkpoint", alert.Milestone),
@@ -173,8 +207,10 @@ func RenderStats(stats server.Stats, environment string, telegramEnabled bool) s
 	b.WriteString("\n\n")
 	b.WriteString(renderDeliveryStats("Grant warning deliveries", stats.Store.GrantWarningDeliveries))
 	b.WriteString("\n\n")
+	b.WriteString(renderDeliveryStats("Grant deliveries", stats.Store.GrantDeliveries))
+	b.WriteString("\n\n")
 	b.WriteString(renderDeliveryStats("Radar deliveries", stats.Store.RadarDeliveries))
-	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil || stats.Store.LastGrantWarning != nil {
+	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil || stats.Store.LastGrantWarning != nil || stats.Store.LastGrant != nil {
 		b.WriteString("\n\n")
 		b.WriteString(renderRecentStats(stats.Store))
 	}
@@ -261,6 +297,7 @@ func renderStorageStats(stats store.Stats) string {
 		fmt.Sprintf("%-13s %d", "tracked win", counts["limit_windows"]),
 		fmt.Sprintf("%-13s %d", "resets", counts["reset_events"]),
 		fmt.Sprintf("%-13s %d", "warnings", counts["limit_warning_events"]),
+		fmt.Sprintf("%-13s %d", "grants", counts["reset_grant_events"]),
 		fmt.Sprintf("%-13s %d", "grant warn", counts["reset_grant_warning_events"]),
 		fmt.Sprintf("%-13s %d", "radar", counts["radar_alert_events"]),
 	}
@@ -285,7 +322,10 @@ func renderRecentStats(stats store.Stats) string {
 		rows = append(rows, fmt.Sprintf("%-8s %s · %d%% left · %s", "warning", sectionLabel(stats.LastWarning.Label), stats.LastWarning.ThresholdRemaining, formatFreshTime(stats.LastWarning.DetectedAt)))
 	}
 	if stats.LastGrantWarning != nil {
-		rows = append(rows, fmt.Sprintf("%-8s %dd · %s · %s", "grant", stats.LastGrantWarning.ThresholdDays, formatGrantExpiry(stats.LastGrantWarning.ExpiresAt), formatFreshTime(stats.LastGrantWarning.DetectedAt)))
+		rows = append(rows, fmt.Sprintf("%-8s %dd warning · %s · %s", "grant", stats.LastGrantWarning.ThresholdDays, formatGrantExpiry(stats.LastGrantWarning.ExpiresAt), formatFreshTime(stats.LastGrantWarning.DetectedAt)))
+	}
+	if stats.LastGrant != nil {
+		rows = append(rows, fmt.Sprintf("%-8s %d available · %s · %s", "grant", stats.LastGrant.AvailableCount, formatGrantExpiry(stats.LastGrant.ExpiresAt), formatFreshTime(stats.LastGrant.DetectedAt)))
 	}
 	return "<b>Recent</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
 }

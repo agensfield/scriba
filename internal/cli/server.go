@@ -384,6 +384,7 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 		fmt.Sprintf("%-13s %d", "tracked win", counts["limit_windows"]),
 		fmt.Sprintf("%-13s %d", "resets", counts["reset_events"]),
 		fmt.Sprintf("%-13s %d", "warnings", counts["limit_warning_events"]),
+		fmt.Sprintf("%-13s %d", "grants", counts["reset_grant_events"]),
 		fmt.Sprintf("%-13s %d", "grant warn", counts["reset_grant_warning_events"]),
 	})
 	b.WriteString("\nReset deliveries\n")
@@ -392,7 +393,9 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 	writeDeliveryRows(&b, stats.Store.WarningDeliveries)
 	b.WriteString("\nGrant warning deliveries\n")
 	writeDeliveryRows(&b, stats.Store.GrantWarningDeliveries)
-	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil || stats.Store.LastGrantWarning != nil {
+	b.WriteString("\nGrant deliveries\n")
+	writeDeliveryRows(&b, stats.Store.GrantDeliveries)
+	if stats.Store.LastReset != nil || stats.Store.LastWarning != nil || stats.Store.LastGrantWarning != nil || stats.Store.LastGrant != nil {
 		b.WriteString("\nRecent\n")
 		var rows []string
 		if stats.Store.LastReset != nil {
@@ -405,7 +408,11 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 		}
 		if stats.Store.LastGrantWarning != nil {
 			warning := stats.Store.LastGrantWarning
-			rows = append(rows, fmt.Sprintf("%-13s %dd · %s · %s", "grant", warning.ThresholdDays, warning.ExpiresAt.Local().Format("2006-01-02 15:04 MST"), formatCLIStatsTime(warning.DetectedAt)))
+			rows = append(rows, fmt.Sprintf("%-13s %dd warning · %s · %s", "grant", warning.ThresholdDays, warning.ExpiresAt.Local().Format("2006-01-02 15:04 MST"), formatCLIStatsTime(warning.DetectedAt)))
+		}
+		if stats.Store.LastGrant != nil {
+			grant := stats.Store.LastGrant
+			rows = append(rows, fmt.Sprintf("%-13s %d available · %s · %s", "grant", grant.AvailableCount, grant.ExpiresAt.Local().Format("2006-01-02 15:04 MST"), formatCLIStatsTime(grant.DetectedAt)))
 		}
 		writeRows(&b, rows)
 	}
@@ -453,7 +460,7 @@ func renderServerRefresh(result servercore.PollResult) string {
 		b.WriteString(grants)
 		b.WriteString("\n")
 	}
-	if len(result.Decision.Events) > 0 || len(result.Warnings) > 0 || len(result.GrantWarnings) > 0 {
+	if len(result.Decision.Events) > 0 || len(result.Warnings) > 0 || len(result.GrantWarnings) > 0 || len(result.ResetGrants) > 0 {
 		b.WriteString("\n")
 		b.WriteString(cliBold("Notifications"))
 		b.WriteString("\n")
@@ -465,6 +472,9 @@ func renderServerRefresh(result servercore.PollResult) string {
 		}
 		if len(result.GrantWarnings) > 0 {
 			fmt.Fprintf(&b, "%-13s %d grant warnings\n", "grants", len(result.GrantWarnings))
+		}
+		if len(result.ResetGrants) > 0 {
+			fmt.Fprintf(&b, "%-13s %d grant loaded\n", "grants", len(result.ResetGrants))
 		}
 	} else {
 		b.WriteString("\n")

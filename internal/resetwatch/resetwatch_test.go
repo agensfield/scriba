@@ -279,6 +279,32 @@ func TestCatalogJokeChooserIsDeterministicAndToneAware(t *testing.T) {
 	}
 }
 
+func TestResetGrantEventCandidatesUseAvailableCredits(t *testing.T) {
+	obs := observation("2026-06-01T12:00:00Z", "2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")
+	count := 2
+	obs.ResetGrants = ResetGrants{
+		AvailableCount: &count,
+		Credits: []ResetCredit{
+			{ID: "credit_2", Status: "available", Title: "Full reset", ResetType: "codex_rate_limits", GrantedAt: parseTime("2026-06-13T01:20:48Z"), ExpiresAt: parseTime("2026-07-13T01:20:48Z")},
+			{ID: "redeemed", Status: "redeemed", Title: "Full reset", GrantedAt: parseTime("2026-06-12T01:20:48Z"), ExpiresAt: parseTime("2026-07-12T01:20:48Z")},
+			{ID: "credit_1", Status: "available", Title: "Full reset", ResetType: "codex_rate_limits", GrantedAt: parseTime("2026-06-12T01:20:48Z"), ExpiresAt: parseTime("2026-07-12T01:20:48Z")},
+		},
+	}
+	events := ResetGrantEventCandidates(obs)
+	if len(events) != 2 {
+		t.Fatalf("expected two grant events, got %#v", events)
+	}
+	if events[0].CreditID != "credit_1" || events[1].CreditID != "credit_2" {
+		t.Fatalf("expected events ordered by grant time, got %#v", events)
+	}
+	if events[0].AvailableCount != 2 || events[0].ResetType != "codex_rate_limits" {
+		t.Fatalf("unexpected event metadata: %#v", events[0])
+	}
+	if events[0].ID == events[1].ID {
+		t.Fatalf("event IDs should be per credit: %#v", events)
+	}
+}
+
 func observation(observedAt, weeklyReset, fiveReset string) Observation {
 	weekly := 51.0
 	five := 96.0

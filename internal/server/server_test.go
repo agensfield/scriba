@@ -143,6 +143,47 @@ func TestRefreshEmitsGrantExpiryWarningsOncePerCheckpoint(t *testing.T) {
 	}
 }
 
+func TestRefreshEmitsResetGrantLoadedOnlyForNewCredits(t *testing.T) {
+	ctx := context.Background()
+	fetcher := &fakeFetcher{results: []remote.ProbeResult{
+		probeResultWithGrantID("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z", "credit_1", "2026-06-12T01:20:48Z", "2026-07-12T01:20:48Z"),
+		probeResultWithCredits("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z", []remote.ResetCredit{
+			{ID: "credit_1", Status: "available", Title: "Rate limit reset", ResetType: "codex_rate_limits", GrantedAt: "2026-06-12T01:20:48Z", ExpiresAt: "2026-07-12T01:20:48Z"},
+			{ID: "credit_2", Status: "available", Title: "Rate limit reset", ResetType: "codex_rate_limits", GrantedAt: "2026-06-18T00:29:25Z", ExpiresAt: "2026-07-18T00:29:25Z"},
+		}),
+		probeResultWithCredits("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z", []remote.ResetCredit{
+			{ID: "credit_1", Status: "available", Title: "Rate limit reset", ResetType: "codex_rate_limits", GrantedAt: "2026-06-12T01:20:48Z", ExpiresAt: "2026-07-12T01:20:48Z"},
+			{ID: "credit_2", Status: "available", Title: "Rate limit reset", ResetType: "codex_rate_limits", GrantedAt: "2026-06-18T00:29:25Z", ExpiresAt: "2026-07-18T00:29:25Z"},
+		}),
+	}}
+	notifier := &fakeNotifier{}
+	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal"})
+	first, err := srv.RefreshNow(ctx)
+	if err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	if len(first.ResetGrants) != 0 || len(notifier.resetGrants) != 0 {
+		t.Fatalf("first grant observation should seed silently, result=%#v notifications=%d", first.ResetGrants, len(notifier.resetGrants))
+	}
+	second, err := srv.RefreshNow(ctx)
+	if err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if len(second.ResetGrants) != 1 || second.ResetGrants[0].CreditID != "credit_2" {
+		t.Fatalf("expected one new grant event, got %#v", second.ResetGrants)
+	}
+	if len(notifier.resetGrants) != 1 || notifier.resetGrants[0].CreditID != "credit_2" {
+		t.Fatalf("expected one reset grant notification, got %#v", notifier.resetGrants)
+	}
+	third, err := srv.RefreshNow(ctx)
+	if err != nil {
+		t.Fatalf("third refresh: %v", err)
+	}
+	if len(third.ResetGrants) != 0 || len(notifier.resetGrants) != 1 {
+		t.Fatalf("expected deduped reset grant, result=%#v notifications=%d", third.ResetGrants, len(notifier.resetGrants))
+	}
+}
+
 func TestRefreshEmitsRadarProbabilityAlertsOnUpwardMilestones(t *testing.T) {
 	ctx := context.Background()
 	fetcher := &fakeFetcher{results: []remote.ProbeResult{
@@ -295,6 +336,7 @@ type fakeNotifier struct {
 	resets        []resetwatch.Event
 	warnings      []resetwatch.WarningEvent
 	grantWarnings []resetwatch.GrantExpiryWarning
+	resetGrants   []resetwatch.ResetGrantEvent
 	radarAlerts   []radar.ProbabilityAlert
 	health        []HealthNotice
 }
@@ -316,6 +358,11 @@ func (n *fakeNotifier) NotifyLimitWarning(_ context.Context, warning resetwatch.
 
 func (n *fakeNotifier) NotifyGrantExpiryWarning(_ context.Context, warning resetwatch.GrantExpiryWarning) error {
 	n.grantWarnings = append(n.grantWarnings, warning)
+	return nil
+}
+
+func (n *fakeNotifier) NotifyResetGrant(_ context.Context, event resetwatch.ResetGrantEvent) error {
+	n.resetGrants = append(n.resetGrants, event)
 	return nil
 }
 
@@ -377,9 +424,17 @@ func probeResult(weeklyReset, fiveReset string) remote.ProbeResult {
 }
 
 func probeResultWithGrant(weeklyReset, fiveReset, expiresAt string) remote.ProbeResult {
+	return probeResultWithGrantID(weeklyReset, fiveReset, "credit_1", "2026-05-07T12:00:00Z", expiresAt)
+}
+
+func probeResultWithGrantID(weeklyReset, fiveReset, id, grantedAt, expiresAt string) remote.ProbeResult {
+	return probeResultWithCredits(weeklyReset, fiveReset, []remote.ResetCredit{
+		{ID: id, Status: "available", Title: "Rate limit reset", ResetType: "codex_rate_limits", GrantedAt: grantedAt, ExpiresAt: expiresAt},
+	})
+}
+
+func probeResultWithCredits(weeklyReset, fiveReset string, credits []remote.ResetCredit) remote.ProbeResult {
 	result := probeResult(weeklyReset, fiveReset)
-	result.ResetCredits = []remote.ResetCredit{
-		{ID: "credit_1", Status: "available", Title: "Rate limit reset", GrantedAt: "2026-05-07T12:00:00Z", ExpiresAt: expiresAt},
-	}
+	result.ResetCredits = credits
 	return result
 }

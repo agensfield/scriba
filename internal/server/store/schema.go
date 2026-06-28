@@ -153,6 +153,52 @@ create table if not exists reset_grant_warning_deliveries (
   foreign key (warning_id) references reset_grant_warning_events(id)
 );
 
+create table if not exists reset_grant_tracking_state (
+  account_ref text primary key,
+  provider_id text not null,
+  available_count integer not null,
+  last_observed_at text not null,
+  created_at text not null,
+  updated_at text not null,
+  foreign key (account_ref) references accounts(account_ref)
+);
+
+create table if not exists reset_grant_events (
+  id text primary key,
+  provider_id text not null,
+  account_ref text not null,
+  account_label text not null,
+  account_email text not null,
+  account_plan text not null,
+  credit_id text not null,
+  credit_title text not null,
+  reset_type text not null,
+  granted_at text,
+  expires_at text not null,
+  available_count integer not null,
+  snapshot_json text not null,
+  detected_at text not null,
+  created_at text not null,
+  foreign key (account_ref) references accounts(account_ref)
+);
+
+create table if not exists reset_grant_deliveries (
+  id text primary key,
+  event_id text not null,
+  target text not null,
+  status text not null,
+  attempts integer not null default 0,
+  last_attempt_at text,
+  next_attempt_at text,
+  delivered_at text,
+  provider_message_id text,
+  last_error text,
+  created_at text not null,
+  updated_at text not null,
+  unique (event_id, target),
+  foreign key (event_id) references reset_grant_events(id)
+);
+
 create table if not exists radar_alert_events (
   id text primary key,
   milestone integer not null,
@@ -216,6 +262,12 @@ create index if not exists idx_reset_grant_warning_events_account_detected
 
 create index if not exists idx_reset_grant_warning_deliveries_status
   on reset_grant_warning_deliveries(status, created_at);
+
+create index if not exists idx_reset_grant_events_account_detected
+  on reset_grant_events(account_ref, detected_at);
+
+create index if not exists idx_reset_grant_deliveries_status
+  on reset_grant_deliveries(status, created_at);
 
 create index if not exists idx_radar_alert_events_detected
   on radar_alert_events(detected_at);
