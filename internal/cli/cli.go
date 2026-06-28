@@ -626,9 +626,9 @@ func renderResetGrants(payload codexLimitsPayload) string {
 	summary := resetGrantSummary(payload)
 	var b strings.Builder
 	b.WriteString("Codex reset grants\n")
-	b.WriteString(fmt.Sprintf("%-12s %v\n", "available", summary["available"]))
+	fmt.Fprintf(&b, "%-12s %v\n", "available", summary["available"])
 	if expiresAt, ok := summary["earliestExpiresAt"]; ok {
-		b.WriteString(fmt.Sprintf("%-12s %s\n", "earliest", formatGrantTime(fmt.Sprint(expiresAt))))
+		fmt.Fprintf(&b, "%-12s %s\n", "earliest", formatGrantTime(fmt.Sprint(expiresAt)))
 	}
 	if len(payload.ResetCredits) == 0 {
 		b.WriteString("\nNo available reset grants found.")
@@ -645,11 +645,11 @@ func renderResetGrants(payload codexLimitsPayload) string {
 		b.WriteString("\n")
 		b.WriteString(title)
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%-12s %s\n", "status", emptyAsUnset(credit.Status)))
-		b.WriteString(fmt.Sprintf("%-12s %s\n", "type", emptyAsUnset(credit.ResetType)))
-		b.WriteString(fmt.Sprintf("%-12s %s\n", "granted", formatGrantTime(credit.GrantedAt)))
-		b.WriteString(fmt.Sprintf("%-12s %s\n", "expires", formatGrantTime(credit.ExpiresAt)))
-		b.WriteString(fmt.Sprintf("%-12s %s\n", "id", emptyAsUnset(credit.ID)))
+		fmt.Fprintf(&b, "%-12s %s\n", "status", emptyAsUnset(credit.Status))
+		fmt.Fprintf(&b, "%-12s %s\n", "type", emptyAsUnset(credit.ResetType))
+		fmt.Fprintf(&b, "%-12s %s\n", "granted", formatGrantTime(credit.GrantedAt))
+		fmt.Fprintf(&b, "%-12s %s\n", "expires", formatGrantTime(credit.ExpiresAt))
+		fmt.Fprintf(&b, "%-12s %s\n", "id", emptyAsUnset(credit.ID))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

@@ -17,7 +17,7 @@ import (
 
 var (
 	usageURL              = "https://chatgpt.com/backend-api/wham/usage"
-	rateLimitResetCredits = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+	rateLimitResetCredits = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits" // #nosec G101 -- Endpoint URL, not a credential.
 )
 
 type usageResponse struct {

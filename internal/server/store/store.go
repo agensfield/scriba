@@ -833,11 +833,39 @@ func (s *Store) MarkRadarAlertDeliverySending(ctx context.Context, alertID, targ
 func (s *Store) markDeliverySending(ctx context.Context, table, idColumn, eventID, target string) error {
 	now := formatTime(time.Now())
 	nextAttemptAt := formatTime(time.Now().Add(deliverySendLease))
-	_, err := s.db.ExecContext(ctx, `
-update `+table+`
-set status = 'sending', last_attempt_at = ?, next_attempt_at = ?, last_error = null, updated_at = ?
-where `+idColumn+` = ? and target = ? and status != 'delivered'`, now, nextAttemptAt, now, eventID, target)
+	query, ok := deliverySendingQuery(table, idColumn)
+	if !ok {
+		return errors.New("unknown delivery table")
+	}
+	_, err := s.db.ExecContext(ctx, query, now, nextAttemptAt, now, eventID, target)
 	return err
+}
+
+func deliverySendingQuery(table, idColumn string) (string, bool) {
+	switch {
+	case table == "notification_deliveries" && idColumn == "event_id":
+		return `
+update notification_deliveries
+set status = 'sending', last_attempt_at = ?, next_attempt_at = ?, last_error = null, updated_at = ?
+where event_id = ? and target = ? and status != 'delivered'`, true
+	case table == "limit_warning_deliveries" && idColumn == "warning_id":
+		return `
+update limit_warning_deliveries
+set status = 'sending', last_attempt_at = ?, next_attempt_at = ?, last_error = null, updated_at = ?
+where warning_id = ? and target = ? and status != 'delivered'`, true
+	case table == "reset_grant_warning_deliveries" && idColumn == "warning_id":
+		return `
+update reset_grant_warning_deliveries
+set status = 'sending', last_attempt_at = ?, next_attempt_at = ?, last_error = null, updated_at = ?
+where warning_id = ? and target = ? and status != 'delivered'`, true
+	case table == "radar_alert_deliveries" && idColumn == "alert_id":
+		return `
+update radar_alert_deliveries
+set status = 'sending', last_attempt_at = ?, next_attempt_at = ?, last_error = null, updated_at = ?
+where alert_id = ? and target = ? and status != 'delivered'`, true
+	default:
+		return "", false
+	}
 }
 
 func (s *Store) GetSetting(ctx context.Context, key string) (string, bool, error) {
