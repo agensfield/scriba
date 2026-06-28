@@ -170,7 +170,7 @@ func dispatch(args []string) error {
 		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use:   fmt.Sprintf("scriba cache %s [flags]", args[1]),
-			Flags: []string{"config", "cache-dir", "redact"},
+			Flags: []string{"json", "config", "cache-dir", "redact"},
 		})
 		if err != nil {
 			return err
@@ -500,7 +500,7 @@ func runReport(provider, command string, opts options) error {
 		return fmt.Errorf("unknown report: %s", command)
 	}
 	payload["rows"] = rows
-	human := render.Report(title(provider)+" "+title(command), rowCount(rows))
+	human := render.Report(title(provider)+" "+title(command), rows)
 	if limits != nil {
 		payload["limits"] = limits
 		human += "\n\n" + render.CodexLimits(limits.Lines, false)
@@ -748,7 +748,7 @@ func formatGrantTime(value string) string {
 	if !ok {
 		return value
 	}
-	return parsed.UTC().Format("2006-01-02 15:04 UTC")
+	return parsed.Local().Format("2006-01-02 15:04 MST")
 }
 
 func parseGrantTime(value string) (time.Time, bool) {
@@ -831,7 +831,7 @@ func runCache(command string, opts options) error {
 		if err != nil {
 			return err
 		}
-		return printJSON(map[string]any{"ok": true, "cacheDir": dir}, opts.redact)
+		return output(opts, map[string]any{"ok": true, "cacheDir": dir}, fmt.Sprintf("cache reset · %s", dir))
 	case "status", "prune", "vacuum":
 		c, err := cache.Open(cfg.CacheDir)
 		if err != nil {
@@ -843,10 +843,12 @@ func runCache(command string, opts options) error {
 			if err != nil {
 				return err
 			}
-			return printJSON(payload, opts.redact)
+			return output(opts, payload, renderCacheStatus(payload))
 		}
 		if command == "vacuum" {
-			return printJSON(withOK(c.Vacuum()), opts.redact)
+			result := c.Vacuum()
+			payload := withOK(result)
+			return output(opts, payload, renderCacheVacuum(result))
 		}
 		existing := map[string]struct{}{}
 		dirs := append([]string{}, cfg.Providers.Claude.Paths...)
@@ -862,10 +864,115 @@ func runCache(command string, opts options) error {
 			return err
 		}
 		status, _ := c.Status()
-		return printJSON(map[string]any{"ok": true, "pruned": pruned, "remaining": status.FileEvents}, opts.redact)
+		payload := map[string]any{"ok": true, "pruned": pruned, "remaining": status.FileEvents}
+		return output(opts, payload, fmt.Sprintf("cache pruned · %d files removed", pruned))
 	default:
 		return fmt.Errorf("unknown cache command: %s", command)
 	}
+}
+
+func renderCacheStatus(status cache.Status) string {
+	var b strings.Builder
+	b.WriteString(cliHeader("Scriba cache"))
+	b.WriteString("\n")
+	writeAlignedRows(&b, []string{
+		fmt.Sprintf("%-12s %s", "dir", status.CacheDir),
+		fmt.Sprintf("%-12s %s", "database", status.DatabasePath),
+		fmt.Sprintf("%-12s %s", "size", humanBytes(status.SizeBytes)),
+		fmt.Sprintf("%-12s %d", "schema", status.SchemaVersion),
+		fmt.Sprintf("%-12s %s", "wal", cacheWALStatus(status.WAL)),
+	})
+	if len(status.ScanStats) > 0 {
+		b.WriteString("\n")
+		b.WriteString(cliBold("Scans"))
+		b.WriteString("\n")
+		for _, scan := range status.ScanStats {
+			fmt.Fprintf(&b, "%-12s %s · %s files · %s events\n",
+				scan.ProviderID,
+				formatCLIStatsTimeString(scan.UpdatedAt),
+				humanInt(int64(scan.Stats.Files)),
+				humanInt(int64(scan.Stats.Events)),
+			)
+		}
+	}
+	if len(status.FileEvents) > 0 {
+		b.WriteString("\n")
+		b.WriteString(cliBold("Cached files"))
+		b.WriteString("\n")
+		for _, entry := range status.FileEvents {
+			fmt.Fprintf(&b, "%-12s %s files · updated %s\n", entry.ProviderID, humanInt(int64(entry.Files)), formatCLIStatsTimeString(entry.UpdatedAt))
+		}
+	}
+	if len(status.Snapshots) > 0 {
+		b.WriteString("\n")
+		b.WriteString(cliBold("Snapshots"))
+		b.WriteString("\n")
+		for _, snapshot := range status.Snapshots {
+			fmt.Fprintf(&b, "%-12s %s\n", snapshot.Name, formatCLIStatsTimeString(snapshot.UpdatedAt))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderCacheVacuum(result cache.VacuumResult) string {
+	return fmt.Sprintf("cache vacuumed · %s -> %s · reclaimed %s", humanBytes(result.BeforeBytes), humanBytes(result.AfterBytes), humanBytes(result.ReclaimedBytes))
+}
+
+func cacheWALStatus(info cache.WALInfo) string {
+	if !info.Enabled {
+		return cliYellow("disabled")
+	}
+	return cliGreen(info.Mode) + cliMuted(fmt.Sprintf(" · busy timeout %dms", info.BusyTimeoutMs))
+}
+
+func writeAlignedRows(b *strings.Builder, rows []string) {
+	for _, row := range rows {
+		b.WriteString(row)
+		b.WriteString("\n")
+	}
+}
+
+func humanBytes(value int64) string {
+	if value <= 0 {
+		return "0 B"
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	v := float64(value)
+	unit := 0
+	for v >= 1000 && unit < len(units)-1 {
+		v /= 1000
+		unit++
+	}
+	if unit == 0 {
+		return fmt.Sprintf("%d %s", value, units[unit])
+	}
+	return fmt.Sprintf("%.1f %s", v, units[unit])
+}
+
+func humanInt(value int64) string {
+	negative := value < 0
+	if negative {
+		value = -value
+	}
+	text := fmt.Sprint(value)
+	for i := len(text) - 3; i > 0; i -= 3 {
+		text = text[:i] + "," + text[i:]
+	}
+	if negative {
+		return "-" + text
+	}
+	return text
+}
+
+func formatCLIStatsTimeString(value string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, strings.TrimSpace(value))
+	}
+	if err != nil {
+		return emptyAsUnset(value)
+	}
+	return formatCLIStatsTime(parsed)
 }
 
 func runConfig(command string, opts options) error {
@@ -1124,13 +1231,6 @@ func withOK(value any) map[string]any {
 	_ = json.Unmarshal(data, &out)
 	out["ok"] = true
 	return out
-}
-
-func rowCount(value any) int {
-	data, _ := json.Marshal(value)
-	var rows []any
-	_ = json.Unmarshal(data, &rows)
-	return len(rows)
 }
 
 func title(value string) string {

@@ -1,8 +1,11 @@
 package render
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,15 +25,28 @@ func Status(snapshot model.StatusSnapshot) string {
 		}
 		for _, source := range provider.Provenance {
 			if source.Error != "" {
-				fmt.Fprintf(&b, "  %s %s\n", red("error"), source.Error)
+				fmt.Fprintf(&b, "  %s %s\n", red("error"), humanError(source.Error))
 			}
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func Report(title string, rows int) string {
-	return fmt.Sprintf("%s · %d rows", title, rows)
+func Report(title string, rows any) string {
+	switch typed := rows.(type) {
+	case []model.DailyReportRow:
+		return reportRows(title, "days", len(typed), typed, dailyReportLine)
+	case []model.WeeklyReportRow:
+		return reportRows(title, "weeks", len(typed), typed, weeklyReportLine)
+	case []model.MonthlyReportRow:
+		return reportRows(title, "months", len(typed), typed, monthlyReportLine)
+	case []model.SessionReportRow:
+		return reportRows(title, "sessions", len(typed), typed, sessionReportLine)
+	case []model.BlockReportRow:
+		return reportRows(title, "blocks", len(typed), typed, blockReportLine)
+	default:
+		return fmt.Sprintf("%s\n%s", header(title), yellow("no human renderer for this report; use --json"))
+	}
 }
 
 func CodexLimits(lines []model.MetricLine, cached bool) string {
@@ -143,7 +159,7 @@ func MetricLine(line model.MetricLine) string {
 func metricLine(line model.MetricLine, labelWidth int) string {
 	switch line.Type {
 	case "text":
-		return fmt.Sprintf("%s %s", metricLabel(line.Label, labelWidth), value(fmt.Sprint(line.Value)))
+		return fmt.Sprintf("%s %s", metricLabel(line.Label, labelWidth), value(formatMetricText(line)))
 	case "badge":
 		return fmt.Sprintf("%s %s", metricLabel(line.Label, labelWidth), badge(line.Text))
 	case "amount":
@@ -166,6 +182,176 @@ func metricLine(line model.MetricLine, labelWidth int) string {
 	default:
 		return fmt.Sprintf("%s %s", metricLabel(line.Label, labelWidth), value(fmt.Sprint(line.Value)))
 	}
+}
+
+func formatMetricText(line model.MetricLine) string {
+	text := fmt.Sprint(line.Value)
+	if strings.EqualFold(line.Label, "Grant expiry") {
+		return formatTimeLocal(text)
+	}
+	return humanError(text)
+}
+
+func reportRows[T any](title, noun string, total int, rows []T, renderLine func(T) string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n", header(title))
+	if total == 0 {
+		fmt.Fprintf(&b, "%s\n", yellow("no usage rows found"))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	limit := total
+	if limit > 10 {
+		limit = 10
+	}
+	summary := fmt.Sprintf("%d %s", total, noun)
+	if total > limit {
+		summary += fmt.Sprintf(" · showing latest %d", limit)
+	}
+	fmt.Fprintf(&b, "%s\n\n", muted(summary))
+	for i := 0; i < limit; i++ {
+		line := renderLine(rows[i])
+		if line == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s %s\n", muted(fmt.Sprintf("%2d.", i+1)), line)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func dailyReportLine(row model.DailyReportRow) string {
+	return periodReportLine(row.Date, row.ReportTotals, row.Models)
+}
+
+func weeklyReportLine(row model.WeeklyReportRow) string {
+	return periodReportLine("week of "+row.Week, row.ReportTotals, row.Models)
+}
+
+func monthlyReportLine(row model.MonthlyReportRow) string {
+	return periodReportLine(row.Month, row.ReportTotals, row.Models)
+}
+
+func sessionReportLine(row model.SessionReportRow) string {
+	name, includeID := sessionLabel(row)
+	id := shortID(row.SessionID)
+	if includeID && id != "" && id != name {
+		name += " · " + id
+	}
+	return fmt.Sprintf("%-18s %s", formatReportTime(row.LastActivity), totalsSummary(row.ReportTotals, row.Models, name))
+}
+
+func sessionLabel(row model.SessionReportRow) (string, bool) {
+	if row.ProjectPath != "" {
+		return filepath.Base(strings.TrimRight(row.ProjectPath, "/")), true
+	}
+	if row.Directory != "" && !looksLikeDateDirectory(row.Directory) {
+		return filepath.Base(strings.TrimRight(row.Directory, "/")), true
+	}
+	if row.SessionFile != "" {
+		return cleanSessionFile(row.SessionFile), false
+	}
+	if row.Directory != "" {
+		return row.Directory, false
+	}
+	return row.SessionID, false
+}
+
+func looksLikeDateDirectory(value string) bool {
+	parts := strings.Split(strings.Trim(value, "/"), "/")
+	if len(parts) != 3 {
+		return false
+	}
+	return len(parts[0]) == 4 && len(parts[1]) == 2 && len(parts[2]) == 2
+}
+
+func cleanSessionFile(value string) string {
+	name := filepath.Base(strings.TrimRight(value, "/"))
+	name = strings.TrimSuffix(name, ".jsonl")
+	re := regexp.MustCompile(`^rollout-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-\d{2}-([0-9a-f]{8})`)
+	if match := re.FindStringSubmatch(name); match != nil {
+		return fmt.Sprintf("rollout %s %s:%s · %s", match[1], match[2], match[3], match[4])
+	}
+	return name
+}
+
+func blockReportLine(row model.BlockReportRow) string {
+	label := formatReportTime(row.StartTime)
+	if row.IsActive {
+		label += " active"
+	}
+	return fmt.Sprintf("%-18s %s · %d entries", label, totalsSummary(row.ReportTotals, row.Models, ""), row.Entries)
+}
+
+func periodReportLine(period string, totals model.ReportTotals, models []model.ModelBreakdown) string {
+	return fmt.Sprintf("%-18s %s", period, totalsSummary(totals, models, ""))
+}
+
+func totalsSummary(totals model.ReportTotals, models []model.ModelBreakdown, suffix string) string {
+	parts := []string{
+		value(fmt.Sprintf("%s tokens", compact(float64(totals.TotalTokens)))),
+		muted(fmt.Sprintf("in %s", compact(float64(totals.InputTokens)))),
+		muted(fmt.Sprintf("out %s", compact(float64(totals.OutputTokens)))),
+	}
+	if totals.CostUSD != nil {
+		parts = append(parts, green(formatCost(*totals.CostUSD)))
+	}
+	if model := topModel(models); model != "" {
+		parts = append(parts, cyan(shortModel(model)))
+	}
+	if suffix != "" {
+		parts = append(parts, muted(suffix))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func topModel(models []model.ModelBreakdown) string {
+	for _, model := range models {
+		if strings.TrimSpace(model.Model) != "" {
+			return model.Model
+		}
+	}
+	return ""
+}
+
+func shortModel(model string) string {
+	if len(model) <= 36 {
+		return model
+	}
+	return model[:33] + "..."
+}
+
+func shortID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:8]
+}
+
+func formatCost(cost float64) string {
+	if cost < 1 {
+		return fmt.Sprintf("$%.4f", cost)
+	}
+	if cost < 10 {
+		return fmt.Sprintf("$%.2f", cost)
+	}
+	return fmt.Sprintf("$%.0f", cost)
+}
+
+func formatReportTime(value string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, strings.TrimSpace(value))
+	}
+	if err != nil {
+		if len(value) > 16 {
+			return value[:16]
+		}
+		return value
+	}
+	return parsed.Local().Format("Jan 2 15:04")
 }
 
 func metricLabel(text string, width int) string {
@@ -288,6 +474,55 @@ func formatBytes(value int64) string {
 	default:
 		return fmt.Sprintf("%d B", value)
 	}
+}
+
+func formatTimeLocal(value string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, strings.TrimSpace(value))
+	}
+	if err != nil {
+		return value
+	}
+	return parsed.Local().Format("2006-01-02 15:04 MST")
+}
+
+func humanError(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return value
+	}
+	start := strings.Index(trimmed, "{")
+	if start < 0 {
+		return value
+	}
+	var payload struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+		Message          string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(trimmed[start:]), &payload); err != nil {
+		return value
+	}
+	detail := payload.ErrorDescription
+	if detail == "" {
+		detail = payload.Message
+	}
+	if detail == "" {
+		detail = payload.Error
+	}
+	if detail == "" {
+		return value
+	}
+	prefix := strings.TrimSpace(trimmed[:start])
+	prefix = strings.TrimSuffix(prefix, ":")
+	if strings.Contains(strings.ToLower(prefix), "refresh failed") {
+		return "OAuth refresh failed: " + detail
+	}
+	if prefix == "" {
+		return detail
+	}
+	return prefix + ": " + detail
 }
 
 func duration(ms int64) string {

@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agensfield/scriba/internal/model"
 )
@@ -36,6 +37,17 @@ func TestCodexLimitsShowsResetGrants(t *testing.T) {
 	}
 }
 
+func TestCodexLimitsFormatsGrantExpiry(t *testing.T) {
+	text := stripANSI(CodexLimits([]model.MetricLine{
+		{Type: "text", Label: "Grant expiry", Value: "2026-07-12T01:20:48.728491Z"},
+	}, false))
+
+	want := time.Date(2026, 7, 12, 1, 20, 48, 728491000, time.UTC).Local().Format("2006-01-02 15:04 MST")
+	if strings.Contains(text, "728491") || !strings.Contains(text, want) {
+		t.Fatalf("expected human grant expiry:\n%s", text)
+	}
+}
+
 func TestStatusHidesSparkLines(t *testing.T) {
 	used := 12.0
 	limit := 100.0
@@ -56,6 +68,47 @@ func TestStatusHidesSparkLines(t *testing.T) {
 	}
 	if !strings.Contains(text, "5h limit") {
 		t.Fatalf("expected 5h line to remain:\n%s", text)
+	}
+}
+
+func TestStatusSanitizesOAuthJSONErrors(t *testing.T) {
+	text := stripANSI(Status(model.StatusSnapshot{
+		SchemaVersion: model.SchemaVersion,
+		GeneratedAt:   "2026-06-01T00:00:00Z",
+		Providers: []model.ProviderSnapshot{{
+			ProviderID:  "claude",
+			DisplayName: "Claude",
+			Provenance: []model.SourceProvenance{{
+				Error: `claude OAuth credentials found but refresh failed: refresh failed: 400 {"error":"invalid_grant","error_description":"Refresh token not found or invalid"}`,
+			}},
+		}},
+	}))
+
+	if strings.Contains(text, `"error"`) || !strings.Contains(text, "OAuth refresh failed: Refresh token not found or invalid") {
+		t.Fatalf("expected sanitized OAuth error:\n%s", text)
+	}
+}
+
+func TestReportShowsHumanRows(t *testing.T) {
+	cost := 1.25
+	text := stripANSI(Report("Codex Weekly", []model.WeeklyReportRow{
+		{
+			Week: "2026-06-29",
+			ReportTotals: model.ReportTotals{
+				TokenUsage: model.TokenUsage{InputTokens: 1200, OutputTokens: 300, TotalTokens: 1500},
+				CostUSD:    &cost,
+			},
+			Models: []model.ModelBreakdown{{Model: "gpt-5-codex", TokenUsage: model.TokenUsage{TotalTokens: 1500}}},
+		},
+	}))
+
+	for _, want := range []string{"Codex Weekly", "1 weeks", "week of 2026-06-29", "1.5K tokens", "$1.25", "gpt-5-codex"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "rows") {
+		t.Fatalf("report leaked row-count wording:\n%s", text)
 	}
 }
 

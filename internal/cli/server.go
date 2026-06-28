@@ -17,6 +17,7 @@ import (
 	"github.com/agensfield/scriba/internal/buildinfo"
 	"github.com/agensfield/scriba/internal/config"
 	"github.com/agensfield/scriba/internal/radar"
+	"github.com/agensfield/scriba/internal/resetwatch"
 	servercore "github.com/agensfield/scriba/internal/server"
 	"github.com/agensfield/scriba/internal/server/store"
 	"github.com/agensfield/scriba/internal/telegram"
@@ -191,7 +192,7 @@ func runServerRefresh(cfg config.Config, opts options) error {
 	if err != nil {
 		return err
 	}
-	return output(opts, serverRefreshPayload(result), telegram.RenderLimits(result.Observation))
+	return output(opts, serverRefreshPayload(result), renderServerRefresh(result))
 }
 
 func runServerPrune(cfg config.Config, opts options) error {
@@ -404,7 +405,7 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 		}
 		if stats.Store.LastGrantWarning != nil {
 			warning := stats.Store.LastGrantWarning
-			rows = append(rows, fmt.Sprintf("%-13s %dd · %s · %s", "grant", warning.ThresholdDays, warning.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC"), formatCLIStatsTime(warning.DetectedAt)))
+			rows = append(rows, fmt.Sprintf("%-13s %dd · %s · %s", "grant", warning.ThresholdDays, warning.ExpiresAt.Local().Format("2006-01-02 15:04 MST"), formatCLIStatsTime(warning.DetectedAt)))
 		}
 		writeRows(&b, rows)
 	}
@@ -416,6 +417,149 @@ func renderServerHealth(health servercore.Health) string {
 	b.WriteString("Scriba health\n")
 	writeHealthRows(&b, health)
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderServerRefresh(result servercore.PollResult) string {
+	obs := result.Observation
+	var b strings.Builder
+	b.WriteString(cliHeader("Codex limits"))
+	b.WriteString("\n")
+	if !obs.ObservedAt.IsZero() {
+		fmt.Fprintf(&b, "%s\n", cliMuted("observed "+formatCLIStatsTime(obs.ObservedAt)))
+	}
+	if obs.Account.Email != "" || obs.Account.Plan != "" || obs.Account.Label != "" {
+		b.WriteString("\n")
+		b.WriteString(cliBold("Account"))
+		b.WriteString("\n")
+		account := obs.Account.Label
+		if account == "" {
+			account = obs.Account.Email
+		}
+		if obs.Account.Plan != "" {
+			account += " · " + obs.Account.Plan
+		}
+		fmt.Fprintf(&b, "%s\n", account)
+	}
+	if len(obs.Windows) > 0 {
+		b.WriteString("\n")
+		b.WriteString(cliBold("Windows"))
+		b.WriteString("\n")
+		for _, window := range obs.Windows {
+			fmt.Fprintf(&b, "%s\n", renderServerWindow(window))
+		}
+	}
+	if grants := renderServerResetGrants(obs.ResetGrants); grants != "" {
+		b.WriteString("\n")
+		b.WriteString(grants)
+		b.WriteString("\n")
+	}
+	if len(result.Decision.Events) > 0 || len(result.Warnings) > 0 || len(result.GrantWarnings) > 0 {
+		b.WriteString("\n")
+		b.WriteString(cliBold("Notifications"))
+		b.WriteString("\n")
+		if len(result.Decision.Events) > 0 {
+			fmt.Fprintf(&b, "%-13s %d reset events\n", "resets", len(result.Decision.Events))
+		}
+		if len(result.Warnings) > 0 {
+			fmt.Fprintf(&b, "%-13s %d limit warnings\n", "limits", len(result.Warnings))
+		}
+		if len(result.GrantWarnings) > 0 {
+			fmt.Fprintf(&b, "%-13s %d grant warnings\n", "grants", len(result.GrantWarnings))
+		}
+	} else {
+		b.WriteString("\n")
+		b.WriteString(cliMuted("no notifications emitted"))
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderServerWindow(window resetwatch.Window) string {
+	percent := 0.0
+	if window.UsedPercent != nil {
+		percent = *window.UsedPercent
+	}
+	reset := "unknown"
+	if !window.ResetAt.IsZero() {
+		reset = window.ResetAt.Local().Format("Mon 15:04")
+	}
+	return fmt.Sprintf("%-13s %s %3.0f%% used · resets %s", serverWindowLabel(window.Label), cliBar(percent), percent, reset)
+}
+
+func renderServerResetGrants(grants resetwatch.ResetGrants) string {
+	if grants.AvailableCount == nil && grants.ExpiresAt.IsZero() && len(grants.Credits) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(cliBold("Reset grants"))
+	b.WriteString("\n")
+	if grants.AvailableCount != nil {
+		fmt.Fprintf(&b, "%-13s %s\n", "available", cliGreen(fmt.Sprint(*grants.AvailableCount)))
+	}
+	if !grants.ExpiresAt.IsZero() {
+		fmt.Fprintf(&b, "%-13s %s\n", "earliest", formatGrantExpiry(grants.ExpiresAt.Format(time.RFC3339Nano), time.Now().UTC()))
+	}
+	for i, credit := range grants.Credits {
+		title := credit.Title
+		if title == "" {
+			title = "Reset grant"
+		}
+		fmt.Fprintf(&b, "\n%s %s\n", cliMuted(fmt.Sprintf("%d.", i+1)), cliBold(title))
+		if !credit.ExpiresAt.IsZero() {
+			fmt.Fprintf(&b, "   %-9s %s\n", cliLabel("expires"), formatGrantExpiry(credit.ExpiresAt.Format(time.RFC3339Nano), time.Now().UTC()))
+		}
+		if !credit.GrantedAt.IsZero() {
+			fmt.Fprintf(&b, "   %-9s %s\n", cliLabel("granted"), cliValue(formatGrantTime(credit.GrantedAt.Format(time.RFC3339Nano))))
+		}
+		if credit.Status != "" {
+			status := cliValue(credit.Status)
+			if strings.EqualFold(credit.Status, "available") {
+				status = cliGreen(credit.Status)
+			}
+			fmt.Fprintf(&b, "   %-9s %s\n", cliLabel("status"), status)
+		}
+		if credit.ID != "" {
+			fmt.Fprintf(&b, "   %-9s %s\n", cliLabel("id"), cliMuted(credit.ID))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func serverWindowLabel(label string) string {
+	switch label {
+	case resetwatch.LabelWeeklyLimit:
+		return "Weekly"
+	case resetwatch.LabelFiveHour:
+		return "5h"
+	case resetwatch.LabelSparkWeekly:
+		return "Spark weekly"
+	case resetwatch.LabelSparkFive:
+		return "Spark 5h"
+	case resetwatch.LabelReviewFive:
+		return "Review 5h"
+	case resetwatch.LabelReviewWeek:
+		return "Review weekly"
+	default:
+		return label
+	}
+}
+
+func cliBar(percent float64) string {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	width := 10
+	filled := int((percent + 5) / 10)
+	color := cliGreen
+	if percent >= 90 {
+		color = func(text string) string { return cliANSI("31;1", text) }
+	} else if percent >= 70 {
+		color = cliYellow
+	}
+	return color(strings.Repeat("▰", filled)) + strings.Repeat("▱", width-filled)
 }
 
 func writeHealthRows(b *strings.Builder, health servercore.Health) {

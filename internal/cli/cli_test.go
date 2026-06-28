@@ -6,8 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agensfield/scriba/internal/cache"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/remote"
+	"github.com/agensfield/scriba/internal/resetwatch"
+	servercore "github.com/agensfield/scriba/internal/server"
 )
 
 func TestCodexLimitsFromSnapshotFiltersRemoteLimitLines(t *testing.T) {
@@ -83,12 +86,14 @@ func TestRenderResetGrantsShowsEachCreditExpiry(t *testing.T) {
 
 	now := time.Date(2026, 6, 29, 1, 20, 0, 0, time.UTC)
 	text := stripANSI(renderResetGrantsAt(payload, now))
+	expiry := time.Date(2026, 7, 12, 1, 20, 48, 728491000, time.UTC).Local().Format("2006-01-02 15:04 MST")
+	granted := time.Date(2026, 6, 12, 1, 20, 48, 728491000, time.UTC).Local().Format("2006-01-02 15:04 MST")
 	for _, want := range []string{
 		"Codex reset grants",
-		"2 available · earliest expires 2026-07-12 01:20 UTC (in 13d)",
+		"2 available · earliest expires " + expiry + " (in 13d)",
 		"1. One free rate limit reset",
-		"expires  2026-07-12 01:20 UTC (in 13d)",
-		"granted  2026-06-12 01:20 UTC",
+		"expires  " + expiry + " (in 13d)",
+		"granted  " + granted,
 		"status   available",
 		"credit_1",
 	} {
@@ -106,5 +111,60 @@ func TestCodexGroupHelpListsResetGrants(t *testing.T) {
 	text := groupHelp("codex")
 	if !strings.Contains(text, "scriba codex reset-grants") {
 		t.Fatalf("codex help missing reset-grants command:\n%s", text)
+	}
+}
+
+func TestRenderCacheStatusIsHumanReadable(t *testing.T) {
+	text := stripANSI(renderCacheStatus(cache.Status{
+		CacheDir:      "/tmp/scriba",
+		DatabasePath:  "/tmp/scriba/scriba.sqlite",
+		SchemaVersion: 1,
+		SizeBytes:     1536,
+		WAL:           cache.WALInfo{Enabled: true, Mode: "wal", BusyTimeoutMs: 5000},
+		ScanStats: []cache.ScanStatsInfo{{
+			ProviderID: "codex",
+			UpdatedAt:  "2026-06-29T01:20:00Z",
+			Stats:      model.ScannerStats{Files: 2, Events: 42},
+		}},
+	}))
+
+	for _, want := range []string{"Scriba cache", "size", "1.5 KB", "Scans", "codex", "42 events"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("cache status missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "{") {
+		t.Fatalf("cache status looks like JSON:\n%s", text)
+	}
+}
+
+func TestRenderServerRefreshAvoidsTelegramMarkup(t *testing.T) {
+	used := 15.0
+	expires := time.Date(2026, 7, 12, 1, 20, 0, 0, time.UTC)
+	count := 1
+	text := stripANSI(renderServerRefresh(servercore.PollResult{
+		Observation: resetwatch.Observation{
+			Account:    resetwatch.Account{Email: "arda@example.com", Plan: "pro"},
+			ObservedAt: time.Date(2026, 6, 29, 1, 20, 0, 0, time.UTC),
+			Windows: []resetwatch.Window{{
+				Label:       resetwatch.LabelWeeklyLimit,
+				UsedPercent: &used,
+				ResetAt:     time.Date(2026, 7, 5, 17, 45, 0, 0, time.UTC),
+			}},
+			ResetGrants: resetwatch.ResetGrants{
+				AvailableCount: &count,
+				ExpiresAt:      expires,
+			},
+		},
+	}))
+	localExpiry := expires.Local().Format("2006-01-02 15:04 MST")
+
+	for _, want := range []string{"Codex limits", "Weekly", "15% used", "Reset grants", localExpiry} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("server refresh missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "<b>") || strings.Contains(text, "<pre>") {
+		t.Fatalf("server refresh leaked Telegram markup:\n%s", text)
 	}
 }
