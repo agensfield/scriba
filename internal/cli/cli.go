@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/agensfield/scriba/internal/bench"
 	"github.com/agensfield/scriba/internal/buildinfo"
@@ -97,8 +98,9 @@ func dispatch(args []string) error {
 		}
 		return runStatus(opts)
 	case "claude", "codex":
-		if len(args) < 2 {
-			return fmt.Errorf("missing %s report command", args[0])
+		if len(args) < 2 || isHelpArg(args[1]) {
+			fmt.Println(groupHelp(args[0]))
+			return nil
 		}
 		if args[0] == "codex" && args[1] == "limits" {
 			opts, _, err := parse(args[2:], flagSpec{
@@ -109,6 +111,16 @@ func dispatch(args []string) error {
 				return err
 			}
 			return runCodexLimits(opts)
+		}
+		if args[0] == "codex" && (args[1] == "reset-grants" || args[1] == "grants") {
+			opts, _, err := parse(args[2:], flagSpec{
+				Use:   "scriba codex reset-grants [flags]",
+				Flags: []string{"json", "config", "cache-dir", "redact"},
+			})
+			if err != nil {
+				return err
+			}
+			return runCodexResetGrants(opts)
 		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use:   fmt.Sprintf("scriba %s %s [flags]", args[0], args[1]),
@@ -121,8 +133,9 @@ func dispatch(args []string) error {
 	case "schema":
 		return printJSON(map[string]any{"schemaVersion": model.SchemaVersion, "commands": commands()}, false)
 	case "config":
-		if len(args) < 2 {
-			return fmt.Errorf("missing config command")
+		if len(args) < 2 || isHelpArg(args[1]) {
+			fmt.Println(groupHelp("config"))
+			return nil
 		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use: fmt.Sprintf("scriba config %s [flags]", args[1]),
@@ -136,8 +149,9 @@ func dispatch(args []string) error {
 		}
 		return runConfig(args[1], opts)
 	case "cache":
-		if len(args) < 2 {
-			return fmt.Errorf("missing cache command")
+		if len(args) < 2 || isHelpArg(args[1]) {
+			fmt.Println(groupHelp("cache"))
+			return nil
 		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use:   fmt.Sprintf("scriba cache %s [flags]", args[1]),
@@ -148,8 +162,9 @@ func dispatch(args []string) error {
 		}
 		return runCache(args[1], opts)
 	case "telegram":
-		if len(args) < 2 {
-			return fmt.Errorf("unknown telegram command")
+		if len(args) < 2 || isHelpArg(args[1]) {
+			fmt.Println(groupHelp("telegram"))
+			return nil
 		}
 		if args[1] == "alerts" {
 			opts, _, err := parse(args[2:], flagSpec{
@@ -173,8 +188,9 @@ func dispatch(args []string) error {
 		}
 		return fmt.Errorf("unknown telegram command")
 	case "server":
-		if len(args) < 2 {
-			return fmt.Errorf("missing server command")
+		if len(args) < 2 || isHelpArg(args[1]) {
+			fmt.Println(groupHelp("server"))
+			return nil
 		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use:   fmt.Sprintf("scriba server %s [flags]", args[1]),
@@ -185,7 +201,11 @@ func dispatch(args []string) error {
 		}
 		return runServer(args[1], opts)
 	case "bench":
-		if len(args) < 2 || args[1] != "ccusage" {
+		if len(args) < 2 || isHelpArg(args[1]) {
+			fmt.Println(groupHelp("bench"))
+			return nil
+		}
+		if args[1] != "ccusage" {
 			return fmt.Errorf("unknown bench command")
 		}
 		opts, _, err := parse(args[2:], flagSpec{
@@ -202,6 +222,10 @@ func dispatch(args []string) error {
 	default:
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
+}
+
+func isHelpArg(arg string) bool {
+	return arg == "--help" || arg == "-h" || arg == "help"
 }
 
 type flagSpec struct {
@@ -497,6 +521,14 @@ func runCodexLimits(opts options) error {
 	return output(opts, payload, render.CodexLimits(payload.Lines, false))
 }
 
+func runCodexResetGrants(opts options) error {
+	payload, err := liveCodexLimitsPayload()
+	if err != nil {
+		return err
+	}
+	return output(opts, resetGrantsPayload(payload), renderResetGrants(payload))
+}
+
 func liveCodexLimitsPayload() (codexLimitsPayload, error) {
 	result, err := remotecodex.Probe(true)
 	if err != nil {
@@ -559,6 +591,97 @@ func filterCodexLimitLines(lines []model.MetricLine) []model.MetricLine {
 		}
 	}
 	return filtered
+}
+
+func resetGrantsPayload(payload codexLimitsPayload) map[string]any {
+	return map[string]any{
+		"schemaVersion": payload.SchemaVersion,
+		"providerId":    payload.ProviderID,
+		"source":        payload.Source,
+		"mode":          payload.Mode,
+		"authState":     payload.AuthState,
+		"resetCredits":  payload.ResetCredits,
+		"summary":       resetGrantSummary(payload),
+	}
+}
+
+func resetGrantSummary(payload codexLimitsPayload) map[string]any {
+	summary := map[string]any{
+		"available": len(payload.ResetCredits),
+	}
+	for _, line := range payload.Lines {
+		if strings.EqualFold(line.Label, "Reset grants") {
+			if count, ok := numericValue(line.Value); ok {
+				summary["available"] = int(count)
+			}
+		}
+		if strings.EqualFold(line.Label, "Grant expiry") && line.Value != nil {
+			summary["earliestExpiresAt"] = line.Value
+		}
+	}
+	return summary
+}
+
+func renderResetGrants(payload codexLimitsPayload) string {
+	summary := resetGrantSummary(payload)
+	var b strings.Builder
+	b.WriteString("Codex reset grants\n")
+	b.WriteString(fmt.Sprintf("%-12s %v\n", "available", summary["available"]))
+	if expiresAt, ok := summary["earliestExpiresAt"]; ok {
+		b.WriteString(fmt.Sprintf("%-12s %s\n", "earliest", formatGrantTime(fmt.Sprint(expiresAt))))
+	}
+	if len(payload.ResetCredits) == 0 {
+		b.WriteString("\nNo available reset grants found.")
+		return strings.TrimRight(b.String(), "\n")
+	}
+	for i, credit := range payload.ResetCredits {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		title := credit.Title
+		if title == "" {
+			title = "Reset grant"
+		}
+		b.WriteString("\n")
+		b.WriteString(title)
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("%-12s %s\n", "status", emptyAsUnset(credit.Status)))
+		b.WriteString(fmt.Sprintf("%-12s %s\n", "type", emptyAsUnset(credit.ResetType)))
+		b.WriteString(fmt.Sprintf("%-12s %s\n", "granted", formatGrantTime(credit.GrantedAt)))
+		b.WriteString(fmt.Sprintf("%-12s %s\n", "expires", formatGrantTime(credit.ExpiresAt)))
+		b.WriteString(fmt.Sprintf("%-12s %s\n", "id", emptyAsUnset(credit.ID)))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatGrantTime(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unset"
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, value)
+	}
+	if err != nil {
+		return value
+	}
+	return parsed.UTC().Format("2006-01-02 15:04 UTC")
+}
+
+func numericValue(value any) (float64, bool) {
+	switch v := value.(type) {
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case float64:
+		return v, true
+	case json.Number:
+		parsed, err := v.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func runCache(command string, opts options) error {
@@ -885,12 +1008,88 @@ func commands() map[string][]string {
 	return map[string][]string{
 		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "cache", "bench", "telegram", "server"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks"},
-		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits"},
+		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants"},
 		"config":   {"path", "show", "init", "telegram"},
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
 		"telegram": {"alerts", "reset"},
 		"server":   {"run", "status", "health", "stats", "refresh", "radar", "prune"},
+	}
+}
+
+func groupHelp(group string) string {
+	switch group {
+	case "claude":
+		return `scriba claude - Local Claude Code usage reports.
+
+Commands:
+  scriba claude summary
+  scriba claude daily
+  scriba claude weekly
+  scriba claude monthly
+  scriba claude sessions
+  scriba claude blocks
+
+Common flags:
+  --since time       start date or timestamp
+  --until time       end date or timestamp
+  --json             emit JSON`
+	case "codex":
+		return `scriba codex - Local Codex reports and live ChatGPT/Codex limit checks.
+
+Commands:
+  scriba codex summary
+  scriba codex daily
+  scriba codex weekly
+  scriba codex monthly
+  scriba codex sessions
+  scriba codex limits
+  scriba codex reset-grants
+
+Common flags:
+  --since time       start date or timestamp
+  --until time       end date or timestamp
+  --json             emit JSON`
+	case "config":
+		return `scriba config - Manage Scriba configuration.
+
+Commands:
+  scriba config path
+  scriba config show
+  scriba config init
+  scriba config telegram`
+	case "cache":
+		return `scriba cache - Inspect and maintain the local derived cache.
+
+Commands:
+  scriba cache status
+  scriba cache reset
+  scriba cache prune
+  scriba cache vacuum`
+	case "telegram":
+		return `scriba telegram - Legacy one-shot Telegram helpers.
+
+Commands:
+  scriba telegram alerts
+  scriba telegram reset`
+	case "server":
+		return `scriba server - Run and inspect the resident Codex limit watcher.
+
+Commands:
+  scriba server run
+  scriba server status
+  scriba server health
+  scriba server stats
+  scriba server refresh
+  scriba server radar
+  scriba server prune`
+	case "bench":
+		return `scriba bench - Benchmark helpers.
+
+Commands:
+  scriba bench ccusage`
+	default:
+		return help()
 	}
 }
 
@@ -901,7 +1100,7 @@ Commands:
   scriba [status]
   scriba doctor
   scriba claude daily|weekly|monthly|sessions|blocks
-  scriba codex daily|weekly|monthly|sessions|limits
+  scriba codex daily|weekly|monthly|sessions|limits|reset-grants
   scriba config path|show|init|telegram
   scriba cache status|reset|prune|vacuum
   scriba telegram alerts|reset

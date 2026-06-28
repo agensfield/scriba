@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/agensfield/scriba/internal/model"
+	"github.com/agensfield/scriba/internal/remote"
 )
 
 func TestCodexLimitsFromSnapshotFiltersRemoteLimitLines(t *testing.T) {
@@ -52,5 +54,49 @@ func TestCodexLimitsFromSnapshotRequiresCodexProvider(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestRenderResetGrantsShowsEachCreditExpiry(t *testing.T) {
+	payload := codexLimitsPayload{
+		SchemaVersion: model.SchemaVersion,
+		ProviderID:    "codex",
+		Source:        "chatgpt-codex-backend",
+		Mode:          "live",
+		Lines: []model.MetricLine{
+			{Type: "amount", Label: "Reset grants", Value: 2.0, Format: &model.MetricFormat{Kind: "count", Suffix: "available"}},
+			{Type: "text", Label: "Grant expiry", Value: "2026-07-12T01:20:48.728491Z"},
+		},
+		ResetCredits: []remote.ResetCredit{
+			{
+				ID:        "credit_1",
+				Status:    "available",
+				ResetType: "codex_rate_limits",
+				Title:     "One free rate limit reset",
+				GrantedAt: "2026-06-12T01:20:48.728491Z",
+				ExpiresAt: "2026-07-12T01:20:48.728491Z",
+			},
+		},
+	}
+
+	text := renderResetGrants(payload)
+	for _, want := range []string{
+		"Codex reset grants",
+		"available    2",
+		"earliest     2026-07-12 01:20 UTC",
+		"One free rate limit reset",
+		"expires      2026-07-12 01:20 UTC",
+		"credit_1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("renderResetGrants() missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestCodexGroupHelpListsResetGrants(t *testing.T) {
+	text := groupHelp("codex")
+	if !strings.Contains(text, "scriba codex reset-grants") {
+		t.Fatalf("codex help missing reset-grants command:\n%s", text)
 	}
 }
