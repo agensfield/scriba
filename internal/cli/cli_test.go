@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -81,19 +82,24 @@ func TestRenderResetGrantsShowsEachCreditExpiry(t *testing.T) {
 	}
 
 	now := time.Date(2026, 6, 29, 1, 20, 0, 0, time.UTC)
-	text := renderResetGrantsAt(payload, now)
+	text := stripANSI(renderResetGrantsAt(payload, now))
 	for _, want := range []string{
 		"Codex reset grants",
 		"2 available · earliest expires 2026-07-12 01:20 UTC (in 13d)",
 		"1. One free rate limit reset",
 		"expires  2026-07-12 01:20 UTC (in 13d)",
 		"granted  2026-06-12 01:20 UTC",
+		"status   available",
 		"credit_1",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("renderResetGrants() missing %q in:\n%s", want, text)
 		}
 	}
+}
+
+func stripANSI(text string) string {
+	return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(text, "")
 }
 
 func TestCodexGroupHelpListsResetGrants(t *testing.T) {

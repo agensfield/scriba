@@ -690,14 +690,15 @@ func renderResetGrants(payload codexLimitsPayload) string {
 func renderResetGrantsAt(payload codexLimitsPayload, now time.Time) string {
 	summary := resetGrantSummary(payload)
 	var b strings.Builder
-	b.WriteString("Codex reset grants\n")
-	fmt.Fprintf(&b, "%v available", summary["available"])
+	b.WriteString(cliHeader("Codex reset grants"))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "%s %s", cliGreen(fmt.Sprint(summary["available"])), cliGreen("available"))
 	if expiresAt, ok := summary["earliestExpiresAt"]; ok {
-		fmt.Fprintf(&b, " · earliest expires %s", formatGrantExpiry(fmt.Sprint(expiresAt), now))
+		fmt.Fprintf(&b, " · %s %s", cliMuted("earliest expires"), formatGrantExpiry(fmt.Sprint(expiresAt), now))
 	}
 	b.WriteString("\n")
 	if len(payload.ResetCredits) == 0 {
-		b.WriteString("\nNo available reset grants found.")
+		fmt.Fprintf(&b, "\n%s", cliYellow("No available reset grants found."))
 		return strings.TrimRight(b.String(), "\n")
 	}
 	for i, credit := range payload.ResetCredits {
@@ -705,17 +706,29 @@ func renderResetGrantsAt(payload codexLimitsPayload, now time.Time) string {
 		if title == "" {
 			title = "Reset grant"
 		}
-		fmt.Fprintf(&b, "\n%d. %s\n", i+1, title)
-		fmt.Fprintf(&b, "   %-8s %s\n", "expires", formatGrantExpiry(credit.ExpiresAt, now))
-		fmt.Fprintf(&b, "   %-8s %s\n", "granted", formatGrantTime(credit.GrantedAt))
-		if credit.Status != "" && !strings.EqualFold(credit.Status, "available") {
-			fmt.Fprintf(&b, "   %-8s %s\n", "status", credit.Status)
+		fmt.Fprintf(&b, "\n%s %s\n", cliMuted(fmt.Sprintf("%d.", i+1)), cliBold(title))
+		writeGrantRow(&b, "expires", formatGrantExpiry(credit.ExpiresAt, now))
+		writeGrantRow(&b, "granted", cliValue(formatGrantTime(credit.GrantedAt)))
+		if credit.Status != "" {
+			status := cliValue(credit.Status)
+			if strings.EqualFold(credit.Status, "available") {
+				status = cliGreen(credit.Status)
+			}
+			writeGrantRow(&b, "status", status)
 		}
-		if shortID := shortGrantID(credit.ID); shortID != "" {
-			fmt.Fprintf(&b, "   %-8s %s\n", "id", shortID)
+		if credit.ID != "" {
+			writeGrantRow(&b, "id", cliMuted(credit.ID))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func writeGrantRow(b *strings.Builder, name string, value string) {
+	padding := 8 - len(name)
+	if padding < 1 {
+		padding = 1
+	}
+	fmt.Fprintf(b, "   %s%s %s\n", cliLabel(name), strings.Repeat(" ", padding), value)
 }
 
 func formatGrantExpiry(value string, now time.Time) string {
@@ -724,7 +737,7 @@ func formatGrantExpiry(value string, now time.Time) string {
 	if !ok {
 		return formatted
 	}
-	return fmt.Sprintf("%s (%s)", formatted, relativeGrantTime(parsed, now))
+	return fmt.Sprintf("%s %s", cliValue(formatted), cliGreen("("+relativeGrantTime(parsed, now)+")"))
 }
 
 func formatGrantTime(value string) string {
@@ -776,21 +789,6 @@ func roundedGrantDuration(delta time.Duration) string {
 	return fmt.Sprintf("%dd", days)
 }
 
-func shortGrantID(id string) string {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return ""
-	}
-	const prefix = "RateLimitResetCredit_"
-	if strings.HasPrefix(id, prefix) && len(id) > len(prefix)+8 {
-		return "..." + id[len(id)-8:]
-	}
-	if len(id) > 16 {
-		return id[:8] + "..." + id[len(id)-4:]
-	}
-	return id
-}
-
 func numericValue(value any) (float64, bool) {
 	switch v := value.(type) {
 	case int:
@@ -805,6 +803,21 @@ func numericValue(value any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func cliHeader(text string) string { return cliANSI("96;1", text) }
+func cliLabel(text string) string  { return cliANSI("36", text) }
+func cliMuted(text string) string  { return cliANSI("94", text) }
+func cliGreen(text string) string  { return cliANSI("32;1", text) }
+func cliYellow(text string) string { return cliANSI("33;1", text) }
+func cliBold(text string) string   { return cliANSI("1", text) }
+func cliValue(text string) string  { return text }
+
+func cliANSI(code, text string) string {
+	if text == "" {
+		return ""
+	}
+	return "\x1b[" + code + "m" + text + "\x1b[0m"
 }
 
 func runCache(command string, opts options) error {
