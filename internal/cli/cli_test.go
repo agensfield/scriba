@@ -3,6 +3,7 @@ package cli
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/remote"
@@ -79,13 +80,14 @@ func TestRenderResetGrantsShowsEachCreditExpiry(t *testing.T) {
 		},
 	}
 
-	text := renderResetGrants(payload)
+	now := time.Date(2026, 6, 29, 1, 20, 0, 0, time.UTC)
+	text := renderResetGrantsAt(payload, now)
 	for _, want := range []string{
 		"Codex reset grants",
-		"available    2",
-		"earliest     2026-07-12 01:20 UTC",
-		"One free rate limit reset",
-		"expires      2026-07-12 01:20 UTC",
+		"2 available · earliest expires 2026-07-12 01:20 UTC (in 13d)",
+		"1. One free rate limit reset",
+		"expires  2026-07-12 01:20 UTC (in 13d)",
+		"granted  2026-06-12 01:20 UTC",
 		"credit_1",
 	} {
 		if !strings.Contains(text, want) {

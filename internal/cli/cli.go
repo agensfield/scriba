@@ -684,49 +684,111 @@ func resetGrantSummary(payload codexLimitsPayload) map[string]any {
 }
 
 func renderResetGrants(payload codexLimitsPayload) string {
+	return renderResetGrantsAt(payload, time.Now().UTC())
+}
+
+func renderResetGrantsAt(payload codexLimitsPayload, now time.Time) string {
 	summary := resetGrantSummary(payload)
 	var b strings.Builder
 	b.WriteString("Codex reset grants\n")
-	fmt.Fprintf(&b, "%-12s %v\n", "available", summary["available"])
+	fmt.Fprintf(&b, "%v available", summary["available"])
 	if expiresAt, ok := summary["earliestExpiresAt"]; ok {
-		fmt.Fprintf(&b, "%-12s %s\n", "earliest", formatGrantTime(fmt.Sprint(expiresAt)))
+		fmt.Fprintf(&b, " · earliest expires %s", formatGrantExpiry(fmt.Sprint(expiresAt), now))
 	}
+	b.WriteString("\n")
 	if len(payload.ResetCredits) == 0 {
 		b.WriteString("\nNo available reset grants found.")
 		return strings.TrimRight(b.String(), "\n")
 	}
 	for i, credit := range payload.ResetCredits {
-		if i > 0 {
-			b.WriteString("\n")
-		}
 		title := credit.Title
 		if title == "" {
 			title = "Reset grant"
 		}
-		b.WriteString("\n")
-		b.WriteString(title)
-		b.WriteString("\n")
-		fmt.Fprintf(&b, "%-12s %s\n", "status", emptyAsUnset(credit.Status))
-		fmt.Fprintf(&b, "%-12s %s\n", "type", emptyAsUnset(credit.ResetType))
-		fmt.Fprintf(&b, "%-12s %s\n", "granted", formatGrantTime(credit.GrantedAt))
-		fmt.Fprintf(&b, "%-12s %s\n", "expires", formatGrantTime(credit.ExpiresAt))
-		fmt.Fprintf(&b, "%-12s %s\n", "id", emptyAsUnset(credit.ID))
+		fmt.Fprintf(&b, "\n%d. %s\n", i+1, title)
+		fmt.Fprintf(&b, "   %-8s %s\n", "expires", formatGrantExpiry(credit.ExpiresAt, now))
+		fmt.Fprintf(&b, "   %-8s %s\n", "granted", formatGrantTime(credit.GrantedAt))
+		if credit.Status != "" && !strings.EqualFold(credit.Status, "available") {
+			fmt.Fprintf(&b, "   %-8s %s\n", "status", credit.Status)
+		}
+		if shortID := shortGrantID(credit.ID); shortID != "" {
+			fmt.Fprintf(&b, "   %-8s %s\n", "id", shortID)
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatGrantExpiry(value string, now time.Time) string {
+	formatted := formatGrantTime(value)
+	parsed, ok := parseGrantTime(value)
+	if !ok {
+		return formatted
+	}
+	return fmt.Sprintf("%s (%s)", formatted, relativeGrantTime(parsed, now))
 }
 
 func formatGrantTime(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "unset"
 	}
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		parsed, err = time.Parse(time.RFC3339, value)
-	}
-	if err != nil {
+	parsed, ok := parseGrantTime(value)
+	if !ok {
 		return value
 	}
 	return parsed.UTC().Format("2006-01-02 15:04 UTC")
+}
+
+func parseGrantTime(value string) (time.Time, bool) {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, strings.TrimSpace(value))
+	}
+	return parsed, err == nil
+}
+
+func relativeGrantTime(target, now time.Time) string {
+	delta := target.Sub(now.UTC())
+	if delta < 0 {
+		delta = -delta
+		if delta < time.Hour {
+			return "expired now"
+		}
+		return "expired " + roundedGrantDuration(delta) + " ago"
+	}
+	if delta < time.Hour {
+		return "within 1h"
+	}
+	return "in " + roundedGrantDuration(delta)
+}
+
+func roundedGrantDuration(delta time.Duration) string {
+	if delta < 48*time.Hour {
+		hours := int(delta.Round(time.Hour).Hours())
+		if hours < 1 {
+			hours = 1
+		}
+		return fmt.Sprintf("%dh", hours)
+	}
+	days := int(delta.Round(24*time.Hour).Hours() / 24)
+	if days < 1 {
+		days = 1
+	}
+	return fmt.Sprintf("%dd", days)
+}
+
+func shortGrantID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	const prefix = "RateLimitResetCredit_"
+	if strings.HasPrefix(id, prefix) && len(id) > len(prefix)+8 {
+		return "..." + id[len(id)-8:]
+	}
+	if len(id) > 16 {
+		return id[:8] + "..." + id[len(id)-4:]
+	}
+	return id
 }
 
 func numericValue(value any) (float64, bool) {
