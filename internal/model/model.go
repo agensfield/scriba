@@ -2,7 +2,7 @@ package model
 
 import "encoding/json"
 
-const SchemaVersion = "scriba.alpha.v1"
+const SchemaVersion = "scriba.v1"
 
 type SourceProvenance struct {
 	Kind       string `json:"kind"`
