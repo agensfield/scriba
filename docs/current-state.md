@@ -1,6 +1,6 @@
 # Scriba Current State
 
-Date: 2026-06-03
+Date: 2026-06-29
 
 Scriba is the first child project under Agensfield. It is a fast, minimal
 Claude Code and Codex usage tracker.
@@ -9,7 +9,8 @@ Claude Code and Codex usage tracker.
 
 - Go CLI at `cmd/scriba`.
 - Implementation under `internal/`.
-- Swift/AppKit/SwiftUI menu bar app under `apps/macos`.
+- Swift/AppKit/SwiftUI menu bar app under `apps/macos`, currently
+  de-emphasized for mainline while the CLI/server product is polished.
 - SQLite derived cache under `~/.cache/scriba` by default.
 - JSON status snapshot supports `scriba status --fast`.
 - The macOS app resolves a system `scriba` when same/newer than the bundled
@@ -36,6 +37,8 @@ Claude Code and Codex usage tracker.
   timeouts are treated as ambiguous and do not trigger HTML-to-plain fallback.
 - `scriba codex summary` appends live Codex limit/reset-grant metadata unless
   `--no-remote` is passed.
+- `scriba codex reset-grants` shows every available reset grant and each
+  grant's own expiration timestamp.
 - `internal/radar` reads `https://codexradar.com/current.json` first and falls
   back to the old `https://codex-reset-radar.pages.dev/current.json` endpoint.
 
@@ -77,7 +80,7 @@ Canonical spec:
 
 ## Verification
 
-Preferred local gate:
+Preferred core gate:
 
 ```sh
 go test ./...
@@ -86,6 +89,11 @@ staticcheck ./...
 golangci-lint run ./...
 gosec ./...
 govulncheck ./...
+```
+
+Optional macOS menu bar gate:
+
+```sh
 swift test --package-path apps/macos
 apps/macos/Scripts/package_zip.sh release
 ```

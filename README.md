@@ -2,65 +2,110 @@
 
 Fast, local-first usage tracking for Claude Code and Codex.
 
-Scriba is part of Agensfield. It is now a native Go CLI with a Swift macOS menu
-bar consumer. The core reads local Claude/Codex logs, keeps derived cache state,
-probes provider usage windows when auth is available, and emits human output by
-default with JSON for agents and automation.
+Scriba is a small Go CLI and resident Telegram bot for people who live in
+agent terminals. It reads local Claude/Codex session logs, checks the
+ChatGPT/Codex subscription usage backend when your local Codex auth is
+available, and keeps enough SQLite state to send useful reset and limit
+notifications without becoming the source of truth.
 
-## Current Shape
+The macOS menu bar app still exists under `apps/macos`, but the mainline
+product surface is now the CLI plus the resident `scriba server` process.
 
-- `scriba` native Go CLI.
-- Swift/AppKit/SwiftUI menu bar app in `apps/macos`.
-- Read-only derived cache/index. Claude/Codex logs and provider APIs remain
-  source of truth.
-- macOS packaging bundles a native `Contents/Helpers/scriba` fallback binary,
-  not Bun, Node, JS resources, or `node_modules`.
+## Features
 
-## Commands
+- Local Claude Code and Codex usage reports: daily, weekly, monthly, sessions,
+  and summaries.
+- Live Codex limit windows from the logged-in ChatGPT/Codex backend.
+- `scriba codex reset-grants` for available reset grants and each grant's
+  expiration timestamp.
+- Explicit additional Codex buckets, including Spark when OpenAI exposes it.
+- Resident Telegram bot with `/limits`, `/refresh`, `/health`, `/stats`,
+  `/lastreset`, `/settings`, and radar commands.
+- Telegram notifications for weekly resets, low remaining limits, reset-grant
+  expiry checkpoints, service health, and Codex Radar probability milestones.
+- Local SQLite cache/state. Source logs and provider APIs remain authoritative.
+- Human-readable terminal output by default, JSON with `--json` for scripts and
+  agents.
+
+## Install
+
+With Go 1.26+:
+
+```sh
+go install github.com/agensfield/scriba/cmd/scriba@latest
+scriba --version
+scriba doctor
+```
+
+From a checkout:
 
 ```sh
 go build -o .build/scriba ./cmd/scriba
 go test ./...
 go vet ./...
-staticcheck ./...
-golangci-lint run ./...
-gosec ./...
-govulncheck ./...
-
-go run ./cmd/scriba doctor
-go run ./cmd/scriba status
-go run ./cmd/scriba status --fast --json
-go run ./cmd/scriba claude daily
-go run ./cmd/scriba codex weekly
-go run ./cmd/scriba codex limits
-go run ./cmd/scriba cache status
-go run ./cmd/scriba telegram alerts
-
-swift test --package-path apps/macos
-apps/macos/Scripts/compile_and_run.sh --test --open-menu
-apps/macos/Scripts/package_zip.sh release
 ```
 
-Human output is the default. Use `--json` for agents and automation.
+See [Install](docs/install.md) for GitHub binary and Homebrew tap notes.
 
-The root `justfile` wraps the common local loops:
+## Quick Start
 
 ```sh
-just
+scriba
+scriba status
+scriba doctor
+
+scriba claude weekly
+scriba codex summary
+scriba codex limits
+scriba codex reset-grants
+```
+
+Use `--json` when another program is consuming the output:
+
+```sh
+scriba codex limits --json
+scriba codex reset-grants --json
+```
+
+`scriba codex limits` and `scriba codex reset-grants` use local Codex OAuth
+state from `${CODEX_HOME:-~/.codex}/auth.json`. An OpenAI API key cannot expose
+these ChatGPT subscription windows.
+
+## Telegram Bot
+
+The resident server is the Telegram path:
+
+```sh
+scriba config init
+scriba config telegram --enable --chat-id "$TELEGRAM_CHAT_ID" --bot-token-env SCRIBA_TELEGRAM_BOT_TOKEN
+scriba server run --env prod
+```
+
+For systemd user service setup and BotFather notes, see
+[Telegram Bot](docs/telegram.md).
+
+## Development
+
+```sh
 just check
-just install
-just use
 just install-cli
-just macos-start
-just macos-package
-just macos-launch
-just macos-use
+just cli codex limits
+just cli codex reset-grants
+```
+
+`just check` is the core Go gate. macOS menu bar recipes remain available:
+
+```sh
+just macos-test
 just macos-release
+just check-all
 ```
 
 ## Docs
 
-- [Current state](docs/current-state.md)
+- [Install](docs/install.md)
+- [Telegram Bot](docs/telegram.md)
 - [CLI](docs/cli.md)
 - [Configuration](docs/config.md)
+- [Current State](docs/current-state.md)
 - [Benchmarks](docs/benchmarks.md)

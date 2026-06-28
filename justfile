@@ -57,7 +57,9 @@ lint:
     gosec ./...
     govulncheck ./...
 
-check: test lint macos-test
+check: test lint
+
+check-all: check macos-test
 
 gate: check
 

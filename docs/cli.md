@@ -71,6 +71,7 @@ scriba codex weekly
 scriba codex monthly
 scriba codex sessions
 scriba codex limits
+scriba codex reset-grants
 scriba codex limits --fast
 ```
 
@@ -89,6 +90,11 @@ request.
 
 `scriba codex summary` keeps the local usage summary and, unless `--no-remote`
 is passed, appends the same live Codex limits and reset-grant metadata.
+
+`scriba codex reset-grants` shows available rate-limit reset grants as a focused
+view, including every available grant's `grantedAt` and `expiresAt` timestamp
+when OpenAI exposes the read-only reset-credit metadata. The short alias is
+`scriba codex grants`.
 
 The resident server stores every available reset credit from the read-only
 metadata endpoint when present. Telegram grant-expiry warnings are deduped by
