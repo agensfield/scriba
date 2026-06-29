@@ -173,6 +173,9 @@ func (c *Cache) LoadStatusSnapshot() (*model.StatusSnapshot, error) {
 	if err := json.Unmarshal([]byte(text), &snapshot); err != nil {
 		return nil, err
 	}
+	if snapshot.SchemaVersion == "" || snapshot.SchemaVersion == "scriba.alpha.v1" {
+		snapshot.SchemaVersion = model.SchemaVersion
+	}
 	return &snapshot, nil
 }
 

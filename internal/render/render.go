@@ -142,7 +142,7 @@ func DoctorPayload(payload doctor.Payload) string {
 			remote = badge("ok")
 		} else if provider.Remote.State != "skipped" {
 			if provider.Remote.Error != "" {
-				remote = yellow(provider.Remote.Error)
+				remote = yellow(humanError(provider.Remote.Error))
 			} else {
 				remote = yellow(provider.Remote.State)
 			}

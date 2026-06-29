@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agensfield/scriba/internal/doctor"
 	"github.com/agensfield/scriba/internal/model"
 )
 
@@ -86,6 +87,27 @@ func TestStatusSanitizesOAuthJSONErrors(t *testing.T) {
 
 	if strings.Contains(text, `"error"`) || !strings.Contains(text, "OAuth refresh failed: Refresh token not found or invalid") {
 		t.Fatalf("expected sanitized OAuth error:\n%s", text)
+	}
+}
+
+func TestDoctorSanitizesOAuthJSONErrors(t *testing.T) {
+	payload := doctor.Payload{
+		GeneratedAt: "2026-06-01T00:00:00Z",
+		State:       "degraded",
+	}
+	payload.Cache.State = "ok"
+	payload.Providers = []doctor.Provider{{
+		DisplayName: "Claude",
+		State:       "degraded",
+		Remote: doctor.RemoteCheck{
+			State: "degraded",
+			Error: `claude OAuth credentials found but refresh failed: refresh failed: 400 {"error":"invalid_grant","error_description":"Refresh token not found or invalid"}`,
+		},
+	}}
+	text := stripANSI(DoctorPayload(payload))
+
+	if strings.Contains(text, `"error"`) || !strings.Contains(text, "OAuth refresh failed: Refresh token not found or invalid") {
+		t.Fatalf("expected sanitized doctor OAuth error:\n%s", text)
 	}
 }
 

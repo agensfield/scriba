@@ -137,7 +137,7 @@ func dispatch(args []string) error {
 		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use:   fmt.Sprintf("scriba %s %s [flags]", args[0], args[1]),
-			Flags: []string{"json", "config", "cache-dir", "no-cache", "redact", "since", "until"},
+			Flags: []string{"json", "config", "cache-dir", "no-cache", "no-remote", "redact", "since", "until"},
 		})
 		if err != nil {
 			return err
