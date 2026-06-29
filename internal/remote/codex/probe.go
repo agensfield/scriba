@@ -18,6 +18,7 @@ import (
 var (
 	usageURL              = "https://chatgpt.com/backend-api/wham/usage"
 	rateLimitResetCredits = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits" // #nosec G101 -- Endpoint URL, not a credential.
+	profileURL            = "https://chatgpt.com/backend-api/wham/profiles/me"
 )
 
 type usageResponse struct {
@@ -66,6 +67,109 @@ type resetCredit struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
+type ProfileResult struct {
+	SchemaVersion string                   `json:"schemaVersion,omitempty"`
+	ProviderID    string                   `json:"providerId"`
+	Source        string                   `json:"source"`
+	Profile       Profile                  `json:"profile"`
+	Stats         ProfileStats             `json:"stats"`
+	Metadata      ProfileMetadata          `json:"metadata"`
+	Provenance    []model.SourceProvenance `json:"provenance,omitempty"`
+	AuthState     remote.AuthState         `json:"authState"`
+}
+
+type Profile struct {
+	Username          string `json:"username,omitempty"`
+	DisplayName       string `json:"displayName,omitempty"`
+	ProfilePictureURL string `json:"profilePictureUrl,omitempty"`
+}
+
+type ProfileMetadata struct {
+	StatsAsOf   string `json:"statsAsOf,omitempty"`
+	GeneratedAt string `json:"generatedAt,omitempty"`
+	StatsError  any    `json:"statsError,omitempty"`
+}
+
+type ProfileStats struct {
+	LifetimeTokens              int64         `json:"lifetimeTokens,omitempty"`
+	PeakDailyTokens             int64         `json:"peakDailyTokens,omitempty"`
+	CurrentStreakDays           int           `json:"currentStreakDays,omitempty"`
+	LongestStreakDays           int           `json:"longestStreakDays,omitempty"`
+	LongestRunningTurnSec       int64         `json:"longestRunningTurnSec,omitempty"`
+	FastModeUsagePercentage     float64       `json:"fastModeUsagePercentage,omitempty"`
+	MostUsedReasoningEffort     string        `json:"mostUsedReasoningEffort,omitempty"`
+	MostUsedReasoningEffortPct  float64       `json:"mostUsedReasoningEffortPercentage,omitempty"`
+	TotalThreads                int64         `json:"totalThreads,omitempty"`
+	TotalSkillsUsed             int64         `json:"totalSkillsUsed,omitempty"`
+	UniqueSkillsUsed            int64         `json:"uniqueSkillsUsed,omitempty"`
+	WorkspaceRank               *int64        `json:"workspaceRank,omitempty"`
+	WorkspaceTotalUserCount     *int64        `json:"workspaceTotalUserCount,omitempty"`
+	TopInvocations              []Invocation  `json:"topInvocations,omitempty"`
+	DailyUsageBuckets           []UsageBucket `json:"dailyUsageBuckets,omitempty"`
+	WeeklyUsageBuckets          []UsageBucket `json:"weeklyUsageBuckets,omitempty"`
+	CumulativeDailyUsageBuckets []UsageBucket `json:"cumulativeDailyUsageBuckets,omitempty"`
+}
+
+type UsageBucket struct {
+	StartDate string `json:"startDate"`
+	Tokens    int64  `json:"tokens"`
+}
+
+type Invocation struct {
+	Type       string `json:"type,omitempty"`
+	PluginID   string `json:"pluginId,omitempty"`
+	PluginName string `json:"pluginName,omitempty"`
+	SkillID    string `json:"skillId,omitempty"`
+	SkillName  string `json:"skillName,omitempty"`
+	UsageCount int64  `json:"usageCount,omitempty"`
+}
+
+type profileResponse struct {
+	Profile struct {
+		Username          string `json:"username"`
+		DisplayName       string `json:"display_name"`
+		ProfilePictureURL string `json:"profile_picture_url"`
+	} `json:"profile"`
+	Stats struct {
+		LifetimeTokens              int64                `json:"lifetime_tokens"`
+		PeakDailyTokens             int64                `json:"peak_daily_tokens"`
+		CurrentStreakDays           int                  `json:"current_streak_days"`
+		LongestStreakDays           int                  `json:"longest_streak_days"`
+		LongestRunningTurnSec       int64                `json:"longest_running_turn_sec"`
+		FastModeUsagePercentage     float64              `json:"fast_mode_usage_percentage"`
+		MostUsedReasoningEffort     string               `json:"most_used_reasoning_effort"`
+		MostUsedReasoningEffortPct  float64              `json:"most_used_reasoning_effort_percentage"`
+		TotalThreads                int64                `json:"total_threads"`
+		TotalSkillsUsed             int64                `json:"total_skills_used"`
+		UniqueSkillsUsed            int64                `json:"unique_skills_used"`
+		WorkspaceRank               *int64               `json:"workspace_rank"`
+		WorkspaceTotalUserCount     *int64               `json:"workspace_total_user_count"`
+		TopInvocations              []profileInvocation  `json:"top_invocations"`
+		DailyUsageBuckets           []profileUsageBucket `json:"daily_usage_buckets"`
+		WeeklyUsageBuckets          []profileUsageBucket `json:"weekly_usage_buckets"`
+		CumulativeDailyUsageBuckets []profileUsageBucket `json:"cumulative_daily_usage_buckets"`
+	} `json:"stats"`
+	Metadata struct {
+		StatsAsOf   string `json:"stats_as_of"`
+		GeneratedAt string `json:"generated_at"`
+		StatsError  any    `json:"stats_error"`
+	} `json:"metadata"`
+}
+
+type profileUsageBucket struct {
+	StartDate string `json:"start_date"`
+	Tokens    int64  `json:"tokens"`
+}
+
+type profileInvocation struct {
+	Type       string `json:"type"`
+	PluginID   string `json:"plugin_id"`
+	PluginName string `json:"plugin_name"`
+	SkillID    string `json:"skill_id"`
+	SkillName  string `json:"skill_name"`
+	UsageCount int64  `json:"usage_count"`
+}
+
 func Probe(includeHTTP bool) (remote.ProbeResult, error) {
 	return ProbeContext(context.Background(), includeHTTP)
 }
@@ -96,6 +200,40 @@ func ProbeContext(ctx context.Context, includeHTTP bool) (remote.ProbeResult, er
 		return remote.ProbeResult{}, err
 	}
 	return result, nil
+}
+
+func FetchProfile(ctx context.Context, client *http.Client) (ProfileResult, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	auth, err := loadAuth(ctx, client, false)
+	if err != nil {
+		return ProfileResult{}, err
+	}
+	if !auth.OK {
+		return ProfileResult{
+			ProviderID: "codex",
+			Source:     "chatgpt-codex-profile-backend",
+			Provenance: []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", FetchedAt: now, Error: auth.Error}},
+			AuthState:  auth,
+		}, nil
+	}
+	parsed, err := fetchProfile(ctx, client, auth)
+	if isAuthHTTPError(err) {
+		auth, err = loadAuth(ctx, client, true)
+		if err != nil {
+			return ProfileResult{}, err
+		}
+		if !auth.OK {
+			return ProfileResult{ProviderID: "codex", Source: "chatgpt-codex-profile-backend", AuthState: auth}, nil
+		}
+		parsed, err = fetchProfile(ctx, client, auth)
+	}
+	if err != nil {
+		return ProfileResult{}, err
+	}
+	return profileResult(parsed, auth, now), nil
 }
 
 func FetchLimits(ctx context.Context, client *http.Client) (remote.ProbeResult, error) {
@@ -137,6 +275,60 @@ func FetchLimits(ctx context.Context, client *http.Client) (remote.ProbeResult, 
 		Provenance:   []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", FetchedAt: now}},
 		AuthState:    auth,
 	}, nil
+}
+
+func profileResult(parsed profileResponse, auth remote.AuthState, fetchedAt string) ProfileResult {
+	return ProfileResult{
+		ProviderID: "codex",
+		Source:     "chatgpt-codex-profile-backend",
+		Profile: Profile{
+			Username:          parsed.Profile.Username,
+			DisplayName:       parsed.Profile.DisplayName,
+			ProfilePictureURL: parsed.Profile.ProfilePictureURL,
+		},
+		Stats: ProfileStats{
+			LifetimeTokens:              parsed.Stats.LifetimeTokens,
+			PeakDailyTokens:             parsed.Stats.PeakDailyTokens,
+			CurrentStreakDays:           parsed.Stats.CurrentStreakDays,
+			LongestStreakDays:           parsed.Stats.LongestStreakDays,
+			LongestRunningTurnSec:       parsed.Stats.LongestRunningTurnSec,
+			FastModeUsagePercentage:     parsed.Stats.FastModeUsagePercentage,
+			MostUsedReasoningEffort:     parsed.Stats.MostUsedReasoningEffort,
+			MostUsedReasoningEffortPct:  parsed.Stats.MostUsedReasoningEffortPct,
+			TotalThreads:                parsed.Stats.TotalThreads,
+			TotalSkillsUsed:             parsed.Stats.TotalSkillsUsed,
+			UniqueSkillsUsed:            parsed.Stats.UniqueSkillsUsed,
+			WorkspaceRank:               parsed.Stats.WorkspaceRank,
+			WorkspaceTotalUserCount:     parsed.Stats.WorkspaceTotalUserCount,
+			TopInvocations:              profileInvocations(parsed.Stats.TopInvocations),
+			DailyUsageBuckets:           profileUsageBuckets(parsed.Stats.DailyUsageBuckets),
+			WeeklyUsageBuckets:          profileUsageBuckets(parsed.Stats.WeeklyUsageBuckets),
+			CumulativeDailyUsageBuckets: profileUsageBuckets(parsed.Stats.CumulativeDailyUsageBuckets),
+		},
+		Metadata: ProfileMetadata{
+			StatsAsOf:   parsed.Metadata.StatsAsOf,
+			GeneratedAt: parsed.Metadata.GeneratedAt,
+			StatsError:  parsed.Metadata.StatsError,
+		},
+		Provenance: []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", FetchedAt: fetchedAt}},
+		AuthState:  auth,
+	}
+}
+
+func profileUsageBuckets(input []profileUsageBucket) []UsageBucket {
+	buckets := make([]UsageBucket, 0, len(input))
+	for _, bucket := range input {
+		buckets = append(buckets, UsageBucket(bucket))
+	}
+	return buckets
+}
+
+func profileInvocations(input []profileInvocation) []Invocation {
+	invocations := make([]Invocation, 0, len(input))
+	for _, invocation := range input {
+		invocations = append(invocations, Invocation(invocation))
+	}
+	return invocations
 }
 
 func linesFromUsageResponse(parsed usageResponse, resetCredits resetCreditsResponse, resetCreditsOK bool) []model.MetricLine {
@@ -298,6 +490,39 @@ func (e usageHTTPError) Error() string {
 	return fmt.Sprintf("codex usage request failed: %d", e.status)
 }
 
+type profileHTTPError struct {
+	status int
+}
+
+func (e profileHTTPError) Error() string {
+	return fmt.Sprintf("codex profile request failed: %d", e.status)
+}
+
+func fetchProfile(ctx context.Context, client *http.Client, auth remote.AuthState) (profileResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, profileURL, nil)
+	if err != nil {
+		return profileResponse{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
+	req.Header.Set("Accept", "application/json")
+	if auth.AccountID != "" {
+		req.Header.Set("ChatGPT-Account-Id", auth.AccountID)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return profileResponse{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return profileResponse{}, profileHTTPError{status: resp.StatusCode}
+	}
+	var parsed profileResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return profileResponse{}, err
+	}
+	return parsed, nil
+}
+
 func fetchUsage(ctx context.Context, client *http.Client, auth remote.AuthState) (usageResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, usageURL, nil)
 	if err != nil {
@@ -325,7 +550,11 @@ func fetchUsage(ctx context.Context, client *http.Client, auth remote.AuthState)
 
 func isAuthHTTPError(err error) bool {
 	var httpErr usageHTTPError
-	return err != nil && (errors.As(err, &httpErr) && (httpErr.status == http.StatusUnauthorized || httpErr.status == http.StatusForbidden))
+	if err != nil && errors.As(err, &httpErr) && (httpErr.status == http.StatusUnauthorized || httpErr.status == http.StatusForbidden) {
+		return true
+	}
+	var profileErr profileHTTPError
+	return err != nil && errors.As(err, &profileErr) && (profileErr.status == http.StatusUnauthorized || profileErr.status == http.StatusForbidden)
 }
 
 func loadAuth(ctx context.Context, client *http.Client, forceRefresh bool) (remote.AuthState, error) {

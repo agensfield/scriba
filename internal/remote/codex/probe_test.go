@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/agensfield/scriba/internal/model"
+	"github.com/agensfield/scriba/internal/remote"
 )
 
 func TestLinesFromUsageResponseUsesAdditionalSparkLimits(t *testing.T) {
@@ -62,6 +63,58 @@ func TestLinesFromUsageResponseShowsResetCreditExpiry(t *testing.T) {
 	if len(remoteCredits) != 3 || remoteCredits[1].ID != "credit_1" || remoteCredits[1].ResetType != "rate_limit_reset" {
 		t.Fatalf("unexpected remote credits: %#v", remoteCredits)
 	}
+}
+
+func TestProfileResultMapsProfileStats(t *testing.T) {
+	var parsed profileResponse
+	if err := json.Unmarshal([]byte(`{
+		"profile": {"username":"ardasevinc","display_name":"Arda Sevinc","profile_picture_url":"https://example.com/a.png"},
+		"metadata": {"stats_as_of":"2026-06-28","generated_at":"2026-06-29T00:01:45Z","stats_error":null},
+		"stats": {
+			"lifetime_tokens": 8318370263,
+			"peak_daily_tokens": 947935822,
+			"current_streak_days": 22,
+			"longest_streak_days": 22,
+			"longest_running_turn_sec": 18784,
+			"fast_mode_usage_percentage": 2.46,
+			"most_used_reasoning_effort": "medium",
+			"most_used_reasoning_effort_percentage": 80.59,
+			"total_threads": 585,
+			"total_skills_used": 1001,
+			"unique_skills_used": 38,
+			"top_invocations": [{"type":"skill","skill_name":"agent-browser","usage_count":277}],
+			"daily_usage_buckets": [{"start_date":"2026-06-28","tokens":78511833}],
+			"weekly_usage_buckets": [{"start_date":"2026-06-22","tokens":1573087214}],
+			"cumulative_daily_usage_buckets": [{"start_date":"2026-06-28","tokens":8318370263}]
+		}
+	}`), &parsed); err != nil {
+		t.Fatalf("unmarshal profile response: %v", err)
+	}
+
+	result := profileResult(parsed, testAuth(), "2026-06-29T00:02:00Z")
+
+	if result.Profile.Username != "ardasevinc" || result.Profile.DisplayName != "Arda Sevinc" {
+		t.Fatalf("unexpected profile: %#v", result.Profile)
+	}
+	if result.Metadata.StatsAsOf != "2026-06-28" || result.Metadata.GeneratedAt != "2026-06-29T00:01:45Z" {
+		t.Fatalf("unexpected metadata: %#v", result.Metadata)
+	}
+	if result.Stats.LifetimeTokens != 8318370263 || result.Stats.CurrentStreakDays != 22 || result.Stats.MostUsedReasoningEffort != "medium" {
+		t.Fatalf("unexpected stats: %#v", result.Stats)
+	}
+	if len(result.Stats.TopInvocations) != 1 || result.Stats.TopInvocations[0].SkillName != "agent-browser" {
+		t.Fatalf("unexpected invocations: %#v", result.Stats.TopInvocations)
+	}
+	if len(result.Stats.DailyUsageBuckets) != 1 || result.Stats.DailyUsageBuckets[0].StartDate != "2026-06-28" {
+		t.Fatalf("unexpected daily buckets: %#v", result.Stats.DailyUsageBuckets)
+	}
+	if !result.AuthState.OK || result.AuthState.AccessToken != "token" {
+		t.Fatalf("unexpected auth state: %#v", result.AuthState)
+	}
+}
+
+func testAuth() remote.AuthState {
+	return remote.AuthState{OK: true, Email: "arda@example.com", AccessToken: "token", AccountID: "acct"}
 }
 
 func assertProgress(t *testing.T, lines []model.MetricLine, label string, used float64, resetsAt string) {

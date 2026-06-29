@@ -39,6 +39,10 @@ Claude Code and Codex usage tracker.
   `--no-remote` is passed.
 - `scriba codex reset-grants` shows every available reset grant and each
   grant's own expiration timestamp.
+- `scriba codex profile` reads the ChatGPT/Codex profile backend
+  (`/backend-api/wham/profiles/me`) and renders profile token activity,
+  streaks, reasoning mix, thread/skill counts, daily/weekly activity bars, and
+  top skills/plugins while preserving all buckets with `--json`.
 - `scriba update --check` compares the local binary to the latest GitHub tag;
   `scriba update` uses `go install` for regular installs and refuses
   Homebrew-managed binaries in favor of `brew upgrade scriba`.

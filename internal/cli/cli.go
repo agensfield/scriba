@@ -115,6 +115,16 @@ func dispatch(args []string) error {
 			}
 			return runCodexLimits(opts)
 		}
+		if args[0] == "codex" && (args[1] == "profile" || args[1] == "profile-stats") {
+			opts, _, err := parse(args[2:], flagSpec{
+				Use:   "scriba codex profile [flags]",
+				Flags: []string{"json", "config", "cache-dir", "redact"},
+			})
+			if err != nil {
+				return err
+			}
+			return runCodexProfile(opts)
+		}
 		if args[0] == "codex" && (args[1] == "reset-grants" || args[1] == "grants") {
 			opts, _, err := parse(args[2:], flagSpec{
 				Use:   "scriba codex reset-grants [flags]",
@@ -539,12 +549,210 @@ func runCodexLimits(opts options) error {
 	return output(opts, payload, render.CodexLimits(payload.Lines, false))
 }
 
+func runCodexProfile(opts options) error {
+	profile, err := remotecodex.FetchProfile(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	profile.SchemaVersion = model.SchemaVersion
+	return output(opts, profile, renderCodexProfile(profile))
+}
+
 func runCodexResetGrants(opts options) error {
 	payload, err := liveCodexLimitsPayload()
 	if err != nil {
 		return err
 	}
 	return output(opts, resetGrantsPayload(payload), renderResetGrants(payload))
+}
+
+func renderCodexProfile(profile remotecodex.ProfileResult) string {
+	var b strings.Builder
+	b.WriteString(cliHeader("Codex profile"))
+	b.WriteString("\n")
+	identity := profile.Profile.DisplayName
+	if identity == "" {
+		identity = profile.Profile.Username
+	}
+	if identity == "" && profile.AuthState.Email != "" {
+		identity = profile.AuthState.Email
+	}
+	if identity != "" {
+		b.WriteString(cliBold(identity))
+		if profile.Profile.Username != "" && profile.Profile.Username != identity {
+			fmt.Fprintf(&b, " %s", cliMuted("@"+profile.Profile.Username))
+		}
+		b.WriteString("\n")
+	}
+	if !profile.AuthState.OK {
+		if profile.AuthState.Error != "" {
+			fmt.Fprintf(&b, "%s\n", cliYellow(profile.AuthState.Error))
+		} else {
+			fmt.Fprintf(&b, "%s\n", cliYellow("profile unavailable"))
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+	freshness := []string{}
+	if profile.Metadata.StatsAsOf != "" {
+		freshness = append(freshness, "stats as of "+profile.Metadata.StatsAsOf)
+	}
+	if profile.Metadata.GeneratedAt != "" {
+		freshness = append(freshness, "generated "+formatCLIStatsTimeString(profile.Metadata.GeneratedAt))
+	}
+	if len(freshness) > 0 {
+		fmt.Fprintf(&b, "%s\n", cliMuted(strings.Join(freshness, " · ")))
+	}
+	if profile.Metadata.StatsError != nil {
+		fmt.Fprintf(&b, "%s %v\n", cliYellow("stats error"), profile.Metadata.StatsError)
+	}
+	stats := profile.Stats
+	b.WriteString("\n")
+	b.WriteString(cliBold("Overview"))
+	b.WriteString("\n")
+	writeRows(&b, []string{
+		fmt.Sprintf("%-13s %s", "tokens", cliGreen(compactTokens(stats.LifetimeTokens))+" lifetime"),
+		fmt.Sprintf("%-13s %s", "peak day", compactTokens(stats.PeakDailyTokens)),
+		fmt.Sprintf("%-13s %s", "streak", fmt.Sprintf("%dd current · %dd best", stats.CurrentStreakDays, stats.LongestStreakDays)),
+		fmt.Sprintf("%-13s %s", "longest turn", humanDurationSeconds(stats.LongestRunningTurnSec)),
+	})
+	b.WriteString("\n")
+	b.WriteString(cliBold("Usage style"))
+	b.WriteString("\n")
+	writeRows(&b, []string{
+		fmt.Sprintf("%-13s %s", "reasoning", fmt.Sprintf("%s · %s", emptyAsUnset(stats.MostUsedReasoningEffort), formatPercent(stats.MostUsedReasoningEffortPct))),
+		fmt.Sprintf("%-13s %s", "fast mode", formatPercent(stats.FastModeUsagePercentage)),
+		fmt.Sprintf("%-13s %s", "threads", humanInt(stats.TotalThreads)),
+		fmt.Sprintf("%-13s %s", "skills", fmt.Sprintf("%s uses · %s unique", humanInt(stats.TotalSkillsUsed), humanInt(stats.UniqueSkillsUsed))),
+	})
+	if workspace := workspaceRank(stats); workspace != "" {
+		fmt.Fprintf(&b, "%-13s %s\n", "workspace", workspace)
+	}
+	if daily := renderUsageBuckets("Daily activity", stats.DailyUsageBuckets, 14); daily != "" {
+		b.WriteString("\n")
+		b.WriteString(daily)
+	}
+	if weekly := renderUsageBuckets("Weekly activity", stats.WeeklyUsageBuckets, 8); weekly != "" {
+		b.WriteString("\n")
+		b.WriteString(weekly)
+	}
+	if top := renderTopInvocations(stats.TopInvocations, 5); top != "" {
+		b.WriteString("\n")
+		b.WriteString(top)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func workspaceRank(stats remotecodex.ProfileStats) string {
+	if stats.WorkspaceRank == nil || stats.WorkspaceTotalUserCount == nil {
+		return ""
+	}
+	return fmt.Sprintf("#%d of %d", *stats.WorkspaceRank, *stats.WorkspaceTotalUserCount)
+}
+
+func renderUsageBuckets(title string, buckets []remotecodex.UsageBucket, limit int) string {
+	if len(buckets) == 0 {
+		return ""
+	}
+	if limit > 0 && len(buckets) > limit {
+		buckets = buckets[len(buckets)-limit:]
+	}
+	var maxTokens int64
+	for _, bucket := range buckets {
+		if bucket.Tokens > maxTokens {
+			maxTokens = bucket.Tokens
+		}
+	}
+	var b strings.Builder
+	b.WriteString(cliBold(title))
+	b.WriteString("\n")
+	for _, bucket := range buckets {
+		fmt.Fprintf(&b, "%-10s %s %10s\n", bucket.StartDate, usageBar(bucket.Tokens, maxTokens, 16), compactTokens(bucket.Tokens))
+	}
+	return b.String()
+}
+
+func usageBar(tokens, maxTokens int64, width int) string {
+	if width <= 0 {
+		width = 16
+	}
+	if maxTokens <= 0 || tokens <= 0 {
+		return cliMuted(strings.Repeat("·", width))
+	}
+	filled := int((tokens*int64(width) + maxTokens - 1) / maxTokens)
+	if filled < 1 {
+		filled = 1
+	}
+	if filled > width {
+		filled = width
+	}
+	return cliGreen(strings.Repeat("█", filled)) + cliMuted(strings.Repeat("░", width-filled))
+}
+
+func renderTopInvocations(invocations []remotecodex.Invocation, limit int) string {
+	if len(invocations) == 0 {
+		return ""
+	}
+	if limit > 0 && len(invocations) > limit {
+		invocations = invocations[:limit]
+	}
+	var b strings.Builder
+	b.WriteString(cliBold("Top invocations"))
+	b.WriteString("\n")
+	for i, invocation := range invocations {
+		name := invocationName(invocation)
+		fmt.Fprintf(&b, "%s %-24s %s\n", cliMuted(fmt.Sprintf("%d.", i+1)), truncateCLI(name, 24), humanInt(invocation.UsageCount))
+	}
+	return b.String()
+}
+
+func invocationName(invocation remotecodex.Invocation) string {
+	switch {
+	case invocation.SkillName != "":
+		return invocation.SkillName
+	case invocation.PluginName != "":
+		return invocation.PluginName
+	case invocation.SkillID != "":
+		return invocation.SkillID
+	case invocation.PluginID != "":
+		return invocation.PluginID
+	case invocation.Type != "":
+		return invocation.Type
+	default:
+		return "unknown"
+	}
+}
+
+func compactTokens(value int64) string {
+	negative := value < 0
+	if negative {
+		value = -value
+	}
+	var text string
+	switch {
+	case value >= 1_000_000_000:
+		text = fmt.Sprintf("%.1fB", float64(value)/1_000_000_000)
+	case value >= 1_000_000:
+		text = fmt.Sprintf("%.1fM", float64(value)/1_000_000)
+	case value >= 1_000:
+		text = fmt.Sprintf("%.1fK", float64(value)/1_000)
+	default:
+		text = fmt.Sprint(value)
+	}
+	if negative {
+		return "-" + text
+	}
+	return text
+}
+
+func humanDurationSeconds(seconds int64) string {
+	if seconds <= 0 {
+		return "unknown"
+	}
+	return time.Duration(seconds * int64(time.Second)).Round(time.Second).String()
+}
+
+func formatPercent(value float64) string {
+	return fmt.Sprintf("%.1f%%", value)
 }
 
 func runUpdate(opts options) error {
@@ -1244,7 +1452,7 @@ func commands() map[string][]string {
 	return map[string][]string{
 		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "cache", "bench", "telegram", "server", "update", "version"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks"},
-		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants"},
+		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "profile"},
 		"config":   {"path", "show", "init", "telegram"},
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
@@ -1285,10 +1493,12 @@ Commands:
   scriba codex sessions
   scriba codex limits
   scriba codex reset-grants
+  scriba codex profile
 
 Live commands:
   limits           fetch current Codex windows from ChatGPT/Codex auth
   reset-grants     show available reset grants and their expirations
+  profile          show ChatGPT/Codex profile token activity
 
 Common flags:
   --since time       start date or timestamp
@@ -1298,7 +1508,8 @@ Common flags:
 Examples:
   scriba codex summary
   scriba codex limits --json
-  scriba codex reset-grants`
+  scriba codex reset-grants
+  scriba codex profile`
 	case "config":
 		return `scriba config - Manage Scriba configuration.
 
@@ -1365,7 +1576,7 @@ Commands:
   status            combined local usage and remote limit snapshot
   doctor            auth, paths, cache, and provider diagnostics
   claude            Claude Code usage reports
-  codex             Codex usage reports, live limits, reset grants
+  codex             Codex usage reports, live limits, reset grants, profile
   server            resident Codex watcher and Telegram bot
   update            check or install the latest tagged release
   config            config file and Telegram settings
@@ -1378,6 +1589,7 @@ Common flows:
   scriba doctor
   scriba codex limits
   scriba codex reset-grants
+  scriba codex profile
   scriba update --check
   scriba server run --env prod
 

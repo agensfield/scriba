@@ -9,6 +9,7 @@ import (
 	"github.com/agensfield/scriba/internal/cache"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/remote"
+	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	servercore "github.com/agensfield/scriba/internal/server"
 )
@@ -111,6 +112,63 @@ func TestCodexGroupHelpListsResetGrants(t *testing.T) {
 	text := groupHelp("codex")
 	if !strings.Contains(text, "scriba codex reset-grants") {
 		t.Fatalf("codex help missing reset-grants command:\n%s", text)
+	}
+	if !strings.Contains(text, "scriba codex profile") {
+		t.Fatalf("codex help missing profile command:\n%s", text)
+	}
+}
+
+func TestRenderCodexProfileShowsHumanStats(t *testing.T) {
+	rank := int64(2)
+	total := int64(7)
+	text := stripANSI(renderCodexProfile(remotecodex.ProfileResult{
+		Profile:  remotecodex.Profile{Username: "ardasevinc", DisplayName: "Arda Sevinc"},
+		Metadata: remotecodex.ProfileMetadata{StatsAsOf: "2026-06-28", GeneratedAt: "2026-06-29T00:01:45Z"},
+		AuthState: remote.AuthState{
+			OK:    true,
+			Email: "arda@example.com",
+		},
+		Stats: remotecodex.ProfileStats{
+			LifetimeTokens:             8318370263,
+			PeakDailyTokens:            947935822,
+			CurrentStreakDays:          22,
+			LongestStreakDays:          22,
+			LongestRunningTurnSec:      18784,
+			FastModeUsagePercentage:    2.46,
+			MostUsedReasoningEffort:    "medium",
+			MostUsedReasoningEffortPct: 80.59,
+			TotalThreads:               585,
+			TotalSkillsUsed:            1001,
+			UniqueSkillsUsed:           38,
+			WorkspaceRank:              &rank,
+			WorkspaceTotalUserCount:    &total,
+			DailyUsageBuckets:          []remotecodex.UsageBucket{{StartDate: "2026-06-27", Tokens: 947935822}, {StartDate: "2026-06-28", Tokens: 78511833}},
+			WeeklyUsageBuckets:         []remotecodex.UsageBucket{{StartDate: "2026-06-22", Tokens: 1573087214}},
+			TopInvocations:             []remotecodex.Invocation{{Type: "skill", SkillName: "agent-browser", UsageCount: 277}},
+		},
+	}))
+
+	for _, want := range []string{
+		"Codex profile",
+		"Arda Sevinc @ardasevinc",
+		"stats as of 2026-06-28",
+		"tokens        8.3B lifetime",
+		"peak day      947.9M",
+		"streak        22d current · 22d best",
+		"reasoning     medium · 80.6%",
+		"fast mode     2.5%",
+		"threads       585",
+		"skills        1,001 uses · 38 unique",
+		"workspace     #2 of 7",
+		"Daily activity",
+		"2026-06-27",
+		"Weekly activity",
+		"Top invocations",
+		"agent-browser",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("profile render missing %q:\n%s", want, text)
+		}
 	}
 }
 

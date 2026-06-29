@@ -74,6 +74,7 @@ scriba codex monthly
 scriba codex sessions
 scriba codex limits
 scriba codex reset-grants
+scriba codex profile
 scriba codex limits --fast
 ```
 
@@ -97,6 +98,13 @@ is passed, appends the same live Codex limits and reset-grant metadata.
 view, including every available grant's `grantedAt` and `expiresAt` timestamp
 when OpenAI exposes the read-only reset-credit metadata. The short alias is
 `scriba codex grants`.
+
+`scriba codex profile` shows the ChatGPT/Codex profile token-activity backend:
+lifetime and peak tokens, streaks, longest turn duration, reasoning/fast-mode
+mix, thread and skill counts, daily/weekly activity bars, and top skills/plugins.
+`--json` preserves the full daily, weekly, and cumulative daily bucket arrays
+for agents. The backend currently reports complete generated buckets, so the
+current day may be absent until OpenAI generates the next profile snapshot.
 
 The resident server stores every available reset credit from the read-only
 metadata endpoint when present. Telegram grant-expiry warnings are deduped by
