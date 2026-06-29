@@ -33,10 +33,15 @@ In Telegram:
 ```text
 /health
 /limits
+/profile
 /refresh
 /stats
 /lastreset
 ```
+
+`/profile` fetches the ChatGPT/Codex profile stats backend on demand and
+renders token activity, streaks, reasoning mix, and top skills/plugins in a
+compact Telegram card.
 
 ## systemd User Service
 

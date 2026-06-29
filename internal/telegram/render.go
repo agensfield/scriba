@@ -12,6 +12,7 @@ import (
 
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/remote"
+	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server"
 	"github.com/agensfield/scriba/internal/server/store"
@@ -24,6 +25,71 @@ func RenderBaseline(notice server.BaselineNotice) string {
 
 func RenderLimits(obs resetwatch.Observation) string {
 	return "<b>Codex limits</b>\n" + renderFreshness(obs.ObservedAt) + "\n\n" + renderAccount(obs.Account) + "\n\n" + renderLimitDetails(obs.Windows, obs.ResetGrants, "current")
+}
+
+func RenderProfile(profile remotecodex.ProfileResult) string {
+	var b strings.Builder
+	b.WriteString("<b>Codex profile</b>\n")
+	if identity := profileIdentity(profile); identity != "" {
+		b.WriteString("<b>")
+		b.WriteString(html.EscapeString(identity))
+		b.WriteString("</b>")
+		if profile.Profile.Username != "" && profile.Profile.Username != identity {
+			b.WriteString(" <code>@")
+			b.WriteString(html.EscapeString(profile.Profile.Username))
+			b.WriteString("</code>")
+		}
+		b.WriteString("\n")
+	}
+	if !profile.AuthState.OK {
+		message := profile.AuthState.Error
+		if message == "" {
+			message = "profile unavailable"
+		}
+		b.WriteString("<code>")
+		b.WriteString(html.EscapeString(message))
+		b.WriteString("</code>")
+		return b.String()
+	}
+	if freshness := renderProfileFreshness(profile.Metadata); freshness != "" {
+		b.WriteString(freshness)
+		b.WriteString("\n")
+	}
+	if profile.Metadata.StatsError != nil {
+		b.WriteString("<code>stats error: ")
+		b.WriteString(html.EscapeString(fmt.Sprint(profile.Metadata.StatsError)))
+		b.WriteString("</code>\n")
+	}
+	stats := profile.Stats
+	rows := []string{
+		fmt.Sprintf("%-13s %s lifetime", "tokens", compactTokens(stats.LifetimeTokens)),
+		fmt.Sprintf("%-13s %s", "peak day", compactTokens(stats.PeakDailyTokens)),
+		fmt.Sprintf("%-13s %dd now · %dd best", "streak", stats.CurrentStreakDays, stats.LongestStreakDays),
+		fmt.Sprintf("%-13s %s", "longest turn", humanDurationSeconds(stats.LongestRunningTurnSec)),
+		fmt.Sprintf("%-13s %s · %s", "reasoning", emptyAsUnset(stats.MostUsedReasoningEffort), formatPercent1(stats.MostUsedReasoningEffortPct)),
+		fmt.Sprintf("%-13s %s", "fast mode", formatPercent1(stats.FastModeUsagePercentage)),
+		fmt.Sprintf("%-13s %s", "threads", humanInt(stats.TotalThreads)),
+		fmt.Sprintf("%-13s %s uses · %s unique", "skills", humanInt(stats.TotalSkillsUsed), humanInt(stats.UniqueSkillsUsed)),
+	}
+	if workspace := workspaceRank(stats); workspace != "" {
+		rows = append(rows, fmt.Sprintf("%-13s %s", "workspace", workspace))
+	}
+	b.WriteString("\n<b>Overview</b>\n<pre>")
+	b.WriteString(html.EscapeString(strings.Join(rows, "\n")))
+	b.WriteString("</pre>")
+	if daily := renderProfileBuckets("Daily tokens", stats.DailyUsageBuckets, 7); daily != "" {
+		b.WriteString("\n\n")
+		b.WriteString(daily)
+	}
+	if weekly := renderProfileBuckets("Weekly tokens", stats.WeeklyUsageBuckets, 6); weekly != "" {
+		b.WriteString("\n\n")
+		b.WriteString(weekly)
+	}
+	if top := renderProfileTopInvocations(stats.TopInvocations, 5); top != "" {
+		b.WriteString("\n\n")
+		b.WriteString(top)
+	}
+	return b.String()
 }
 
 func RenderReset(event resetwatch.Event) string {
@@ -285,6 +351,105 @@ func renderObservationStats(latest store.ObservationSummary) string {
 	return "<b>Observation</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
 }
 
+func profileIdentity(profile remotecodex.ProfileResult) string {
+	if profile.Profile.DisplayName != "" {
+		return profile.Profile.DisplayName
+	}
+	if profile.Profile.Username != "" {
+		return profile.Profile.Username
+	}
+	return profile.AuthState.Email
+}
+
+func renderProfileFreshness(metadata remotecodex.ProfileMetadata) string {
+	parts := []string{}
+	if metadata.StatsAsOf != "" {
+		parts = append(parts, "stats as of "+metadata.StatsAsOf)
+	}
+	if metadata.GeneratedAt != "" {
+		parts = append(parts, "generated "+formatProfileTime(metadata.GeneratedAt))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "<i>" + html.EscapeString(strings.Join(parts, " · ")) + "</i>"
+}
+
+func renderProfileBuckets(title string, buckets []remotecodex.UsageBucket, limit int) string {
+	if len(buckets) == 0 {
+		return ""
+	}
+	if limit > 0 && len(buckets) > limit {
+		buckets = buckets[len(buckets)-limit:]
+	}
+	var maxTokens int64
+	for _, bucket := range buckets {
+		if bucket.Tokens > maxTokens {
+			maxTokens = bucket.Tokens
+		}
+	}
+	rows := make([]string, 0, len(buckets))
+	for _, bucket := range buckets {
+		rows = append(rows, fmt.Sprintf("%-10s %s %8s", bucket.StartDate, tokenBar(bucket.Tokens, maxTokens, 10), compactTokens(bucket.Tokens)))
+	}
+	return "<b>" + html.EscapeString(title) + "</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func renderProfileTopInvocations(invocations []remotecodex.Invocation, limit int) string {
+	if len(invocations) == 0 {
+		return ""
+	}
+	if limit > 0 && len(invocations) > limit {
+		invocations = invocations[:limit]
+	}
+	rows := make([]string, 0, len(invocations))
+	for i, invocation := range invocations {
+		rows = append(rows, fmt.Sprintf("%d. %-22s %s", i+1, truncate(invocationName(invocation), 22), humanInt(invocation.UsageCount)))
+	}
+	return "<b>Top invocations</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func tokenBar(tokens, maxTokens int64, width int) string {
+	if width <= 0 {
+		width = 10
+	}
+	if maxTokens <= 0 || tokens <= 0 {
+		return strings.Repeat("▱", width)
+	}
+	filled := int((tokens*int64(width) + maxTokens - 1) / maxTokens)
+	if filled < 1 {
+		filled = 1
+	}
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat("▰", filled) + strings.Repeat("▱", width-filled)
+}
+
+func workspaceRank(stats remotecodex.ProfileStats) string {
+	if stats.WorkspaceRank == nil || stats.WorkspaceTotalUserCount == nil {
+		return ""
+	}
+	return fmt.Sprintf("#%d of %d", *stats.WorkspaceRank, *stats.WorkspaceTotalUserCount)
+}
+
+func invocationName(invocation remotecodex.Invocation) string {
+	switch {
+	case invocation.SkillName != "":
+		return invocation.SkillName
+	case invocation.PluginName != "":
+		return invocation.PluginName
+	case invocation.SkillID != "":
+		return invocation.SkillID
+	case invocation.PluginID != "":
+		return invocation.PluginID
+	case invocation.Type != "":
+		return invocation.Type
+	default:
+		return "unknown"
+	}
+}
+
 func renderStorageStats(stats store.Stats) string {
 	counts := stats.Counts
 	rows := []string{
@@ -335,6 +500,62 @@ func formatBytes(value int64) string {
 		return "0 B"
 	}
 	return humanize.Bytes(uint64(value))
+}
+
+func compactTokens(value int64) string {
+	negative := value < 0
+	if negative {
+		value = -value
+	}
+	var text string
+	switch {
+	case value >= 1_000_000_000:
+		text = fmt.Sprintf("%.1fB", float64(value)/1_000_000_000)
+	case value >= 1_000_000:
+		text = fmt.Sprintf("%.1fM", float64(value)/1_000_000)
+	case value >= 1_000:
+		text = fmt.Sprintf("%.1fK", float64(value)/1_000)
+	default:
+		text = fmt.Sprint(value)
+	}
+	if negative {
+		return "-" + text
+	}
+	return text
+}
+
+func humanInt(value int64) string {
+	return humanize.Comma(value)
+}
+
+func humanDurationSeconds(seconds int64) string {
+	if seconds <= 0 {
+		return "unknown"
+	}
+	return time.Duration(seconds * int64(time.Second)).Round(time.Second).String()
+}
+
+func formatPercent1(value float64) string {
+	return fmt.Sprintf("%.1f%%", value)
+}
+
+func emptyAsUnset(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
+}
+
+func formatProfileTime(value string) string {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			if layout == "2006-01-02" {
+				return parsed.Format("2006-01-02")
+			}
+			return parsed.Local().Format("2006-01-02 15:04 MST")
+		}
+	}
+	return value
 }
 
 func truncate(value string, limit int) string {

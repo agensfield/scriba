@@ -16,6 +16,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/agensfield/scriba/internal/radar"
+	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server"
 	"github.com/agensfield/scriba/internal/server/store"
@@ -33,6 +34,7 @@ type Controller interface {
 	SetPollInterval(context.Context, time.Duration) error
 	LastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LatestObservation(context.Context) (resetwatch.Observation, bool, error)
+	CodexProfile(context.Context) (remotecodex.ProfileResult, error)
 	Stats(context.Context) (server.Stats, error)
 	Health(context.Context) (server.Health, error)
 }
@@ -129,6 +131,7 @@ func (s *Service) RegisterCommands(ctx context.Context) error {
 		{Command: "health", Description: "poll/auth health check"},
 		{Command: "stats", Description: "storage and delivery stats"},
 		{Command: "limits", Description: "show current Codex limits"},
+		{Command: "profile", Description: "show Codex profile stats"},
 		{Command: "refresh", Description: "force a live Codex poll"},
 		{Command: "lastreset", Description: "show the latest reset event"},
 		{Command: "settings", Description: "change runtime settings"},
@@ -352,6 +355,12 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 			return "no cached limits yet. use /refresh to fetch live Codex limits.", nil
 		}
 		return RenderLimits(obs), nil
+	case "/profile":
+		profile, err := s.controller.CodexProfile(ctx)
+		if err != nil {
+			return "profile failed: " + err.Error(), nil
+		}
+		return RenderProfile(profile), mainKeyboard()
 	case "/refresh":
 		if retryAfter := s.manualRefreshRetryAfter(); retryAfter > 0 {
 			return "refresh rate-limited. try again in " + retryAfter.Round(time.Second).String(), nil
@@ -393,6 +402,11 @@ func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuer
 		s.answerCallback(ctx, query.ID, "refreshing limits")
 		reply, _ := s.handleCommand(ctx, "/limits")
 		_, _ = s.send(ctx, reply, nil)
+		return
+	case "quick:profile":
+		s.answerCallback(ctx, query.ID, "loading profile")
+		reply, _ := s.handleCommand(ctx, "/profile")
+		_, _ = s.send(ctx, reply, mainKeyboard())
 		return
 	case "quick:health":
 		s.answerCallback(ctx, query.ID, "checking health")
@@ -742,14 +756,17 @@ func mainKeyboard() models.InlineKeyboardMarkup {
 	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
 		{
 			{Text: "Limits", CallbackData: "quick:limits"},
+			{Text: "Profile", CallbackData: "quick:profile"},
+		},
+		{
 			{Text: "Refresh", CallbackData: "quick:refresh"},
+			{Text: "Radar", CallbackData: "quick:radar"},
 		},
 		{
 			{Text: "Health", CallbackData: "quick:health"},
 			{Text: "Stats", CallbackData: "quick:stats"},
 		},
 		{
-			{Text: "Radar", CallbackData: "quick:radar"},
 			{Text: "Settings", CallbackData: "quick:settings"},
 		},
 	}}
@@ -766,6 +783,7 @@ func helpText() string {
 		"<code>/health</code> poll/auth health check",
 		"<code>/stats</code> storage and delivery stats",
 		"<code>/limits</code> current Codex limits",
+		"<code>/profile</code> Codex profile stats",
 		"<code>/refresh</code> force a live poll",
 		"<code>/lastreset</code> latest reset event",
 		"<code>/settings</code> polling settings",

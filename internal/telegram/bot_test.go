@@ -12,6 +12,7 @@ import (
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/remote"
+	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server"
 	"github.com/agensfield/scriba/internal/server/store"
@@ -81,6 +82,61 @@ func TestRenderLimitsUsesHTMLSectionsAndFreshness(t *testing.T) {
 	}
 	if five, weekly := strings.Index(text, "5h"), strings.Index(text, "Weekly"); five < 0 || weekly < 0 || five > weekly {
 		t.Fatalf("expected 5h before weekly in:\n%s", text)
+	}
+}
+
+func TestRenderProfileShowsCodexProfileStats(t *testing.T) {
+	rank := int64(2)
+	total := int64(7)
+	text := RenderProfile(remotecodex.ProfileResult{
+		Profile:  remotecodex.Profile{Username: "ardasevinc", DisplayName: "Arda & Co"},
+		Metadata: remotecodex.ProfileMetadata{StatsAsOf: "2026-06-28", GeneratedAt: "2026-06-29T00:01:45Z"},
+		AuthState: remote.AuthState{
+			OK:    true,
+			Email: "arda@example.com",
+		},
+		Stats: remotecodex.ProfileStats{
+			LifetimeTokens:             8318370263,
+			PeakDailyTokens:            947935822,
+			CurrentStreakDays:          22,
+			LongestStreakDays:          22,
+			LongestRunningTurnSec:      18784,
+			FastModeUsagePercentage:    2.46,
+			MostUsedReasoningEffort:    "medium",
+			MostUsedReasoningEffortPct: 80.59,
+			TotalThreads:               585,
+			TotalSkillsUsed:            1001,
+			UniqueSkillsUsed:           38,
+			WorkspaceRank:              &rank,
+			WorkspaceTotalUserCount:    &total,
+			DailyUsageBuckets:          []remotecodex.UsageBucket{{StartDate: "2026-06-27", Tokens: 947935822}, {StartDate: "2026-06-28", Tokens: 78511833}},
+			WeeklyUsageBuckets:         []remotecodex.UsageBucket{{StartDate: "2026-06-22", Tokens: 1573087214}},
+			TopInvocations:             []remotecodex.Invocation{{Type: "skill", SkillName: "agent-browser", UsageCount: 277}},
+		},
+	})
+
+	for _, want := range []string{
+		"<b>Codex profile</b>",
+		"<b>Arda &amp; Co</b> <code>@ardasevinc</code>",
+		"stats as of 2026-06-28",
+		"<b>Overview</b>",
+		"tokens        8.3B lifetime",
+		"peak day      947.9M",
+		"streak        22d now",
+		"reasoning     medium · 80.6%",
+		"fast mode     2.5%",
+		"threads       585",
+		"skills        1,001 uses · 38 unique",
+		"workspace     #2 of 7",
+		"<b>Daily tokens</b>",
+		"2026-06-27",
+		"<b>Weekly tokens</b>",
+		"<b>Top invocations</b>",
+		"agent-browser",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("render missing %q in:\n%s", want, text)
+		}
 	}
 }
 
@@ -269,6 +325,31 @@ func TestLimitsCommandUsesCachedObservation(t *testing.T) {
 	}
 }
 
+func TestProfileCommandUsesControllerProfile(t *testing.T) {
+	controller := &fakeController{
+		profile: remotecodex.ProfileResult{
+			Profile:   remotecodex.Profile{Username: "ardasevinc", DisplayName: "Arda Sevinc"},
+			AuthState: remote.AuthState{OK: true},
+			Stats: remotecodex.ProfileStats{
+				LifetimeTokens:    8318370263,
+				CurrentStreakDays: 22,
+				LongestStreakDays: 22,
+			},
+		},
+	}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	reply, markup := svc.handleCommand(context.Background(), "/profile")
+	if !strings.Contains(reply, "<b>Codex profile</b>") || !strings.Contains(reply, "8.3B lifetime") {
+		t.Fatalf("unexpected profile reply: %s", reply)
+	}
+	if controller.profileCalls != 1 {
+		t.Fatalf("expected one profile call, got %d", controller.profileCalls)
+	}
+	if markup == nil {
+		t.Fatal("expected main keyboard")
+	}
+}
+
 func TestStripTelegramHTMLFallback(t *testing.T) {
 	text := "<b>Codex limits</b>\n<pre>Weekly &lt;ok&gt;</pre>"
 	got := stripTelegramHTML(text)
@@ -299,10 +380,12 @@ func TestCommandNameNormalizesBotSuffix(t *testing.T) {
 }
 
 type fakeController struct {
-	interval  time.Duration
-	latest    resetwatch.Observation
-	latestOK  bool
-	refreshes int
+	interval     time.Duration
+	latest       resetwatch.Observation
+	latestOK     bool
+	refreshes    int
+	profile      remotecodex.ProfileResult
+	profileCalls int
 }
 
 func (f *fakeController) RefreshNow(context.Context) (server.PollResult, error) {
@@ -325,6 +408,11 @@ func (f *fakeController) LastResetEvent(context.Context) (resetwatch.Event, bool
 
 func (f *fakeController) LatestObservation(context.Context) (resetwatch.Observation, bool, error) {
 	return f.latest, f.latestOK, nil
+}
+
+func (f *fakeController) CodexProfile(context.Context) (remotecodex.ProfileResult, error) {
+	f.profileCalls++
+	return f.profile, nil
 }
 
 func (f *fakeController) Stats(context.Context) (server.Stats, error) {

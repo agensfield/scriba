@@ -261,6 +261,15 @@ func (s *Server) LatestObservation(ctx context.Context) (resetwatch.Observation,
 	return s.store.LoadLatestObservation(ctx)
 }
 
+func (s *Server) CodexProfile(ctx context.Context) (remotecodex.ProfileResult, error) {
+	profile, err := remotecodex.FetchProfile(ctx, nil)
+	if err != nil {
+		return remotecodex.ProfileResult{}, err
+	}
+	profile.SchemaVersion = model.SchemaVersion
+	return profile, nil
+}
+
 func (s *Server) Stats(ctx context.Context) (Stats, error) {
 	storeStats, err := s.store.Stats(ctx)
 	if err != nil {

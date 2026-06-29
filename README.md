@@ -21,8 +21,8 @@ product surface is now the CLI plus the resident `scriba server` process.
 - `scriba codex profile` for ChatGPT/Codex profile token activity, streaks,
   reasoning mix, and top skills/plugins.
 - Explicit additional Codex buckets, including Spark when OpenAI exposes it.
-- Resident Telegram bot with `/limits`, `/refresh`, `/health`, `/stats`,
-  `/lastreset`, `/settings`, and radar commands.
+- Resident Telegram bot with `/limits`, `/profile`, `/refresh`, `/health`,
+  `/stats`, `/lastreset`, `/settings`, and radar commands.
 - Telegram notifications for weekly resets, low remaining limits, reset-grant
   expiry checkpoints, service health, and Codex Radar probability milestones.
 - Local SQLite cache/state. Source logs and provider APIs remain authoritative.
