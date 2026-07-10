@@ -44,6 +44,7 @@ type options struct {
 	redact          bool
 	since           string
 	until           string
+	timezone        string
 	sessionPercent  float64
 	weeklyPercent   float64
 	send            bool
@@ -94,7 +95,7 @@ func dispatch(args []string) error {
 	case "status":
 		opts, _, err := parse(args[1:], flagSpec{
 			Use:   "scriba status [flags]",
-			Flags: []string{"json", "config", "cache-dir", "no-cache", "no-remote", "fast", "redact"},
+			Flags: []string{"json", "config", "cache-dir", "no-cache", "no-remote", "fast", "redact", "timezone"},
 		})
 		if err != nil {
 			return err
@@ -137,7 +138,7 @@ func dispatch(args []string) error {
 		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use:   fmt.Sprintf("scriba %s %s [flags]", args[0], args[1]),
-			Flags: []string{"json", "config", "cache-dir", "no-cache", "no-remote", "redact", "since", "until"},
+			Flags: []string{"json", "config", "cache-dir", "no-cache", "no-remote", "redact", "since", "until", "timezone"},
 		})
 		if err != nil {
 			return err
@@ -275,6 +276,7 @@ var flagHelp = map[string]flagMeta{
 	"redact":            {Name: "redact", Usage: "redact output"},
 	"since":             {Name: "since", Value: "time", Usage: "start date or timestamp"},
 	"until":             {Name: "until", Value: "time", Usage: "end date or timestamp"},
+	"timezone":          {Name: "timezone", Value: "zone", Usage: "calendar timezone (IANA name, UTC, or local)"},
 	"send":              {Name: "send", Usage: "send alerts"},
 	"enable":            {Name: "enable", Usage: "enable feature"},
 	"disable":           {Name: "disable", Usage: "disable feature"},
@@ -325,6 +327,8 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.StringVar(&opts.since, name, "", flagHelp[name].Usage)
 		case "until":
 			fs.StringVar(&opts.until, name, "", flagHelp[name].Usage)
+		case "timezone":
+			fs.StringVar(&opts.timezone, name, "", flagHelp[name].Usage)
 		case "session-percent":
 			fs.Float64Var(&opts.sessionPercent, name, 0, flagHelp[name].Usage)
 		case "weekly-percent":
@@ -388,6 +392,9 @@ func load(opts options) (config.Config, error) {
 	}
 	if opts.cacheDir != "" {
 		cfg.CacheDir = opts.cacheDir
+	}
+	if opts.timezone != "" {
+		cfg.Timezone = opts.timezone
 	}
 	return cfg, config.Validate(cfg)
 }
@@ -479,13 +486,17 @@ func runReport(provider, command string, opts options) error {
 	if err != nil {
 		return err
 	}
-	filtered := reports.ApplyFilters(events, reports.Filters{Since: opts.since, Until: opts.until})
-	payload := map[string]any{"providerId": provider, "stats": stats}
+	location, err := reports.Location(cfg.Timezone)
+	if err != nil {
+		return fmt.Errorf("invalid timezone %q: %w", cfg.Timezone, err)
+	}
+	filtered := reports.ApplyFiltersIn(events, reports.Filters{Since: opts.since, Until: opts.until}, location)
+	payload := map[string]any{"providerId": provider, "stats": stats, "timezone": location.String()}
 	var rows any
 	var limits *codexLimitsPayload
 	switch command {
 	case "summary":
-		rows = reports.Daily(filtered, true)
+		rows = reports.DailyIn(filtered, true, location)
 		if provider == "codex" && !opts.noRemote {
 			remoteLimits, err := liveCodexLimitsPayload()
 			if err != nil {
@@ -494,11 +505,11 @@ func runReport(provider, command string, opts options) error {
 			limits = &remoteLimits
 		}
 	case "daily":
-		rows = reports.Daily(filtered, true)
+		rows = reports.DailyIn(filtered, true, location)
 	case "weekly":
-		rows = reports.Weekly(filtered, true)
+		rows = reports.WeeklyIn(filtered, true, location)
 	case "monthly":
-		rows = reports.Monthly(filtered, true)
+		rows = reports.MonthlyIn(filtered, true, location)
 	case "sessions", "session":
 		rows = reports.Sessions(filtered, true)
 	case "blocks":
@@ -1477,6 +1488,7 @@ Commands:
 Common flags:
   --since time       start date or timestamp
   --until time       end date or timestamp
+  --timezone zone    calendar timezone (default: local)
   --json             emit JSON
 
 Examples:
@@ -1503,6 +1515,7 @@ Live commands:
 Common flags:
   --since time       start date or timestamp
   --until time       end date or timestamp
+  --timezone zone    calendar timezone (default: local)
   --json             emit JSON
 
 Examples:

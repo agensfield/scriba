@@ -2,6 +2,7 @@ package reports
 
 import (
 	"testing"
+	"time"
 
 	"github.com/agensfield/scriba/internal/model"
 )
@@ -31,5 +32,31 @@ func TestDailyAggregatesModelsAndDateFilters(t *testing.T) {
 	}
 	if len(row.Models) != 2 || row.Models[0].TotalTokens != 15 || row.Models[1].TotalTokens != 15 {
 		t.Fatalf("models = %+v", row.Models)
+	}
+}
+
+func TestDailyAndDateFiltersUseRequestedTimezone(t *testing.T) {
+	istanbul, err := time.LoadLocation("Europe/Istanbul")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []model.LocalUsageEvent{
+		{ProviderID: "codex", Timestamp: "2026-07-09T20:59:59Z", TotalTokens: 10},
+		{ProviderID: "codex", Timestamp: "2026-07-09T21:00:00Z", TotalTokens: 20},
+	}
+
+	rows := DailyIn(events, false, istanbul)
+	if len(rows) != 2 || rows[0].Date != "2026-07-09" || rows[0].TotalTokens != 10 || rows[1].Date != "2026-07-10" || rows[1].TotalTokens != 20 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	filtered := ApplyFiltersIn(events, Filters{Since: "2026-07-10", Until: "2026-07-10"}, istanbul)
+	if len(filtered) != 1 || filtered[0].TotalTokens != 20 {
+		t.Fatalf("filtered = %+v", filtered)
+	}
+}
+
+func TestLocationRejectsInvalidName(t *testing.T) {
+	if _, err := Location("Mars/Olympus_Mons"); err == nil {
+		t.Fatal("expected invalid timezone error")
 	}
 }

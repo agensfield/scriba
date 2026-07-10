@@ -10,6 +10,8 @@ import (
 	"github.com/agensfield/scriba/internal/model"
 )
 
+const codexParserCacheVersion = "codex-v2"
+
 func ScanClaude(c *cache.Cache, paths []string) ([]model.LocalUsageEvent, model.ScannerStats, error) {
 	stats := model.ScannerStats{}
 	var events []model.LocalUsageEvent
@@ -77,7 +79,7 @@ func ScanCodex(c *cache.Cache, paths []string) ([]model.LocalUsageEvent, model.S
 			if err != nil {
 				return events, stats, err
 			}
-			parsed, fileStats, ok, err := c.LoadFileEvents("codex", file, fp.Size, fp.MtimeMs)
+			parsed, fileStats, ok, err := c.LoadFileEvents(codexParserCacheVersion, file, fp.Size, fp.MtimeMs)
 			if err != nil {
 				return events, stats, err
 			}
@@ -86,7 +88,7 @@ func ScanCodex(c *cache.Cache, paths []string) ([]model.LocalUsageEvent, model.S
 				if err != nil {
 					return events, stats, err
 				}
-				if err := c.SaveFileEvents("codex", file, fp.Size, fp.MtimeMs, parsed, fileStats); err != nil {
+				if err := c.SaveFileEvents(codexParserCacheVersion, file, fp.Size, fp.MtimeMs, parsed, fileStats); err != nil {
 					return events, stats, err
 				}
 			}

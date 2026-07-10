@@ -23,6 +23,10 @@ type Built struct {
 
 func Build(cfg config.Config, c *cache.Cache, includeRemote bool) (Built, error) {
 	generatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	location, err := reports.Location(cfg.Timezone)
+	if err != nil {
+		return Built{}, fmt.Errorf("invalid timezone %q: %w", cfg.Timezone, err)
+	}
 	var providers []model.ProviderSnapshot
 	scanStats := map[string]model.ScannerStats{}
 	if cfg.Providers.Claude.Enabled {
@@ -38,7 +42,7 @@ func Build(cfg config.Config, c *cache.Cache, includeRemote bool) (Built, error)
 			return Built{}, err
 		}
 		scanStats["claude"] = stats
-		provider := providerFromDaily("claude", "Claude", reports.Daily(events, true), stats, generatedAt)
+		provider := providerFromDaily("claude", "Claude", reports.DailyIn(events, true, location), stats, generatedAt, location)
 		if includeRemote {
 			appendRemote(&provider, remoteclaude.Probe)
 		}
@@ -57,14 +61,14 @@ func Build(cfg config.Config, c *cache.Cache, includeRemote bool) (Built, error)
 			return Built{}, err
 		}
 		scanStats["codex"] = stats
-		provider := providerFromDaily("codex", "Codex", reports.Daily(events, true), stats, generatedAt)
+		provider := providerFromDaily("codex", "Codex", reports.DailyIn(events, true, location), stats, generatedAt, location)
 		if includeRemote {
 			appendRemote(&provider, remotecodex.Probe)
 		}
 		providers = append(providers, provider)
 	}
 	return Built{
-		Snapshot:  model.StatusSnapshot{SchemaVersion: model.SchemaVersion, GeneratedAt: generatedAt, Providers: providers},
+		Snapshot:  model.StatusSnapshot{SchemaVersion: model.SchemaVersion, GeneratedAt: generatedAt, Timezone: location.String(), Providers: providers},
 		ScanStats: scanStats,
 	}, nil
 }
@@ -94,20 +98,22 @@ func MarkStale(snapshot model.StatusSnapshot, err error) model.StatusSnapshot {
 	return snapshot
 }
 
-func providerFromDaily(providerID, displayName string, daily []model.DailyReportRow, stats model.ScannerStats, generatedAt string) model.ProviderSnapshot {
-	todayKey := generatedAt[:10]
-	yesterdayKey := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
-	var today, yesterday int64
-	var last30 int64
+func providerFromDaily(providerID, displayName string, daily []model.DailyReportRow, stats model.ScannerStats, generatedAt string, location *time.Location) model.ProviderSnapshot {
+	now := time.Now().In(location)
+	todayKey := now.Format("2006-01-02")
+	yesterdayKey := now.AddDate(0, 0, -1).Format("2006-01-02")
+	var today, yesterday model.TokenUsage
+	var last30 model.TokenUsage
 	for i, row := range daily {
 		if row.Date == todayKey {
-			today = row.TotalTokens
+			today = row.TokenUsage
 		}
 		if row.Date == yesterdayKey {
-			yesterday = row.TotalTokens
+			yesterday = row.TokenUsage
 		}
 		if i < 30 {
-			last30 += row.TotalTokens
+			last30.EffectiveTokens += row.EffectiveTokens
+			last30.TotalTokens += row.TotalTokens
 		}
 	}
 	prov := []model.SourceProvenance{{Kind: "local-log", ProviderID: providerID, FetchedAt: generatedAt}}
@@ -120,12 +126,19 @@ func providerFromDaily(providerID, displayName string, daily []model.DailyReport
 		DisplayName: displayName,
 		State:       state,
 		Lines: []model.MetricLine{
-			{Type: "text", Label: "Today", Value: formatInt(today), Provenance: prov},
-			{Type: "text", Label: "Yesterday", Value: formatInt(yesterday), Provenance: prov},
-			{Type: "text", Label: "Last 30 Days", Value: formatInt(last30), Provenance: prov},
+			{Type: "text", Label: "Today", Value: formatUsage(today), Provenance: prov},
+			{Type: "text", Label: "Yesterday", Value: formatUsage(yesterday), Provenance: prov},
+			{Type: "text", Label: "Last 30 Days", Value: formatUsage(last30), Provenance: prov},
 		},
 		Provenance: prov,
 	}
+}
+
+func formatUsage(usage model.TokenUsage) string {
+	if usage.EffectiveTokens == 0 && usage.TotalTokens > 0 {
+		return fmt.Sprintf("%s traffic", formatInt(usage.TotalTokens))
+	}
+	return fmt.Sprintf("%s effective · %s traffic", formatInt(usage.EffectiveTokens), formatInt(usage.TotalTokens))
 }
 
 func appendRemote(provider *model.ProviderSnapshot, probe func(bool) (remote.ProbeResult, error)) {

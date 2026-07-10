@@ -12,9 +12,20 @@ type Filters struct {
 	Until string
 }
 
+func Location(name string) (*time.Location, error) {
+	if name == "" || name == "local" {
+		return time.Local, nil
+	}
+	return time.LoadLocation(name)
+}
+
 func ApplyFilters(events []model.LocalUsageEvent, filters Filters) []model.LocalUsageEvent {
-	since := normalizeBoundary(filters.Since, false)
-	until := normalizeBoundary(filters.Until, true)
+	return ApplyFiltersIn(events, filters, time.UTC)
+}
+
+func ApplyFiltersIn(events []model.LocalUsageEvent, filters Filters, location *time.Location) []model.LocalUsageEvent {
+	since := normalizeBoundary(filters.Since, false, location)
+	until := normalizeBoundary(filters.Until, true, location)
 	out := events[:0]
 	for _, event := range events {
 		if since != "" && event.Timestamp < since {
@@ -29,12 +40,13 @@ func ApplyFilters(events []model.LocalUsageEvent, filters Filters) []model.Local
 }
 
 func Daily(events []model.LocalUsageEvent, orderDesc bool) []model.DailyReportRow {
+	return DailyIn(events, orderDesc, time.UTC)
+}
+
+func DailyIn(events []model.LocalUsageEvent, orderDesc bool, location *time.Location) []model.DailyReportRow {
 	rows := map[string]*model.DailyReportRow{}
 	for _, event := range events {
-		key := event.Timestamp
-		if len(key) >= 10 {
-			key = key[:10]
-		}
+		key := dateKey(event.Timestamp, "2006-01-02", location)
 		row := rows[key]
 		if row == nil {
 			row = &model.DailyReportRow{Date: key, ProviderID: event.ProviderID}
@@ -57,9 +69,13 @@ func Daily(events []model.LocalUsageEvent, orderDesc bool) []model.DailyReportRo
 }
 
 func Weekly(events []model.LocalUsageEvent, orderDesc bool) []model.WeeklyReportRow {
+	return WeeklyIn(events, orderDesc, time.UTC)
+}
+
+func WeeklyIn(events []model.LocalUsageEvent, orderDesc bool, location *time.Location) []model.WeeklyReportRow {
 	rows := map[string]*model.WeeklyReportRow{}
 	for _, event := range events {
-		key := weekKey(event.Timestamp)
+		key := weekKey(event.Timestamp, location)
 		row := rows[key]
 		if row == nil {
 			row = &model.WeeklyReportRow{Week: key, ProviderID: event.ProviderID}
@@ -82,12 +98,13 @@ func Weekly(events []model.LocalUsageEvent, orderDesc bool) []model.WeeklyReport
 }
 
 func Monthly(events []model.LocalUsageEvent, orderDesc bool) []model.MonthlyReportRow {
+	return MonthlyIn(events, orderDesc, time.UTC)
+}
+
+func MonthlyIn(events []model.LocalUsageEvent, orderDesc bool, location *time.Location) []model.MonthlyReportRow {
 	rows := map[string]*model.MonthlyReportRow{}
 	for _, event := range events {
-		key := event.Timestamp
-		if len(key) >= 7 {
-			key = key[:7]
-		}
+		key := dateKey(event.Timestamp, "2006-01", location)
 		row := rows[key]
 		if row == nil {
 			row = &model.MonthlyReportRow{Month: key, ProviderID: event.ProviderID}
@@ -224,17 +241,21 @@ func sortModels(models []model.ModelBreakdown) {
 	sort.Slice(models, func(i, j int) bool { return models[i].TotalTokens > models[j].TotalTokens })
 }
 
-func normalizeBoundary(value string, endOfDay bool) string {
+func normalizeBoundary(value string, endOfDay bool, location *time.Location) string {
 	if len(value) == 10 && value[4] == '-' && value[7] == '-' {
+		boundary := "00:00:00.000000000"
 		if endOfDay {
-			return value + "T23:59:59.999Z"
+			boundary = "23:59:59.999999999"
 		}
-		return value + "T00:00:00.000Z"
+		parsed, err := time.ParseInLocation("2006-01-02T15:04:05.999999999", value+"T"+boundary, location)
+		if err == nil {
+			return parsed.UTC().Format(time.RFC3339Nano)
+		}
 	}
 	return value
 }
 
-func weekKey(timestamp string) string {
+func weekKey(timestamp string, location *time.Location) string {
 	t, err := time.Parse(time.RFC3339Nano, timestamp)
 	if err != nil {
 		if len(timestamp) >= 10 {
@@ -242,12 +263,24 @@ func weekKey(timestamp string) string {
 		}
 		return timestamp
 	}
+	t = t.In(location)
 	weekday := int(t.Weekday())
 	if weekday == 0 {
 		weekday = 7
 	}
 	start := t.AddDate(0, 0, -(weekday - 1))
 	return start.Format("2006-01-02")
+}
+
+func dateKey(timestamp, layout string, location *time.Location) string {
+	t, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err == nil {
+		return t.In(location).Format(layout)
+	}
+	if len(timestamp) >= len(layout) {
+		return timestamp[:len(layout)]
+	}
+	return timestamp
 }
 
 func parseTime(value string) time.Time {

@@ -43,6 +43,7 @@ type ProviderSnapshot struct {
 type StatusSnapshot struct {
 	SchemaVersion string             `json:"schemaVersion"`
 	GeneratedAt   string             `json:"generatedAt"`
+	Timezone      string             `json:"timezone,omitempty"`
 	Providers     []ProviderSnapshot `json:"providers"`
 }
 
