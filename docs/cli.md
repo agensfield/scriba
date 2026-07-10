@@ -79,7 +79,32 @@ scriba codex limits --fast
 ```
 
 Report commands support `--since` and `--until`, accepting full timestamps or
-`YYYY-MM-DD` dates.
+`YYYY-MM-DD` dates. Calendar reports use the system timezone by default. Set
+`timezone` in the config or pass an IANA name with `--timezone`, for example
+`--timezone Europe/Istanbul`. JSON report payloads record the resolved
+timezone.
+
+Codex local reports expose two intentionally different totals:
+
+- `effectiveTokens` is uncached input plus output. It matches the accounting
+  shape used by Codex goals, subject to the goal's own active time window.
+- `totalTokens` is full model traffic: input (including cached input) plus
+  output.
+
+`inputTokens` preserves the raw Codex input counter, including cache reads;
+`uncachedInputTokens` and `cachedInputTokens` split it explicitly. Reasoning
+tokens are already included in output and are not counted again. Human output
+leads with effective tokens, keeps traffic/cache/output visible, and lists up
+to three materially used exact model names instead of hiding every model except
+the dominant one.
+
+Known Codex models receive a calculated `costUSD`. The human label is `est.`
+because this is a standard-tier API-equivalent estimate, not a claim about
+what a ChatGPT subscription was charged. GPT-5.6 Sol, Terra, and Luna use
+OpenAI's short-context input/cache/output prices and per-request long-context
+rates above 272K input tokens. The whole request switches tiers; reasoning is
+not billed separately. Unknown models retain `costUSD: null` and
+`pricingState: "missing"`.
 
 `scriba codex limits` skips local log scanning and only fetches Codex usage
 windows from the logged-in ChatGPT/Codex backend. It reads Codex OAuth state
@@ -105,6 +130,9 @@ mix, thread and skill counts, daily/weekly activity bars, and top skills/plugins
 `--json` preserves the full daily, weekly, and cumulative daily bucket arrays
 for agents. The backend currently reports complete generated buckets, so the
 current day may be absent until OpenAI generates the next profile snapshot.
+These provider-generated buckets have no model attribution and are independent
+from local rollout accounting, timezone grouping, and API-equivalent cost
+estimates; do not expect exact day-by-day reconciliation.
 
 The resident server stores every available reset credit from the read-only
 metadata endpoint when present. Telegram grant-expiry warnings are deduped by

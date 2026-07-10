@@ -7,6 +7,7 @@ and accepts an explicit JSON config via `--config`.
 {
   "schemaVersion": 1,
   "cacheDir": "/Users/arda/.cache/scriba",
+  "timezone": "Europe/Istanbul",
   "providers": {
     "claude": {
       "enabled": true,
@@ -51,3 +52,7 @@ Empty provider `paths` use defaults:
 
 - Claude: `~/.config/claude/projects`, `~/.claude/projects`
 - Codex: `${CODEX_HOME:-~/.codex}/sessions`
+
+`timezone` is optional. When omitted, calendar reports and status use the
+system timezone. Set an IANA name such as `Europe/Istanbul` to make grouping
+portable across machines, or override it per command with `--timezone`.

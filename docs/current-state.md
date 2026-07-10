@@ -1,6 +1,6 @@
 # Scriba Current State
 
-Date: 2026-06-29
+Date: 2026-07-10
 
 Scriba is the first child project under Agensfield. It is a fast, minimal
 Claude Code and Codex usage tracker.
@@ -13,6 +13,19 @@ Claude Code and Codex usage tracker.
   de-emphasized for mainline while the CLI/server product is polished.
 - SQLite derived cache under `~/.cache/scriba` by default.
 - JSON status snapshot supports `scriba status --fast`.
+- Codex local reports preserve full traffic while exposing effective tokens
+  (`input - cached input + output`) separately. Report totals derive from input
+  plus output instead of trusting inconsistent JSONL `total_tokens` values.
+- Codex reports calculate standard-tier API-equivalent cost for GPT-5.4,
+  GPT-5.5, and GPT-5.6 Sol/Terra/Luna. GPT-5.6 pricing is selected per request,
+  with the whole request switching to long-context rates above 272K input.
+- Human reports show up to three exact model names, so secondary GPT-5.6 models
+  are no longer hidden behind the dominant model. JSON keeps every model.
+- Daily/weekly/monthly reports and status use the configured/system timezone;
+  `--timezone` provides a per-command override and JSON records the resolved
+  zone.
+- The Codex parsed-event cache key is versioned with scanner semantics, so an
+  upgrade cannot silently reuse incompatible historical events.
 - The macOS app resolves a system `scriba` when same/newer than the bundled
   helper, otherwise it uses the bundled native Go helper.
 - The macOS app exposes used/remaining display mode, menu bar text mode, and
@@ -75,6 +88,10 @@ Canonical spec:
 - Cache deletion is safe.
 - Normal local scans read JSONL line-by-line.
 - Human output is default; `--json` is explicit for agents and automation.
+- `effectiveTokens` and `totalTokens` are distinct contracts: the former
+  excludes cache reads, while the latter represents full model traffic.
+- Calculated `costUSD` is an estimated standard API equivalent, not ChatGPT
+  subscription billing.
 - `--no-remote` skips provider API probes.
 - `--fast` reads cached status only.
 - `--redact` removes share-sensitive paths and identifiers from JSON output.

@@ -14,7 +14,8 @@ product surface is now the CLI plus the resident `scriba server` process.
 ## Features
 
 - Local Claude Code and Codex usage reports: daily, weekly, monthly, sessions,
-  and summaries.
+  and summaries. Codex reports separate effective tokens from full cached
+  traffic, show every materially used model, and estimate standard API cost.
 - Live Codex limit windows from the logged-in ChatGPT/Codex backend.
 - `scriba codex reset-grants` for available reset grants and each grant's
   expiration timestamp.
@@ -75,6 +76,7 @@ scriba doctor
 
 scriba claude weekly
 scriba codex summary
+scriba codex daily --timezone Europe/Istanbul
 scriba codex limits
 scriba codex reset-grants
 scriba codex profile
