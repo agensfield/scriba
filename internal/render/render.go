@@ -286,8 +286,14 @@ func periodReportLine(period string, totals model.ReportTotals, models []model.M
 }
 
 func totalsSummary(totals model.ReportTotals, models []model.ModelBreakdown, suffix string) string {
+	primaryTokens := totals.EffectiveTokens
+	primaryLabel := "effective"
+	if primaryTokens == 0 && totals.TotalTokens > 0 {
+		primaryTokens = totals.TotalTokens
+		primaryLabel = "tokens"
+	}
 	parts := []string{
-		value(fmt.Sprintf("%s effective", compact(float64(totals.EffectiveTokens)))),
+		value(fmt.Sprintf("%s %s", compact(float64(primaryTokens)), primaryLabel)),
 		muted(fmt.Sprintf("traffic %s", compact(float64(totals.TotalTokens)))),
 		muted(fmt.Sprintf("cached %s", compact(float64(totals.CachedInputTokens)))),
 		muted(fmt.Sprintf("out %s", compact(float64(totals.OutputTokens)))),
