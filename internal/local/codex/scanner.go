@@ -7,6 +7,7 @@ import (
 
 	"github.com/agensfield/scriba/internal/local"
 	"github.com/agensfield/scriba/internal/model"
+	"github.com/agensfield/scriba/internal/pricing"
 )
 
 type entry struct {
@@ -93,6 +94,7 @@ func ParseFile(baseDir, filePath string) ([]model.LocalUsageEvent, model.Scanner
 		if usage == nil || usage.TotalTokens == 0 {
 			return
 		}
+		normalizeUsage(usage)
 		extractedModel := extractModelFromMap(map[string]any{"payload": payload, "info": info})
 		fallback := extractedModel == "" && currentModel == ""
 		modelName := extractedModel
@@ -103,6 +105,16 @@ func ParseFile(baseDir, filePath string) ([]model.LocalUsageEvent, model.Scanner
 			modelName = "gpt-5"
 		}
 		currentModel = modelName
+		cost, priced := pricing.Cost(modelName, pricing.Usage{
+			InputTokens:           usage.InputTokens,
+			CachedInputTokens:     usage.CachedInputTokens,
+			OutputTokens:          usage.OutputTokens,
+			ReasoningOutputTokens: usage.ReasoningOutputTokens,
+		}, pricing.StandardSpeedMultiplier)
+		var costUSD *float64
+		if priced {
+			costUSD = &cost
+		}
 		rel, _ := filepath.Rel(baseDir, filePath)
 		rel = filepath.ToSlash(rel)
 		events = append(events, model.LocalUsageEvent{
@@ -111,13 +123,15 @@ func ParseFile(baseDir, filePath string) ([]model.LocalUsageEvent, model.Scanner
 			Timestamp:             e.Timestamp,
 			Model:                 modelName,
 			InputTokens:           usage.InputTokens,
+			UncachedInputTokens:   usage.InputTokens - usage.CachedInputTokens,
 			OutputTokens:          usage.OutputTokens,
 			CacheCreationTokens:   0,
 			CacheReadTokens:       usage.CachedInputTokens,
 			CachedInputTokens:     usage.CachedInputTokens,
 			ReasoningOutputTokens: usage.ReasoningOutputTokens,
+			EffectiveTokens:       usage.InputTokens - usage.CachedInputTokens + usage.OutputTokens,
 			TotalTokens:           usage.TotalTokens,
-			CostUSD:               nil,
+			CostUSD:               costUSD,
 			SourcePath:            filePath,
 			Directory:             filepath.ToSlash(filepath.Dir(rel)),
 			SessionFile:           filepath.Base(rel),
@@ -126,6 +140,14 @@ func ParseFile(baseDir, filePath string) ([]model.LocalUsageEvent, model.Scanner
 		stats.Events++
 	})
 	return events, stats, err
+}
+
+func normalizeUsage(usage *rawUsage) {
+	usage.InputTokens = max(usage.InputTokens, 0)
+	usage.CachedInputTokens = min(max(usage.CachedInputTokens, 0), usage.InputTokens)
+	usage.OutputTokens = max(usage.OutputTokens, 0)
+	usage.ReasoningOutputTokens = min(max(usage.ReasoningOutputTokens, 0), usage.OutputTokens)
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 }
 
 func pathsOrDefault(paths []string) []string {

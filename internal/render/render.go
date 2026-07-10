@@ -287,15 +287,16 @@ func periodReportLine(period string, totals model.ReportTotals, models []model.M
 
 func totalsSummary(totals model.ReportTotals, models []model.ModelBreakdown, suffix string) string {
 	parts := []string{
-		value(fmt.Sprintf("%s tokens", compact(float64(totals.TotalTokens)))),
-		muted(fmt.Sprintf("in %s", compact(float64(totals.InputTokens)))),
+		value(fmt.Sprintf("%s effective", compact(float64(totals.EffectiveTokens)))),
+		muted(fmt.Sprintf("traffic %s", compact(float64(totals.TotalTokens)))),
+		muted(fmt.Sprintf("cached %s", compact(float64(totals.CachedInputTokens)))),
 		muted(fmt.Sprintf("out %s", compact(float64(totals.OutputTokens)))),
 	}
 	if totals.CostUSD != nil {
 		parts = append(parts, green(formatCost(*totals.CostUSD)))
 	}
-	if model := topModel(models); model != "" {
-		parts = append(parts, cyan(shortModel(model)))
+	if summary := modelSummary(models); summary != "" {
+		parts = append(parts, cyan(summary))
 	}
 	if suffix != "" {
 		parts = append(parts, muted(suffix))
@@ -303,13 +304,21 @@ func totalsSummary(totals model.ReportTotals, models []model.ModelBreakdown, suf
 	return strings.Join(parts, " · ")
 }
 
-func topModel(models []model.ModelBreakdown) string {
+func modelSummary(models []model.ModelBreakdown) string {
+	const visibleModels = 3
+	var names []string
 	for _, model := range models {
-		if strings.TrimSpace(model.Model) != "" {
-			return model.Model
+		if name := strings.TrimSpace(model.Model); name != "" {
+			names = append(names, shortModel(name))
 		}
 	}
-	return ""
+	if len(names) == 0 {
+		return ""
+	}
+	if len(names) > visibleModels {
+		return strings.Join(names[:visibleModels], " + ") + fmt.Sprintf(" +%d", len(names)-visibleModels)
+	}
+	return strings.Join(names, " + ")
 }
 
 func shortModel(model string) string {

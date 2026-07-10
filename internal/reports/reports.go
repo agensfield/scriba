@@ -174,11 +174,13 @@ func Blocks(events []model.LocalUsageEvent) []model.BlockReportRow {
 
 func addEvent(totals *model.ReportTotals, models *[]model.ModelBreakdown, event model.LocalUsageEvent) {
 	totals.InputTokens += event.InputTokens
+	totals.UncachedInputTokens += event.UncachedInputTokens
 	totals.OutputTokens += event.OutputTokens
 	totals.CacheCreationTokens += event.CacheCreationTokens
 	totals.CacheReadTokens += event.CacheReadTokens
 	totals.CachedInputTokens += event.CachedInputTokens
 	totals.ReasoningOutputTokens += event.ReasoningOutputTokens
+	totals.EffectiveTokens += event.EffectiveTokens
 	totals.TotalTokens += event.TotalTokens
 	if event.CostUSD != nil {
 		if totals.CostUSD == nil {
@@ -200,11 +202,13 @@ func addEvent(totals *model.ReportTotals, models *[]model.ModelBreakdown, event 
 
 func addModel(target *model.ModelBreakdown, event model.LocalUsageEvent) {
 	target.InputTokens += event.InputTokens
+	target.UncachedInputTokens += event.UncachedInputTokens
 	target.OutputTokens += event.OutputTokens
 	target.CacheCreationTokens += event.CacheCreationTokens
 	target.CacheReadTokens += event.CacheReadTokens
 	target.CachedInputTokens += event.CachedInputTokens
 	target.ReasoningOutputTokens += event.ReasoningOutputTokens
+	target.EffectiveTokens += event.EffectiveTokens
 	target.TotalTokens += event.TotalTokens
 	if event.CostUSD != nil {
 		if target.CostUSD == nil {

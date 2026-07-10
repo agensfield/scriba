@@ -48,11 +48,13 @@ type StatusSnapshot struct {
 
 type TokenUsage struct {
 	InputTokens           int64 `json:"inputTokens"`
+	UncachedInputTokens   int64 `json:"uncachedInputTokens"`
 	OutputTokens          int64 `json:"outputTokens"`
 	CacheCreationTokens   int64 `json:"cacheCreationTokens"`
 	CacheReadTokens       int64 `json:"cacheReadTokens"`
 	CachedInputTokens     int64 `json:"cachedInputTokens"`
 	ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
+	EffectiveTokens       int64 `json:"effectiveTokens"`
 	TotalTokens           int64 `json:"totalTokens"`
 }
 
@@ -146,11 +148,13 @@ type LocalUsageEvent struct {
 	Directory             string   `json:"directory,omitempty"`
 	SessionFile           string   `json:"sessionFile,omitempty"`
 	InputTokens           int64    `json:"inputTokens"`
+	UncachedInputTokens   int64    `json:"uncachedInputTokens"`
 	OutputTokens          int64    `json:"outputTokens"`
 	CacheCreationTokens   int64    `json:"cacheCreationTokens"`
 	CacheReadTokens       int64    `json:"cacheReadTokens"`
 	CachedInputTokens     int64    `json:"cachedInputTokens"`
 	ReasoningOutputTokens int64    `json:"reasoningOutputTokens"`
+	EffectiveTokens       int64    `json:"effectiveTokens"`
 	TotalTokens           int64    `json:"totalTokens"`
 	CostUSD               *float64 `json:"costUSD"`
 	UniqueKey             string   `json:"uniqueKey,omitempty"`
