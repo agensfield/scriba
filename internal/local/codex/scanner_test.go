@@ -72,4 +72,7 @@ func TestParseFileUsesLastUsageAndTracksModelChanges(t *testing.T) {
 	if events[0].CostUSD == nil || events[1].CostUSD == nil {
 		t.Fatalf("expected known model costs: %+v, %+v", events[0].CostUSD, events[1].CostUSD)
 	}
+	if events[0].PricingState != "calculated" || events[1].PricingState != "calculated" {
+		t.Fatalf("pricing states = %q, %q", events[0].PricingState, events[1].PricingState)
+	}
 }

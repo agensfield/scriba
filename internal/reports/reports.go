@@ -233,7 +233,11 @@ func addModel(target *model.ModelBreakdown, event model.LocalUsageEvent) {
 			target.CostUSD = &v
 		}
 		*target.CostUSD += *event.CostUSD
-		target.PricingState = "embedded"
+		if event.PricingState != "" {
+			target.PricingState = event.PricingState
+		} else {
+			target.PricingState = "embedded"
+		}
 	}
 }
 

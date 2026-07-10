@@ -10,7 +10,7 @@ import (
 	"github.com/agensfield/scriba/internal/model"
 )
 
-const codexParserCacheVersion = "codex-v2"
+const codexParserCacheVersion = "codex-v3"
 
 func ScanClaude(c *cache.Cache, paths []string) ([]model.LocalUsageEvent, model.ScannerStats, error) {
 	stats := model.ScannerStats{}

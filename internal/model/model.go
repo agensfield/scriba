@@ -158,6 +158,7 @@ type LocalUsageEvent struct {
 	EffectiveTokens       int64    `json:"effectiveTokens"`
 	TotalTokens           int64    `json:"totalTokens"`
 	CostUSD               *float64 `json:"costUSD"`
+	PricingState          string   `json:"pricingState,omitempty"`
 	UniqueKey             string   `json:"uniqueKey,omitempty"`
 	SourcePath            string   `json:"sourcePath"`
 	IsFallbackModel       bool     `json:"isFallbackModel,omitempty"`

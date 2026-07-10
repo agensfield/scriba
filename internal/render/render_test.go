@@ -121,13 +121,13 @@ func TestReportShowsHumanRows(t *testing.T) {
 				CostUSD:    &cost,
 			},
 			Models: []model.ModelBreakdown{
-				{Model: "gpt-5-codex", TokenUsage: model.TokenUsage{TotalTokens: 1000}},
+				{Model: "gpt-5-codex", TokenUsage: model.TokenUsage{TotalTokens: 1000}, PricingState: "calculated"},
 				{Model: "gpt-5.6-sol", TokenUsage: model.TokenUsage{TotalTokens: 500}},
 			},
 		},
 	}))
 
-	for _, want := range []string{"Codex Weekly", "1 weeks", "week of 2026-06-29", "1.1K effective", "traffic 1.5K", "cached 400", "$1.25", "gpt-5-codex + gpt-5.6-sol"} {
+	for _, want := range []string{"Codex Weekly", "1 weeks", "week of 2026-06-29", "1.1K effective", "traffic 1.5K", "cached 400", "est. $1.25", "gpt-5-codex + gpt-5.6-sol"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report missing %q:\n%s", want, text)
 		}

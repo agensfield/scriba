@@ -299,7 +299,11 @@ func totalsSummary(totals model.ReportTotals, models []model.ModelBreakdown, suf
 		muted(fmt.Sprintf("out %s", compact(float64(totals.OutputTokens)))),
 	}
 	if totals.CostUSD != nil {
-		parts = append(parts, green(formatCost(*totals.CostUSD)))
+		cost := formatCost(*totals.CostUSD)
+		if calculatedPricing(models) {
+			cost = "est. " + cost
+		}
+		parts = append(parts, green(cost))
 	}
 	if summary := modelSummary(models); summary != "" {
 		parts = append(parts, cyan(summary))
@@ -308,6 +312,15 @@ func totalsSummary(totals model.ReportTotals, models []model.ModelBreakdown, suf
 		parts = append(parts, muted(suffix))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func calculatedPricing(models []model.ModelBreakdown) bool {
+	for _, model := range models {
+		if model.PricingState == "calculated" {
+			return true
+		}
+	}
+	return false
 }
 
 func modelSummary(models []model.ModelBreakdown) string {

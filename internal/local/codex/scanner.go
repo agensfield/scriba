@@ -115,6 +115,10 @@ func ParseFile(baseDir, filePath string) ([]model.LocalUsageEvent, model.Scanner
 		if priced {
 			costUSD = &cost
 		}
+		pricingState := "missing"
+		if priced {
+			pricingState = "calculated"
+		}
 		rel, _ := filepath.Rel(baseDir, filePath)
 		rel = filepath.ToSlash(rel)
 		events = append(events, model.LocalUsageEvent{
@@ -132,6 +136,7 @@ func ParseFile(baseDir, filePath string) ([]model.LocalUsageEvent, model.Scanner
 			EffectiveTokens:       usage.InputTokens - usage.CachedInputTokens + usage.OutputTokens,
 			TotalTokens:           usage.TotalTokens,
 			CostUSD:               costUSD,
+			PricingState:          pricingState,
 			SourcePath:            filePath,
 			Directory:             filepath.ToSlash(filepath.Dir(rel)),
 			SessionFile:           filepath.Base(rel),
