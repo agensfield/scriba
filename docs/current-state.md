@@ -45,6 +45,9 @@ Claude Code and Codex usage tracker.
 - Telegram reset-grant expiry alerts are tracked per available grant credit and
   fire once at the 5-day, 3-day, and 1-day checkpoints before each credit's own
   `expires_at`.
+- Telegram `/grants` and its dedicated inline keyboard button render every
+  available reset grant from the latest durable server observation, including
+  title, type, status, granted time, expiry, remaining lifetime, and full id.
 - Telegram delivery rows are leased as `sending` before network sends, so the
   retry loop cannot concurrently resend an in-flight notification. Send
   timeouts are treated as ambiguous and do not trigger HTML-to-plain fallback.

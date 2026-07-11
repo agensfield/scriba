@@ -22,7 +22,7 @@ product surface is now the CLI plus the resident `scriba server` process.
 - `scriba codex profile` for ChatGPT/Codex profile token activity, streaks,
   reasoning mix, and top skills/plugins.
 - Explicit additional Codex buckets, including Spark when OpenAI exposes it.
-- Resident Telegram bot with `/limits`, `/profile`, `/refresh`, `/health`,
+- Resident Telegram bot with `/limits`, `/grants`, `/profile`, `/refresh`, `/health`,
   `/stats`, `/lastreset`, `/settings`, and radar commands.
 - Telegram notifications for weekly resets, low remaining limits, reset-grant
   expiry checkpoints, service health, and Codex Radar probability milestones.
@@ -105,6 +105,12 @@ scriba config init
 scriba config telegram --enable --chat-id "$TELEGRAM_CHAT_ID" --bot-token-env SCRIBA_TELEGRAM_BOT_TOKEN
 scriba server run --env prod
 ```
+
+The bot's `/grants` command and Grants inline button show every available
+Codex reset grant with its title, reset type, status, granted time, expiry,
+remaining lifetime, and full credit id. Use `/refresh` first when you need a
+new live provider observation rather than the resident server's latest stored
+poll.
 
 For systemd user service setup and BotFather notes, see
 [Telegram Bot](docs/telegram.md).

@@ -33,6 +33,7 @@ In Telegram:
 ```text
 /health
 /limits
+/grants
 /profile
 /refresh
 /stats
@@ -42,6 +43,12 @@ In Telegram:
 `/profile` fetches the ChatGPT/Codex profile stats backend on demand and
 renders token activity, streaks, reasoning mix, and top skills/plugins in a
 compact Telegram card.
+
+`/grants` renders the full reset-grant inventory from the resident server's
+latest durable observation: title, reset type, status, granted time, expiry,
+remaining lifetime, and full credit id for every available grant. It is also
+available as a dedicated Grants button in the main inline keyboard. Run
+`/refresh` first when a newly fetched provider observation is required.
 
 ## systemd User Service
 
