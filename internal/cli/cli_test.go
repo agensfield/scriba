@@ -118,6 +118,13 @@ func TestCodexGroupHelpListsResetGrants(t *testing.T) {
 	}
 }
 
+func TestServerGroupHelpListsBackup(t *testing.T) {
+	text := groupHelp("server")
+	if !strings.Contains(text, "scriba server backup") || !strings.Contains(text, "--retention 14") {
+		t.Fatalf("server help missing backup contract:\n%s", text)
+	}
+}
+
 func TestRenderCodexProfileShowsHumanStats(t *testing.T) {
 	rank := int64(2)
 	total := int64(7)

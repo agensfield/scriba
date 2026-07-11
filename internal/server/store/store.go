@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +68,31 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+// OpenExisting opens an existing server database without creating directories
+// or running migrations. It is intended for pre-upgrade backup operations.
+func OpenExisting(path string) (*Store, error) {
+	if path == "" {
+		return nil, errors.New("store path is required")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("store path is not a regular file: %s", path)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?mode=rw"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return &Store{db: db, path: path}, nil
 }
 
 func (s *Store) Close() error {

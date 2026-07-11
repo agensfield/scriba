@@ -84,8 +84,30 @@ Useful checks:
 scriba server health --env prod
 scriba server stats --env prod
 scriba server refresh --env prod
+scriba server backup --env prod
 journalctl --user -u scriba.service -n 100 --no-pager
 ```
+
+Backups are online SQLite snapshots of server state only. They never include the
+Scriba config or Codex/Telegram authentication. The default destination is a
+`backups` directory beside `server.sqlite`; the default retention is the newest
+14 Scriba backup files. Each candidate must pass SQLite `quick_check` and schema
+inspection before it is promoted with owner-only permissions.
+
+Manual restore drill (stop the service first, and never overwrite the live file):
+
+```sh
+systemctl --user stop scriba.service
+cp ~/.local/state/scriba/backups/<backup>.sqlite /tmp/scriba-restore-drill.sqlite
+sqlite3 -readonly /tmp/scriba-restore-drill.sqlite 'PRAGMA quick_check; SELECT max(version) FROM schema_migrations;'
+scriba server status --state-path /tmp/scriba-restore-drill.sqlite
+rm /tmp/scriba-restore-drill.sqlite
+systemctl --user start scriba.service
+```
+
+The status command currently opens and migrates its target, so use it only on
+the disposable drill copy. Automated destructive restore is intentionally not
+implemented.
 
 ## Notifications
 

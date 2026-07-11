@@ -49,9 +49,30 @@ func runServer(command string, opts options) error {
 		return runServerRadar(opts)
 	case "prune":
 		return runServerPrune(cfg, opts)
+	case "backup":
+		return runServerBackup(cfg, opts)
 	default:
 		return fmt.Errorf("unknown server command: %s", command)
 	}
+}
+
+func runServerBackup(cfg config.Config, opts options) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	st, err := store.OpenExisting(resolveServerStatePath(cfg.Server.StatePath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	result, err := st.Backup(ctx, opts.backupDir, opts.retention)
+	if err != nil {
+		return err
+	}
+	if result.SizeBytes < 0 {
+		return fmt.Errorf("backup reported a negative size: %d", result.SizeBytes)
+	}
+	human := fmt.Sprintf("backup verified · %s · %s · sha256 %s · schema %d · quick_check %s · pruned %d", result.Path, humanize.Bytes(uint64(result.SizeBytes)), result.SHA256, result.SchemaVersion, result.QuickCheck, result.Pruned) // #nosec G115 -- negative sizes are rejected above.
+	return output(opts, result, human)
 }
 
 func runServerRun(cfg config.Config, opts options) error {

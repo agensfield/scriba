@@ -61,6 +61,8 @@ type options struct {
 	out             string
 	statePath       string
 	env             string
+	backupDir       string
+	retention       int
 }
 
 func Run(args []string) int {
@@ -218,9 +220,13 @@ func dispatch(args []string) error {
 			fmt.Println(groupHelp("server"))
 			return nil
 		}
+		flags := []string{"json", "config", "state-path", "env", "redact"}
+		if args[1] == "backup" {
+			flags = append(flags, "backup-dir", "retention")
+		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use:   fmt.Sprintf("scriba server %s [flags]", args[1]),
-			Flags: []string{"json", "config", "state-path", "env", "redact"},
+			Flags: flags,
 		})
 		if err != nil {
 			return err
@@ -296,6 +302,8 @@ var flagHelp = map[string]flagMeta{
 	"out":               {Name: "out", Value: "path", Usage: "output path"},
 	"state-path":        {Name: "state-path", Value: "path", Usage: "server sqlite path"},
 	"env":               {Name: "env", Value: "name", Usage: "server environment"},
+	"backup-dir":        {Name: "backup-dir", Value: "dir", Usage: "backup destination directory"},
+	"retention":         {Name: "retention", Value: "count", Usage: "number of Scriba backups to retain", Default: "14"},
 }
 
 func parse(args []string, spec flagSpec) (options, []string, error) {
@@ -361,6 +369,10 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.StringVar(&opts.statePath, name, "", flagHelp[name].Usage)
 		case "env":
 			fs.StringVar(&opts.env, name, "", flagHelp[name].Usage)
+		case "backup-dir":
+			fs.StringVar(&opts.backupDir, name, "", flagHelp[name].Usage)
+		case "retention":
+			fs.IntVar(&opts.retention, name, 14, flagHelp[name].Usage)
 		}
 	}
 	fs.SetOutput(os.Stdout)
@@ -1468,7 +1480,7 @@ func commands() map[string][]string {
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
 		"telegram": {"alerts", "reset"},
-		"server":   {"run", "status", "health", "stats", "refresh", "radar", "prune"},
+		"server":   {"run", "status", "health", "stats", "refresh", "radar", "prune", "backup"},
 	}
 }
 
@@ -1564,11 +1576,13 @@ Commands:
   scriba server refresh
   scriba server radar
   scriba server prune
+  scriba server backup
 
 Examples:
   scriba server run --env prod
   scriba server health --env prod
-  scriba server refresh --env prod --json`
+  scriba server refresh --env prod --json
+  scriba server backup --env prod --retention 14 --json`
 	case "bench":
 		return `scriba bench - Benchmark helpers.
 
