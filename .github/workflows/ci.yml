@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go (race and vet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Restore dependencies
+        run: go mod download
+      - name: Test with race detector
+        env:
+          GOPROXY: "off"
+        run: go test -race ./...
+      - name: Vet
+        env:
+          GOPROXY: "off"
+        run: go vet ./...
+
+  macos:
+    name: macOS (Go and Swift)
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Restore Go dependencies
+        run: go mod download
+      - name: Test Go
+        env:
+          GOPROXY: "off"
+        run: go test ./...
+      - name: Test Swift
+        run: swift test --package-path apps/macos
+
+  lint-security:
+    name: Lint and security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Restore dependencies and pinned tools
+        run: |
+          go mod download
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+      - name: Staticcheck
+        env:
+          GOPROXY: "off"
+        run: staticcheck ./...
+      - name: Gosec
+        env:
+          GOPROXY: "off"
+        run: gosec ./...
