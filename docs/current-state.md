@@ -127,6 +127,10 @@ apps/macos/Scripts/package_zip.sh release
 
 ## Open Follow-Ups
 
+- Execute the accepted local usage control-plane program in
+  [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
+  migration safety, and the canonical outbox precede budget intelligence,
+  policy, agent interfaces, profiles, and surface parity.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.
 - Decide whether ad-hoc signed zip distribution is enough before
