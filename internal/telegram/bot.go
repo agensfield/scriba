@@ -131,6 +131,7 @@ func (s *Service) RegisterCommands(ctx context.Context) error {
 		{Command: "health", Description: "poll/auth health check"},
 		{Command: "stats", Description: "storage and delivery stats"},
 		{Command: "limits", Description: "show current Codex limits"},
+		{Command: "grants", Description: "show detailed Codex reset grants"},
 		{Command: "profile", Description: "show Codex profile stats"},
 		{Command: "refresh", Description: "force a live Codex poll"},
 		{Command: "lastreset", Description: "show the latest reset event"},
@@ -355,6 +356,15 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 			return "no cached limits yet. use /refresh to fetch live Codex limits.", nil
 		}
 		return RenderLimits(obs), nil
+	case "/grants":
+		obs, ok, err := s.controller.LatestObservation(ctx)
+		if err != nil {
+			return "reset grants failed: " + err.Error(), nil
+		}
+		if !ok {
+			return "no cached reset grants yet. use /refresh to fetch live Codex limits.", nil
+		}
+		return RenderResetGrantDetails(obs), mainKeyboard()
 	case "/profile":
 		profile, err := s.controller.CodexProfile(ctx)
 		if err != nil {
@@ -406,6 +416,11 @@ func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuer
 	case "quick:profile":
 		s.answerCallback(ctx, query.ID, "loading profile")
 		reply, _ := s.handleCommand(ctx, "/profile")
+		_, _ = s.send(ctx, reply, mainKeyboard())
+		return
+	case "quick:grants":
+		s.answerCallback(ctx, query.ID, "loading reset grants")
+		reply, _ := s.handleCommand(ctx, "/grants")
 		_, _ = s.send(ctx, reply, mainKeyboard())
 		return
 	case "quick:health":
@@ -756,17 +771,18 @@ func mainKeyboard() models.InlineKeyboardMarkup {
 	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
 		{
 			{Text: "Limits", CallbackData: "quick:limits"},
+			{Text: "Grants", CallbackData: "quick:grants"},
+		},
+		{
 			{Text: "Profile", CallbackData: "quick:profile"},
-		},
-		{
 			{Text: "Refresh", CallbackData: "quick:refresh"},
+		},
+		{
 			{Text: "Radar", CallbackData: "quick:radar"},
-		},
-		{
 			{Text: "Health", CallbackData: "quick:health"},
-			{Text: "Stats", CallbackData: "quick:stats"},
 		},
 		{
+			{Text: "Stats", CallbackData: "quick:stats"},
 			{Text: "Settings", CallbackData: "quick:settings"},
 		},
 	}}
@@ -783,6 +799,7 @@ func helpText() string {
 		"<code>/health</code> poll/auth health check",
 		"<code>/stats</code> storage and delivery stats",
 		"<code>/limits</code> current Codex limits",
+		"<code>/grants</code> detailed Codex reset grants",
 		"<code>/profile</code> Codex profile stats",
 		"<code>/refresh</code> force a live poll",
 		"<code>/lastreset</code> latest reset event",

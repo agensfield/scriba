@@ -325,6 +325,49 @@ func TestLimitsCommandUsesCachedObservation(t *testing.T) {
 	}
 }
 
+func TestGrantsCommandShowsDetailedCachedCredits(t *testing.T) {
+	controller := &fakeController{
+		latest: resetwatch.Observation{
+			Account:    resetwatch.Account{Label: "personal", Plan: "pro"},
+			ObservedAt: parseTime("2026-07-10T20:00:00Z"),
+			ResetGrants: resetwatch.ResetGrants{
+				AvailableCount: ptrInt(1),
+				Credits: []resetwatch.ResetCredit{{
+					ID:        "RateLimitResetCredit_1234567890",
+					Status:    "available",
+					ResetType: "codex_rate_limits",
+					Title:     "Full reset (Weekly + 5 hr)",
+					GrantedAt: parseTime("2026-07-01T10:00:00Z"),
+					ExpiresAt: parseTime("2026-08-01T10:00:00Z"),
+				}},
+			},
+		},
+		latestOK: true,
+	}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	reply, markup := svc.handleCommand(context.Background(), "/grants")
+	for _, want := range []string{
+		"<b>Codex reset grants</b>",
+		"<b>1 available</b>",
+		"Full reset (Weekly + 5 hr)",
+		"codex_rate_limits",
+		"available",
+		"2026-07-01 10:00 UTC",
+		"2026-08-01 10:00 UTC",
+		"RateLimitResetCredit_1234567890",
+	} {
+		if !strings.Contains(reply, want) {
+			t.Fatalf("grants reply missing %q:\n%s", want, reply)
+		}
+	}
+	if markup == nil {
+		t.Fatal("expected main keyboard")
+	}
+	if controller.refreshes != 0 {
+		t.Fatalf("/grants should use the latest observation, got %d refreshes", controller.refreshes)
+	}
+}
+
 func TestProfileCommandUsesControllerProfile(t *testing.T) {
 	controller := &fakeController{
 		profile: remotecodex.ProfileResult{

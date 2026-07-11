@@ -27,6 +27,52 @@ func RenderLimits(obs resetwatch.Observation) string {
 	return "<b>Codex limits</b>\n" + renderFreshness(obs.ObservedAt) + "\n\n" + renderAccount(obs.Account) + "\n\n" + renderLimitDetails(obs.Windows, obs.ResetGrants, "current")
 }
 
+func RenderResetGrantDetails(obs resetwatch.Observation) string {
+	var b strings.Builder
+	b.WriteString("<b>Codex reset grants</b>\n")
+	b.WriteString(renderFreshness(obs.ObservedAt))
+	b.WriteString("\n")
+	b.WriteString(renderAccount(obs.Account))
+
+	available := len(obs.ResetGrants.Credits)
+	if obs.ResetGrants.AvailableCount != nil {
+		available = *obs.ResetGrants.AvailableCount
+	}
+	fmt.Fprintf(&b, "\n\n<b>%d available</b>", available)
+	if len(obs.ResetGrants.Credits) == 0 {
+		b.WriteString("\nNo available reset-grant details were returned by Codex.")
+		return b.String()
+	}
+
+	for i, credit := range obs.ResetGrants.Credits {
+		title := credit.Title
+		if title == "" {
+			title = "Reset grant"
+		}
+		rows := []string{}
+		if credit.ResetType != "" {
+			rows = append(rows, fmt.Sprintf("%-9s %s", "type", credit.ResetType))
+		}
+		if credit.Status != "" {
+			rows = append(rows, fmt.Sprintf("%-9s %s", "status", credit.Status))
+		}
+		if !credit.GrantedAt.IsZero() {
+			rows = append(rows, fmt.Sprintf("%-9s %s", "granted", formatGrantExpiry(credit.GrantedAt)))
+		}
+		if !credit.ExpiresAt.IsZero() {
+			rows = append(rows, fmt.Sprintf("%-9s %s", "expires", formatGrantExpiry(credit.ExpiresAt)))
+			if left := time.Until(credit.ExpiresAt); left > 0 {
+				rows = append(rows, fmt.Sprintf("%-9s %s", "left", formatGrantTimeLeft(left)))
+			}
+		}
+		if credit.ID != "" {
+			rows = append(rows, fmt.Sprintf("%-9s %s", "id", credit.ID))
+		}
+		fmt.Fprintf(&b, "\n\n<b>%d. %s</b>\n<pre>%s</pre>", i+1, html.EscapeString(title), html.EscapeString(strings.Join(rows, "\n")))
+	}
+	return b.String()
+}
+
 func RenderProfile(profile remotecodex.ProfileResult) string {
 	var b strings.Builder
 	b.WriteString("<b>Codex profile</b>\n")
