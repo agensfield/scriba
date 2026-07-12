@@ -41,6 +41,41 @@ func TestParseFileUsesTotalUsageDeltas(t *testing.T) {
 	}
 }
 
+func TestSubtractCumulativeUsageResetAndRepeat(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  rawUsage
+		previous rawUsage
+		want     rawUsage
+	}{
+		{
+			name:     "full reset",
+			current:  rawUsage{InputTokens: 5, CachedInputTokens: 1, OutputTokens: 2, ReasoningOutputTokens: 1, TotalTokens: 7},
+			previous: rawUsage{InputTokens: 100, CachedInputTokens: 50, OutputTokens: 20, ReasoningOutputTokens: 10, TotalTokens: 120},
+			want:     rawUsage{InputTokens: 5, CachedInputTokens: 1, OutputTokens: 2, ReasoningOutputTokens: 1, TotalTokens: 7},
+		},
+		{
+			name:     "one field rollback",
+			current:  rawUsage{InputTokens: 110, CachedInputTokens: 40, OutputTokens: 25, ReasoningOutputTokens: 11, TotalTokens: 135},
+			previous: rawUsage{InputTokens: 100, CachedInputTokens: 50, OutputTokens: 20, ReasoningOutputTokens: 10, TotalTokens: 120},
+			want:     rawUsage{InputTokens: 10, CachedInputTokens: 0, OutputTokens: 5, ReasoningOutputTokens: 1, TotalTokens: 15},
+		},
+		{
+			name:     "repeated snapshot",
+			current:  rawUsage{InputTokens: 100, CachedInputTokens: 50, OutputTokens: 20, ReasoningOutputTokens: 10, TotalTokens: 120},
+			previous: rawUsage{InputTokens: 100, CachedInputTokens: 50, OutputTokens: 20, ReasoningOutputTokens: 10, TotalTokens: 120},
+			want:     rawUsage{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := subtract(tt.current, &tt.previous); got != tt.want {
+				t.Fatalf("subtract() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseFileUsesLastUsageAndTracksModelChanges(t *testing.T) {
 	root := t.TempDir()
 	session := filepath.Join(root, "session.jsonl")

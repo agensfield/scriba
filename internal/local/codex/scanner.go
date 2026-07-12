@@ -185,6 +185,10 @@ func subtract(current rawUsage, previous *rawUsage) rawUsage {
 	if previous == nil {
 		return current
 	}
+	if current.TotalTokens < previous.TotalTokens ||
+		(current.InputTokens < previous.InputTokens && current.OutputTokens < previous.OutputTokens) {
+		return current
+	}
 	return rawUsage{
 		InputTokens:           max(current.InputTokens-previous.InputTokens, 0),
 		CachedInputTokens:     max(current.CachedInputTokens-previous.CachedInputTokens, 0),

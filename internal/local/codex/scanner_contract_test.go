@@ -38,10 +38,19 @@ func TestContractLastUsageModelConflictAndCompactionMarker(t *testing.T) {
 }
 
 func TestContractCounterReset(t *testing.T) {
-	// TODO(contract): a reset snapshot should be treated as fresh usage. Current
-	// subtraction clamps it to zero and drops the event, so freezing that output
-	// would turn a known undercount into a compatibility promise.
-	t.Skip("known defect: cumulative counter reset is dropped")
+	events, stats, err := ParseFile(filepath.Dir(contractFixture("counter-reset.jsonl")), contractFixture("counter-reset.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || stats.Events != 2 {
+		t.Fatalf("events=%d stats=%+v", len(events), stats)
+	}
+	if events[0].InputTokens != 100 || events[0].OutputTokens != 20 || events[0].TotalTokens != 120 {
+		t.Fatalf("first event=%+v", events[0])
+	}
+	if events[1].InputTokens != 5 || events[1].CachedInputTokens != 0 || events[1].OutputTokens != 2 || events[1].ReasoningOutputTokens != 0 || events[1].TotalTokens != 7 {
+		t.Fatalf("reset event=%+v", events[1])
+	}
 }
 
 func TestContractNumericAndLongContextBoundaries(t *testing.T) {
