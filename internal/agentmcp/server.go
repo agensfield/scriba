@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 
 	"github.com/agensfield/scriba/internal/agentcontext"
 	"github.com/agensfield/scriba/internal/buildinfo"
@@ -55,7 +56,11 @@ func NewServer(service contextService) *mcp.Server {
 
 // RunStdio serves until stdin closes or ctx is cancelled. Stdout is owned by the transport.
 func RunStdio(ctx context.Context, service contextService) error {
-	return NewServer(service).Run(ctx, &mcp.StdioTransport{})
+	err := NewServer(service).Run(ctx, &mcp.StdioTransport{})
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 func typedResult[T any](output T, err error) (*mcp.CallToolResult, T, error) {

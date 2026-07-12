@@ -30,12 +30,18 @@ type TelegramConfig struct {
 }
 
 type ServerConfig struct {
-	Enabled                          bool   `json:"enabled"`
-	StatePath                        string `json:"statePath,omitempty"`
-	Environment                      string `json:"environment"`
-	AccountLabel                     string `json:"accountLabel"`
-	StartupHeartbeatRateLimitMinutes int    `json:"startupHeartbeatRateLimitMinutes"`
-	ObservationRetentionDays         int    `json:"observationRetentionDays"`
+	Enabled                          bool             `json:"enabled"`
+	StatePath                        string           `json:"statePath,omitempty"`
+	Environment                      string           `json:"environment"`
+	AccountLabel                     string           `json:"accountLabel"`
+	StartupHeartbeatRateLimitMinutes int              `json:"startupHeartbeatRateLimitMinutes"`
+	ObservationRetentionDays         int              `json:"observationRetentionDays"`
+	ContextAPI                       ContextAPIConfig `json:"contextAPI"`
+}
+
+type ContextAPIConfig struct {
+	Enabled    bool   `json:"enabled"`
+	SocketPath string `json:"socketPath,omitempty"`
 }
 
 type Config struct {
@@ -159,6 +165,9 @@ func Save(path string, cfg Config) error {
 func Validate(cfg Config) error {
 	if cfg.SchemaVersion != 1 {
 		return errors.New("unsupported config schemaVersion")
+	}
+	if cfg.Server.ContextAPI.SocketPath != "" && !filepath.IsAbs(cfg.Server.ContextAPI.SocketPath) {
+		return errors.New("server.contextAPI.socketPath must be absolute")
 	}
 	return nil
 }

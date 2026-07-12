@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agensfield/scriba/internal/agentcontext"
 	"github.com/agensfield/scriba/internal/bench"
 	"github.com/agensfield/scriba/internal/buildinfo"
 	"github.com/agensfield/scriba/internal/cache"
@@ -125,6 +126,18 @@ func dispatch(args []string) error {
 			return fmt.Errorf("scriba context requires --json")
 		}
 		return runContext(opts)
+	case "mcp":
+		opts, rest, err := parse(args[1:], flagSpec{
+			Use:   "scriba mcp [flags]",
+			Flags: []string{"config", "cache-dir", "state-path"},
+		})
+		if err != nil {
+			return err
+		}
+		if len(rest) > 0 {
+			return fmt.Errorf("scriba mcp does not accept positional arguments")
+		}
+		return runMCP(opts)
 	case "claude", "codex":
 		if len(args) < 2 || isHelpArg(args[1]) {
 			fmt.Println(groupHelp(args[0]))
@@ -1535,7 +1548,7 @@ func title(value string) string {
 
 func commands() map[string][]string {
 	return map[string][]string{
-		"root":     {"doctor", "status", "context", "claude", "codex", "schema", "config", "policy", "outbox", "cache", "bench", "telegram", "server", "update", "version"},
+		"root":     {"doctor", "status", "context", "mcp", "claude", "codex", "schema", "config", "policy", "outbox", "cache", "bench", "telegram", "server", "update", "version"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks", "budget"},
 		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "profile", "budget"},
 		"config":   {"path", "show", "init", "telegram"},
@@ -1672,6 +1685,11 @@ Examples:
   scriba server health --env prod
   scriba server refresh --env prod --json
   scriba server backup --env prod --retention 14 --json`
+	case "mcp":
+		return `scriba mcp - Serve read-only Scriba context over MCP stdio.
+
+Usage:
+  scriba mcp [--config path] [--cache-dir dir] [--state-path path]`
 	case "bench":
 		return `scriba bench - Benchmark helpers.
 
@@ -1691,6 +1709,7 @@ Usage:
 Commands:
   status            combined local usage and remote limit snapshot
   context           machine-readable agent context (requires --json)
+  mcp               MCP stdio server for agent context
   doctor            auth, paths, cache, and provider diagnostics
   claude            Claude Code usage reports
   codex             Codex usage reports, live limits, reset grants, profile
@@ -1716,3 +1735,14 @@ Use "scriba <command> --help" for command-specific help.
 Use --json for automation and agents.
 `
 }
+
+func agentContextService(cfg config.Config) *agentcontext.Service {
+	return agentcontext.New(agentcontext.Config{
+		CacheDir:  cfg.CacheDir,
+		StorePath: resolveServerStatePath(cfg.Server.StatePath),
+		ProfileID: "default",
+		Clock:     agentContextClock,
+	})
+}
+
+var agentContextClock agentcontext.Clock

@@ -5,8 +5,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
-	"github.com/agensfield/scriba/internal/agentcontext"
 )
 
 func runContext(opts options) error {
@@ -20,15 +18,10 @@ func runContextWithContext(ctx context.Context, opts options) error {
 	if err != nil {
 		return err
 	}
-	statePath := cfg.Server.StatePath
 	if opts.statePath != "" {
-		statePath = opts.statePath
+		cfg.Server.StatePath = opts.statePath
 	}
-	payload, err := agentcontext.New(agentcontext.Config{
-		CacheDir:  cfg.CacheDir,
-		StorePath: resolveServerStatePath(statePath),
-		ProfileID: "default",
-	}).Context(ctx)
+	payload, err := agentContextService(cfg).Context(ctx)
 	if err != nil {
 		return err
 	}

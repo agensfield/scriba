@@ -2,6 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"flag"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -180,6 +183,68 @@ func TestSuperviseReturnsUnexpectedExitAndJoinsSibling(t *testing.T) {
 	default:
 		t.Fatal("supervisor returned before sibling joined")
 	}
+}
+
+func TestSuperviseBoundsStuckSiblingShutdown(t *testing.T) {
+	err := superviseWithTimeout(context.Background(), 20*time.Millisecond,
+		func(context.Context) error { return errors.New("failed") },
+		func(context.Context) error { select {} },
+	)
+	if err == nil || !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSuperviseBoundsStuckChildrenAfterParentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	err := superviseWithTimeout(ctx, 20*time.Millisecond, func(context.Context) error { select {} })
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("supervisor took %s", elapsed)
+	}
+}
+
+func TestContextAPISocketPathDefaultsBesideState(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "nested", "server.sqlite")
+	want := filepath.Join(filepath.Dir(state), "context.sock")
+	if got := resolveContextAPISocketPath(state, ""); got != want {
+		t.Fatalf("socket path = %q, want %q", got, want)
+	}
+	if got := resolveContextAPISocketPath(state, "/custom/context.sock"); got != "/custom/context.sock" {
+		t.Fatalf("socket override = %q", got)
+	}
+}
+
+func TestContextAPISocketPathMakesRelativeStateAbsolute(t *testing.T) {
+	got := resolveContextAPISocketPath(filepath.Join("relative", "server.sqlite"), "")
+	if !filepath.IsAbs(got) {
+		t.Fatalf("default socket path is relative: %q", got)
+	}
+}
+
+func TestMCPCommandDiscoveryAndFlags(t *testing.T) {
+	if !contains(commands()["root"], "mcp") {
+		t.Fatal("root command discovery missing mcp")
+	}
+	if err := dispatch([]string{"mcp", "--help"}); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("mcp --help error = %v", err)
+	}
+	if err := dispatch([]string{"mcp", "extra"}); err == nil || !strings.Contains(err.Error(), "positional") {
+		t.Fatalf("mcp positional error = %v", err)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRenderCodexProfileShowsHumanStats(t *testing.T) {

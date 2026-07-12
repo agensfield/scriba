@@ -16,6 +16,7 @@ import (
 
 	"github.com/agensfield/scriba/internal/buildinfo"
 	"github.com/agensfield/scriba/internal/config"
+	"github.com/agensfield/scriba/internal/localapi"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	servercore "github.com/agensfield/scriba/internal/server"
@@ -99,6 +100,17 @@ func runServerRun(cfg config.Config, opts options) error {
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
 	})
 	srv.SetRadarFetcher(radar.Client{})
+	children := []func(context.Context) error{srv.Run}
+	if cfg.Server.ContextAPI.Enabled {
+		socketPath := resolveContextAPISocketPath(st.Path(), cfg.Server.ContextAPI.SocketPath)
+		listener, err := localapi.Listen(ctx, socketPath)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = listener.Close() }()
+		api := localapi.NewHTTPServer(listener, agentContextService(cfg), localapi.HTTPConfig{})
+		children = append(children, api.Run)
+	}
 	if cfg.Telegram.Enabled {
 		token := cfg.Telegram.BotToken
 		if token == "" {
@@ -116,12 +128,32 @@ func runServerRun(cfg config.Config, opts options) error {
 			return err
 		}
 		srv.SetNotifier(tg)
-		return supervise(ctx, srv.Run, func(ctx context.Context) error { tg.Start(ctx); return nil })
+		children = append(children, func(ctx context.Context) error { tg.Start(ctx); return nil })
 	}
-	return srv.Run(ctx)
+	if len(children) == 1 {
+		return srv.Run(ctx)
+	}
+	return supervise(ctx, children...)
+}
+
+func resolveContextAPISocketPath(statePath, configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if absolute, err := filepath.Abs(statePath); err == nil {
+		statePath = absolute
+	}
+	return filepath.Join(filepath.Dir(statePath), "context.sock")
 }
 
 func supervise(ctx context.Context, children ...func(context.Context) error) error {
+	return superviseWithTimeout(ctx, 5*time.Second, children...)
+}
+
+func superviseWithTimeout(ctx context.Context, joinTimeout time.Duration, children ...func(context.Context) error) error {
+	if len(children) == 0 {
+		return nil
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	errs := make(chan error, len(children))
@@ -129,17 +161,32 @@ func supervise(ctx context.Context, children ...func(context.Context) error) err
 		child := child
 		go func() { errs <- child(ctx) }()
 	}
-	first := <-errs
 	var result error
-	if first != nil && !errors.Is(first, context.Canceled) {
-		result = first
-	} else if ctx.Err() == nil {
-		result = errors.New("resident service child exited unexpectedly")
+	completed := 0
+	select {
+	case first := <-errs:
+		completed = 1
+		if first != nil && !errors.Is(first, context.Canceled) {
+			result = first
+		} else if ctx.Err() == nil {
+			result = errors.New("resident service child exited unexpectedly")
+		}
+	case <-ctx.Done():
 	}
 	cancel()
-	for i := 1; i < len(children); i++ {
-		if err := <-errs; result == nil && err != nil && !errors.Is(err, context.Canceled) {
-			result = err
+	deadline := time.NewTimer(joinTimeout)
+	defer deadline.Stop()
+	for i := completed; i < len(children); i++ {
+		select {
+		case err := <-errs:
+			if result == nil && err != nil && !errors.Is(err, context.Canceled) {
+				result = err
+			}
+		case <-deadline.C:
+			if result == nil {
+				result = errors.New("resident service shutdown timed out")
+			}
+			return result
 		}
 	}
 	if ctx.Err() != nil && result == nil {
