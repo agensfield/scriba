@@ -214,7 +214,7 @@ func TestFileLockWaitHonorsContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer held.Close()
+	defer func() { _ = held.Close() }()
 	if err := unix.Flock(int(held.Fd()), unix.LOCK_EX); err != nil {
 		t.Fatal(err)
 	}

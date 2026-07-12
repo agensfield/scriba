@@ -17,7 +17,7 @@ func TestSQLiteConfigurationAndConcurrentAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if got := c.db.Stats().MaxOpenConnections; got != 1 {
 		t.Fatalf("max connections = %d", got)
 	}

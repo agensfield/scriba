@@ -70,7 +70,7 @@ func TestSQLiteConnectionPragmasWALPoolAndFileMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	var mode string
 	if err := reopened.db.QueryRow(`pragma journal_mode`).Scan(&mode); err != nil {
 		t.Fatal(err)
