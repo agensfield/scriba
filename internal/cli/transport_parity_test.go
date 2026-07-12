@@ -54,7 +54,7 @@ func TestAgentContextTransportParity(t *testing.T) {
 	base := time.Date(2026, 7, 12, 8, 0, 0, 0, time.UTC)
 	used, period := 81.0, int64((5*time.Hour)/time.Millisecond)
 	obs := resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "PRIVATE_ACCOUNT"}, ObservedAt: base, SnapshotJSON: []byte(`{"secret":"PRIVATE_SNAPSHOT"}`), Windows: []resetwatch.Window{{Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: base.Add(5 * time.Hour), PeriodDurationMs: &period}}}
-	if _, err := st.ApplyDecision(t.Context(), obs, resetwatch.Decision{}); err != nil {
+	if _, err := st.ApplyCodexPoll(t.Context(), store.CodexPollInput{ProfileRef: "default", Observation: obs, ResetOptions: resetwatch.DefaultOptions(), CommittedAt: base.Add(time.Second)}); err != nil {
 		t.Fatal(err)
 	}
 	versionBefore, err := st.SchemaVersion(t.Context())
@@ -73,18 +73,19 @@ func TestAgentContextTransportParity(t *testing.T) {
 	cfg := config.Default()
 	cfg.CacheDir, cfg.Server.StatePath = cacheDir, storePath
 	svc := agentContextService(cfg)
-	want, err := svc.Context(t.Context())
+	profileID := "default"
+	want, err := svc.ContextForProfile(t.Context(), profileID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cursor := "v1.0000000000000000"
-	wantEvents, err := svc.Events(t.Context(), agentcontext.EventPageRequest{Mode: "replay", Cursor: cursor, Limit: 20})
+	wantEvents, err := svc.Events(t.Context(), agentcontext.EventPageRequest{Mode: "replay", Cursor: cursor, Limit: 20, ProfileID: profileID})
 	if err != nil || len(wantEvents.Events) != 1 {
 		t.Fatalf("direct events: page=%#v err=%v", wantEvents, err)
 	}
 
 	wantRaw, _ := json.Marshal(want)
-	cliPayload := captureContextCLI(t, options{jsonOut: true, cacheDir: cacheDir, statePath: storePath})
+	cliPayload := captureContextCLI(t, options{jsonOut: true, cacheDir: cacheDir, statePath: storePath, profile: profileID})
 	if !jsonEqual(wantRaw, cliPayload) {
 		t.Fatalf("CLI context differs")
 	}
@@ -101,7 +102,7 @@ func TestAgentContextTransportParity(t *testing.T) {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	}}
-	resp, err := (&http.Client{Transport: transport}).Get("http://unix/v1/context")
+	resp, err := (&http.Client{Transport: transport}).Get("http://unix/v1/context?profile=" + profileID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func TestAgentContextTransportParity(t *testing.T) {
 	if err != nil || !jsonEqual(httpPayload, wantRaw) {
 		t.Fatalf("HTTP context differs: %v", err)
 	}
-	sse, err := (&http.Client{Transport: transport}).Get("http://unix/v1/events?cursor=" + cursor)
+	sse, err := (&http.Client{Transport: transport}).Get("http://unix/v1/events?cursor=" + cursor + "&profile=" + profileID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +144,7 @@ func TestAgentContextTransportParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = cs.Close() }()
-	result, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: agentmcp.GetContextTool, Arguments: map[string]any{}})
+	result, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: agentmcp.GetContextTool, Arguments: map[string]any{"profile": profileID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +155,7 @@ func TestAgentContextTransportParity(t *testing.T) {
 	if !jsonEqual(raw, wantRaw) {
 		t.Fatalf("MCP context differs")
 	}
-	eventResult, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: agentmcp.ListEventsTool, Arguments: map[string]any{"mode": "replay", "cursor": cursor, "limit": 20}})
+	eventResult, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: agentmcp.ListEventsTool, Arguments: map[string]any{"profile": profileID, "mode": "replay", "cursor": cursor, "limit": 20}})
 	if err != nil {
 		t.Fatal(err)
 	}

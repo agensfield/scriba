@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -155,12 +156,41 @@ func (s *HTTPServer) context(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.requestTimeout)
 	defer cancel()
-	value, err := s.service.Context(ctx)
+	profile, bad := requestedProfile(r)
+	if bad != "" {
+		writeError(w, http.StatusBadRequest, bad)
+		return
+	}
+	value, err := s.service.ContextForProfile(ctx, profile)
 	if err != nil {
+		var profileErr *agentcontext.ProfileError
+		if errors.As(err, &profileErr) {
+			writeError(w, http.StatusNotFound, profileErr.ReasonCode)
+			return
+		}
 		writeError(w, http.StatusServiceUnavailable, "context_unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
+}
+
+func requestedProfile(r *http.Request) (string, string) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return "", "invalid_profile"
+	}
+	values := query["profile"]
+	if len(values) > 1 {
+		return "", "invalid_profile"
+	}
+	if len(values) == 0 {
+		return "", ""
+	}
+	profile := values[0]
+	if profile == "" || profile != strings.TrimSpace(profile) {
+		return "", "invalid_profile"
+	}
+	return profile, ""
 }
 
 func requestedCursor(r *http.Request) (string, string) {
@@ -193,6 +223,10 @@ func requestedCursor(r *http.Request) (string, string) {
 	return query, ""
 }
 func eventError(err error) string {
+	var profile *agentcontext.ProfileError
+	if errors.As(err, &profile) && profile.ReasonCode == "profile_unavailable" {
+		return profile.ReasonCode
+	}
 	var page *agentcontext.EventPageError
 	if errors.As(err, &page) {
 		switch page.ReasonCode {
@@ -203,6 +237,9 @@ func eventError(err error) string {
 	return "events_unavailable"
 }
 func statusForEventError(code string) int {
+	if code == "profile_unavailable" {
+		return http.StatusNotFound
+	}
 	if code == "cursor_expired" {
 		return http.StatusGone
 	}
@@ -221,6 +258,11 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, bad)
 		return
 	}
+	profile, bad := requestedProfile(r)
+	if bad != "" {
+		writeError(w, http.StatusBadRequest, bad)
+		return
+	}
 	select {
 	case s.streams <- struct{}{}:
 		defer func() { <-s.streams }()
@@ -232,7 +274,7 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 	if cursor == "" {
 		mode = "capture"
 	}
-	page, err := s.eventPage(r.Context(), mode, cursor)
+	page, err := s.eventPage(r.Context(), mode, cursor, profile)
 	if err != nil {
 		code := eventError(err)
 		writeError(w, statusForEventError(code), code)
@@ -246,7 +288,7 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 	if !s.writeFrame(r.Context(), controller, w, ": connected\n\n") {
 		return
 	}
-	cursor, ok := s.drain(r.Context(), controller, w, cursor, page)
+	cursor, ok := s.drain(r.Context(), controller, w, cursor, page, profile)
 	if !ok {
 		return
 	}
@@ -263,7 +305,7 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-poll.C:
-			page, err = s.eventPage(r.Context(), "replay", cursor)
+			page, err = s.eventPage(r.Context(), "replay", cursor, profile)
 			if err != nil {
 				code := eventError(err)
 				if code == "cursor_expired" {
@@ -271,7 +313,7 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			cursor, ok = s.drain(r.Context(), controller, w, cursor, page)
+			cursor, ok = s.drain(r.Context(), controller, w, cursor, page, profile)
 			if !ok {
 				return
 			}
@@ -279,13 +321,13 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *HTTPServer) eventPage(parent context.Context, mode, cursor string) (agentcontext.EventPage, error) {
+func (s *HTTPServer) eventPage(parent context.Context, mode, cursor, profile string) (agentcontext.EventPage, error) {
 	ctx, cancel := context.WithTimeout(parent, s.requestTimeout)
 	defer cancel()
-	return s.service.Events(ctx, agentcontext.EventPageRequest{Mode: mode, Cursor: cursor, Limit: 1})
+	return s.service.Events(ctx, agentcontext.EventPageRequest{Mode: mode, Cursor: cursor, Limit: 1, ProfileID: profile})
 }
 
-func (s *HTTPServer) drain(ctx context.Context, controller *http.ResponseController, w http.ResponseWriter, cursor string, page agentcontext.EventPage) (string, bool) {
+func (s *HTTPServer) drain(ctx context.Context, controller *http.ResponseController, w http.ResponseWriter, cursor string, page agentcontext.EventPage, profile string) (string, bool) {
 	for {
 		next := page.Cursor.Next
 		if len(page.Events) > 0 {
@@ -305,7 +347,7 @@ func (s *HTTPServer) drain(ctx context.Context, controller *http.ResponseControl
 			return cursor, true
 		}
 		var err error
-		page, err = s.eventPage(ctx, "replay", cursor)
+		page, err = s.eventPage(ctx, "replay", cursor, profile)
 		if err != nil {
 			if eventError(err) == "cursor_expired" {
 				_ = s.writeFrame(ctx, controller, w, "event: cursor_expired\ndata: {\"reasonCode\":\"cursor_expired\"}\n\n")

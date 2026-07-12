@@ -104,6 +104,18 @@ func TestAgentSchemasRejectNonAllowlistedFields(t *testing.T) {
 	}
 }
 
+func TestLocalErrorSchemaAcceptsProfileErrors(t *testing.T) {
+	schema, err := publicOutputCompiler(t, filepath.Join("..", "..", "schemas")).Compile("https://agensfield.dev/scriba/schemas/local-error.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []string{"invalid_profile", "profile_unavailable"} {
+		if err := schema.Validate(map[string]any{"error": map[string]any{"code": code}}); err != nil {
+			t.Fatalf("%s rejected: %v", code, err)
+		}
+	}
+}
+
 func publicOutputCompiler(t *testing.T, schemaDir string) *jsonschema.Compiler {
 	t.Helper()
 	compiler := jsonschema.NewCompiler()

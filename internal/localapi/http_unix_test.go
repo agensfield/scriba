@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/agensfield/scriba/internal/agentcontext"
 )
 
 func TestHealthIsMinimizedAndAllowlisted(t *testing.T) {
@@ -86,5 +88,34 @@ func TestRequestedCursorRejectsDuplicatesAndNonCanonicalValues(t *testing.T) {
 	r.Header.Add("Last-Event-ID", "v1.0000000000000001")
 	if _, code := requestedCursor(r); code != "invalid_cursor" {
 		t.Fatalf("duplicate header code = %q", code)
+	}
+}
+
+func TestRequestedProfile(t *testing.T) {
+	for _, tc := range []struct{ path, profile, code string }{
+		{"/v1/context", "", ""},
+		{"/v1/context?profile=work", "work", ""},
+		{"/v1/context?profile=", "", "invalid_profile"},
+		{"/v1/context?profile=%20work", "", "invalid_profile"},
+		{"/v1/context?profile=one&profile=two", "", "invalid_profile"},
+		{"/v1/context?profile=work;bad=x", "", "invalid_profile"},
+	} {
+		r := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		profile, code := requestedProfile(r)
+		if profile != tc.profile || code != tc.code {
+			t.Fatalf("%s: got (%q, %q), want (%q, %q)", tc.path, profile, code, tc.profile, tc.code)
+		}
+	}
+}
+
+func TestHTTPRejectsUnknownConfiguredProfile(t *testing.T) {
+	s := NewHTTPServer(nil, agentcontext.New(agentcontext.Config{DefaultProfileID: "default", ProfileIDs: []string{"default"}}), HTTPConfig{})
+	for _, path := range []string{"/v1/context?profile=unknown", "/v1/events?profile=unknown"} {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		s.server.Handler.ServeHTTP(w, r)
+		if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "profile_unavailable") {
+			t.Fatalf("%s: status=%d body=%s", path, w.Code, w.Body.String())
+		}
 	}
 }

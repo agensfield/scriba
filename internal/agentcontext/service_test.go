@@ -3,6 +3,7 @@ package agentcontext
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -42,6 +43,101 @@ func TestContextSurfacesCancellation(t *testing.T) {
 	cancel()
 	if _, err := New(Config{}).Context(ctx); err != context.Canceled {
 		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestLegacyServiceRejectsArbitraryExplicitProfile(t *testing.T) {
+	svc := New(Config{ProfileID: "legacy"})
+	if _, err := svc.ContextForProfile(t.Context(), "other"); err == nil {
+		t.Fatal("legacy service accepted arbitrary profile")
+	}
+	if _, err := svc.ContextForProfile(t.Context(), "legacy"); err != nil {
+		t.Fatalf("legacy profile rejected: %v", err)
+	}
+}
+
+func TestContextProfileSelectionUsesMappedAccountAndRejectsUnknown(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SyncProfiles(ctx, []store.ProfileSpec{
+		{ProfileRef: "personal", ProviderID: "codex", Label: "Personal", Enabled: true, IsDefault: true},
+		{ProfileRef: "work", ProviderID: "codex", Label: "Work", Enabled: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 13, 2, 0, 0, 0, time.UTC)
+	for i, profile := range []string{"personal", "work"} {
+		used := float64(20 + 60*i)
+		obs := resetwatch.Observation{
+			ProviderID: "codex", Account: resetwatch.Account{Ref: "acct-" + profile, Label: profile}, ObservedAt: base.Add(time.Duration(i) * time.Hour),
+			SnapshotJSON: []byte(`{}`),
+			Windows:      []resetwatch.Window{{Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used, ResetAt: base.Add(7 * 24 * time.Hour)}},
+		}
+		if _, err := st.ApplyCodexPoll(ctx, store.CodexPollInput{ProfileRef: profile, Observation: obs, ResetOptions: resetwatch.DefaultOptions(), CommittedAt: obs.ObservedAt.Add(time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		used = float64(81 + 10*i)
+		obs.ObservedAt = base.Add(2*time.Hour + time.Duration(i)*time.Hour)
+		obs.Windows[0].UsedPercent = &used
+		if _, err := st.ApplyCodexPoll(ctx, store.CodexPollInput{ProfileRef: profile, Observation: obs, ResetOptions: resetwatch.DefaultOptions(), CommittedAt: obs.ObservedAt.Add(time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(t.TempDir(), "cache")
+	c, err := cache.Open(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cachedUsed := 99.0
+	cachedAt := base.Add(10 * time.Hour)
+	if err := c.SaveSnapshot("status", model.StatusSnapshot{SchemaVersion: model.SchemaVersion, GeneratedAt: cachedAt.Format(time.RFC3339), Providers: []model.ProviderSnapshot{{ProviderID: "codex", Lines: []model.MetricLine{{Type: "progress", Label: resetwatch.LabelWeeklyLimit, Used: &cachedUsed, ResetsAt: base.Add(7 * 24 * time.Hour).Format(time.RFC3339)}}}}}, cachedAt.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := New(Config{CacheDir: cacheDir, StorePath: path, DefaultProfileID: "personal", ProfileIDs: []string{"personal", "work"}, Clock: func() time.Time { return base.Add(2 * time.Hour) }})
+	personal, err := svc.Context(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, err := svc.ContextForProfile(ctx, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := *providerByID(t, personal, "codex").Profiles[0].Windows[0].UsedPercent; got != 81 {
+		t.Fatalf("personal used=%v", got)
+	}
+	workProfile := providerByID(t, work, "codex").Profiles[0]
+	if workProfile.ProfileID != "work" || *workProfile.Windows[0].UsedPercent != 91 {
+		t.Fatalf("work profile=%+v", workProfile)
+	}
+	for _, profile := range []string{"personal", "work"} {
+		page, err := svc.Events(ctx, EventPageRequest{Mode: "latest", Limit: 20, ProfileID: profile})
+		if err != nil || len(page.Events) == 0 {
+			t.Fatalf("%s events=%+v err=%v", profile, page, err)
+		}
+		for _, event := range page.Events {
+			if event.ProfileID != profile {
+				t.Fatalf("%s received cross-profile event %+v", profile, event)
+			}
+		}
+	}
+	if _, err := svc.ContextForProfile(ctx, "unknown"); err == nil {
+		t.Fatal("unknown profile accepted")
+	} else {
+		var profileErr *ProfileError
+		if !errors.As(err, &profileErr) || profileErr.ReasonCode != "profile_unavailable" {
+			t.Fatalf("unknown err=%v", err)
+		}
 	}
 }
 

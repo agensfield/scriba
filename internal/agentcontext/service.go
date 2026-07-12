@@ -18,9 +18,10 @@ const defaultEventLimit = 20
 
 type Clock func() time.Time
 type Config struct {
-	CacheDir, StorePath, ProfileID string
-	EventLimit                     int
-	Clock                          Clock
+	CacheDir, StorePath, ProfileID, DefaultProfileID string
+	ProfileIDs                                       []string
+	EventLimit                                       int
+	Clock                                            Clock
 }
 type Service struct{ config Config }
 
@@ -38,6 +39,10 @@ type candidate struct {
 type readState struct{ cacheErr, storeErr, historyErr, eventErr error }
 
 func (s *Service) Context(ctx context.Context) (Context, error) {
+	return s.ContextForProfile(ctx, "")
+}
+
+func (s *Service) ContextForProfile(ctx context.Context, requested string) (Context, error) {
 	if err := ctx.Err(); err != nil {
 		return Context{}, err
 	}
@@ -45,9 +50,9 @@ func (s *Service) Context(ctx context.Context) (Context, error) {
 	if s.config.Clock != nil {
 		now = s.config.Clock().UTC()
 	}
-	profileID := strings.TrimSpace(s.config.ProfileID)
-	if profileID == "" {
-		profileID = "default"
+	profileID, err := s.selectProfile(requested)
+	if err != nil {
+		return Context{}, err
 	}
 	limit := s.config.EventLimit
 	if limit <= 0 {
@@ -81,7 +86,14 @@ func (s *Service) Context(ctx context.Context) (Context, error) {
 		state.storeErr = err
 	} else {
 		defer func() { _ = st.Close() }()
-		o, ok, loadErr := st.LoadLatestObservationForProvider(ctx, "codex")
+		var o resetwatch.Observation
+		var ok bool
+		var loadErr error
+		if len(s.config.ProfileIDs) > 0 {
+			o, ok, loadErr = st.LoadLatestObservationForProfile(ctx, profileID)
+		} else {
+			o, ok, loadErr = st.LoadLatestObservationForProvider(ctx, "codex")
+		}
 		if loadErr != nil {
 			state.storeErr = loadErr
 		} else if ok && len(budgetadapter.FromResetwatch(o).Windows) > 0 {
@@ -95,8 +107,14 @@ func (s *Service) Context(ctx context.Context) (Context, error) {
 	providers := []string{"claude", "codex"}
 	for _, providerID := range providers {
 		selected, ok := cacheCandidates[providerID]
-		if providerID == "codex" && validCandidate(storeCandidate) && (!ok || !storeCandidate.obs.ObservedAt.Before(selected.obs.ObservedAt)) {
-			selected, ok = storeCandidate, true
+		providerProfileID := "default"
+		if providerID == "codex" {
+			providerProfileID = profileID
+			if len(s.config.ProfileIDs) > 0 {
+				selected, ok = storeCandidate, validCandidate(storeCandidate)
+			} else if validCandidate(storeCandidate) && (!ok || !storeCandidate.obs.ObservedAt.Before(selected.obs.ObservedAt)) {
+				selected, ok = storeCandidate, true
+			}
 		}
 		if !ok {
 			out.Sources = append(out.Sources, missingSources(providerID, state)...)
@@ -127,10 +145,10 @@ func (s *Service) Context(ctx context.Context) (Context, error) {
 			}
 		}
 		out.Sources = append(out.Sources, sources...)
-		out.Providers = append(out.Providers, buildProvider(providerID, profileID, selected.obs, history, hs, now))
+		out.Providers = append(out.Providers, buildProvider(providerID, providerProfileID, selected.obs, history, hs, now))
 		if selected.fromStore && state.eventErr == nil {
 			for _, r := range records {
-				if e, yes := minimize(r, profileID); yes {
+				if e, yes := minimize(r, providerProfileID); yes {
 					out.Events = append(out.Events, e)
 				}
 			}
@@ -145,6 +163,41 @@ func (s *Service) Context(ctx context.Context) (Context, error) {
 		return out.Events[i].DetectedAt.After(out.Events[j].DetectedAt)
 	})
 	return out, nil
+}
+
+func (s *Service) selectProfile(requested string) (string, error) {
+	profileID := strings.TrimSpace(requested)
+	if requested != "" && profileID != requested {
+		return "", &ProfileError{ReasonCode: "profile_unavailable"}
+	}
+	if profileID == "" {
+		profileID = strings.TrimSpace(s.config.DefaultProfileID)
+	}
+	if profileID == "" {
+		profileID = strings.TrimSpace(s.config.ProfileID)
+	}
+	if profileID == "" {
+		profileID = "default"
+	}
+	if len(s.config.ProfileIDs) == 0 {
+		legacyID := strings.TrimSpace(s.config.DefaultProfileID)
+		if legacyID == "" {
+			legacyID = strings.TrimSpace(s.config.ProfileID)
+		}
+		if legacyID == "" {
+			legacyID = "default"
+		}
+		if requested != "" && profileID != legacyID {
+			return "", &ProfileError{ReasonCode: "profile_unavailable"}
+		}
+		return legacyID, nil
+	}
+	for _, allowed := range s.config.ProfileIDs {
+		if profileID == allowed {
+			return profileID, nil
+		}
+	}
+	return "", &ProfileError{ReasonCode: "profile_unavailable"}
 }
 
 func candidatesFromSnapshot(s model.StatusSnapshot) map[string]candidate {

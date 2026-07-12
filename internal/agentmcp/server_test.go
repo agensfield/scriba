@@ -92,7 +92,7 @@ func TestToolsAndCalls(t *testing.T) {
 		t.Fatalf("schemaVersion=%q", envelope.SchemaVersion)
 	}
 
-	for _, args := range []map[string]any{{"unknown": true}, {"limit": 0}, {"limit": 101}, {"cursor": "bad"}, {"mode": "latest", "cursor": "v1.0000000000000000"}} {
+	for _, args := range []map[string]any{{"unknown": true}, {"profile": "INVALID"}, {"limit": 0}, {"limit": 101}, {"cursor": "bad"}, {"mode": "latest", "cursor": "v1.0000000000000000"}} {
 		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: ListEventsTool, Arguments: args})
 		if err != nil {
 			t.Fatal(err)
@@ -195,9 +195,11 @@ func fileDigest(t *testing.T, path string) string {
 }
 
 type fakeService struct {
-	contextErr error
-	eventsErr  error
-	entered    chan struct{}
+	contextErr     error
+	eventsErr      error
+	entered        chan struct{}
+	contextProfile string
+	eventsRequest  agentcontext.EventPageRequest
 }
 
 func (f *fakeService) Context(ctx context.Context) (agentcontext.Context, error) {
@@ -206,10 +208,31 @@ func (f *fakeService) Context(ctx context.Context) (agentcontext.Context, error)
 		<-ctx.Done()
 		return agentcontext.Context{}, ctx.Err()
 	}
-	return agentcontext.Context{}, f.contextErr
+	return agentcontext.Context{SchemaVersion: agentcontext.SchemaVersion, GeneratedAt: time.Now(), Sources: []agentcontext.Source{}, Providers: []agentcontext.Provider{}, Events: []agentcontext.Event{}}, f.contextErr
 }
-func (f *fakeService) Events(context.Context, agentcontext.EventPageRequest) (agentcontext.EventPage, error) {
-	return agentcontext.EventPage{}, f.eventsErr
+
+func (f *fakeService) ContextForProfile(ctx context.Context, profile string) (agentcontext.Context, error) {
+	f.contextProfile = profile
+	return f.Context(ctx)
+}
+func (f *fakeService) Events(_ context.Context, request agentcontext.EventPageRequest) (agentcontext.EventPage, error) {
+	f.eventsRequest = request
+	return agentcontext.EventPage{SchemaVersion: agentcontext.EventsSchemaVersion, GeneratedAt: time.Now(), Events: []agentcontext.Event{}, Cursor: agentcontext.EventPageCursor{Next: "v1.0000000000000000", HighWater: "v1.0000000000000000"}}, f.eventsErr
+}
+
+func TestProfileArgumentsReachMCPService(t *testing.T) {
+	fake := &fakeService{}
+	cs, closeFn := testClient(t, NewServer(fake))
+	defer closeFn()
+	if _, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: GetContextTool, Arguments: map[string]any{"profile": "work"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: ListEventsTool, Arguments: map[string]any{"profile": "personal"}}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.contextProfile != "work" || fake.eventsRequest.ProfileID != "personal" {
+		t.Fatalf("context=%q events=%+v", fake.contextProfile, fake.eventsRequest)
+	}
 }
 
 func TestSafeToolErrors(t *testing.T) {
@@ -221,6 +244,7 @@ func TestSafeToolErrors(t *testing.T) {
 		{"future", &agentcontext.EventPageError{ReasonCode: "cursor_future"}, "cursor_future"},
 		{"expired", &agentcontext.EventPageError{ReasonCode: "cursor_expired"}, "cursor_expired"},
 		{"unavailable", &agentcontext.EventPageError{ReasonCode: "events_unavailable"}, "events_unavailable"},
+		{"profile", &agentcontext.ProfileError{ReasonCode: "profile_unavailable"}, "profile_unavailable"},
 		{"private", errors.New("open /Users/arda/.secrets/account-token: permission denied"), "data unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

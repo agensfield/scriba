@@ -71,6 +71,8 @@ type options struct {
 	id              string
 	status          string
 	target          string
+	profile         string
+	profileSet      bool
 }
 
 func Run(args []string) int {
@@ -114,7 +116,7 @@ func dispatch(args []string) error {
 	case "context":
 		opts, rest, err := parse(args[1:], flagSpec{
 			Use:   "scriba context --json [flags]",
-			Flags: []string{"json", "config", "cache-dir", "state-path"},
+			Flags: []string{"json", "config", "cache-dir", "state-path", "profile"},
 		})
 		if err != nil {
 			return err
@@ -362,6 +364,7 @@ var flagHelp = map[string]flagMeta{
 	"id":                {Name: "id", Value: "id", Usage: "outbox message id"},
 	"status":            {Name: "status", Value: "status", Usage: "outbox status"},
 	"target":            {Name: "target", Value: "target", Usage: "delivery target"},
+	"profile":           {Name: "profile", Value: "id", Usage: "configured profile id"},
 }
 
 func parse(args []string, spec flagSpec) (options, []string, error) {
@@ -443,6 +446,18 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.StringVar(&opts.status, name, "", flagHelp[name].Usage)
 		case "target":
 			fs.StringVar(&opts.target, name, "", flagHelp[name].Usage)
+		case "profile":
+			fs.Func(name, flagHelp[name].Usage, func(value string) error {
+				if opts.profileSet {
+					return errors.New("profile may be provided only once")
+				}
+				opts.profileSet = true
+				if value == "" {
+					return errors.New("profile id is required")
+				}
+				opts.profile = value
+				return nil
+			})
 		}
 	}
 	fs.SetOutput(io.Discard)
@@ -1739,11 +1754,18 @@ Use --json for automation and agents.
 }
 
 func agentContextService(cfg config.Config) *agentcontext.Service {
+	profiles := make([]string, 0, len(cfg.Profiles))
+	for _, profile := range cfg.Profiles {
+		if profile.Enabled {
+			profiles = append(profiles, profile.ID)
+		}
+	}
 	return agentcontext.New(agentcontext.Config{
-		CacheDir:  cfg.CacheDir,
-		StorePath: resolveServerStatePath(cfg.Server.StatePath),
-		ProfileID: "default",
-		Clock:     agentContextClock,
+		CacheDir:         cfg.CacheDir,
+		StorePath:        resolveServerStatePath(cfg.Server.StatePath),
+		DefaultProfileID: cfg.DefaultProfileID,
+		ProfileIDs:       profiles,
+		Clock:            agentContextClock,
 	})
 }
 

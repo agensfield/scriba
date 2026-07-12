@@ -57,7 +57,8 @@ and server store without provider refresh or mutation and emits the allowlisted
 `scriba.context.v1` contract. `--cache-dir` and `--state-path` override its two
 read sources. Sources report independent availability, provenance, freshness,
 and reason codes, so a missing Claude observation does not suppress valid
-Codex context. The current profile ID is `default`.
+Codex context. Use `--profile <id>` to select an enabled configured profile;
+omission selects the configured default.
 
 The checked-in schema is
 [`context.schema.json`](../schemas/context.schema.json). See
@@ -65,8 +66,9 @@ The checked-in schema is
 partial-result behavior, Unix API/SSE cursors, and MCP parity.
 
 `scriba mcp` is a protocol-pure stdio server for local agent clients. It exposes
-only `scriba_get_context` and `scriba_list_events`; it cannot refresh providers,
-change config, send notifications, redeem grants, or select arbitrary accounts.
+only `scriba_get_context` and `scriba_list_events`; each accepts an optional
+configured `profile` ID. It cannot refresh providers, change config, send
+notifications, redeem grants, or select arbitrary provider accounts.
 Use `--config`, `--cache-dir`, and `--state-path` to select the same read sources
 as the context command. Normal stdin EOF and handled SIGTERM exit cleanly.
 

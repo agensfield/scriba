@@ -66,9 +66,10 @@ type Event struct {
 const EventsSchemaVersion = "scriba.events.v1"
 
 type EventPageRequest struct {
-	Mode   string
-	Cursor string
-	Limit  int
+	Mode      string
+	Cursor    string
+	Limit     int
+	ProfileID string
 }
 
 type EventPage struct {
@@ -86,6 +87,10 @@ type EventPageCursor struct {
 type EventPageError struct {
 	ReasonCode string `json:"reasonCode"`
 }
+
+type ProfileError struct{ ReasonCode string }
+
+func (e *ProfileError) Error() string { return "profile unavailable: " + e.ReasonCode }
 
 func (e *EventPageError) Error() string { return "event page unavailable: " + e.ReasonCode }
 

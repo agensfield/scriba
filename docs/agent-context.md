@@ -4,21 +4,24 @@ Wave 3.1 ships one read-only, allowlisted context projection for local agents:
 
 ```sh
 scriba context --json
+scriba context --json --profile work
 ```
 
 The command is JSON-only and publishes `scriba.context.v1`, validated by
 [`schemas/context.schema.json`](../schemas/context.schema.json). It contains a
 generation timestamp, source status, provider/profile quota windows and
-budgets, reset-grant summary, and minimized durable policy events. The current
-implementation always uses profile ID `default`.
+budgets, reset-grant summary, and minimized durable policy events. Omitting
+`--profile` selects the configured enabled default; an explicit profile must be
+one of the enabled stable IDs in config.
 
 ## Source Selection and Partial Results
 
 Scriba reads the status cache and server store without refreshing a provider.
-Claude context comes from the cached status snapshot. Codex uses the newest
-valid quota observation between that snapshot and the durable server store;
-the store wins ties. Durable Codex history supports budget confidence, and the
-policy store supplies up to 20 recent minimized events.
+Claude context comes from the cached status snapshot. Codex resolves the
+selected profile through the durable current profile/account mapping, then
+loads only that account's latest observation, budget history, and minimized
+policy events. An unrelated newer Codex cache snapshot can never override the
+selected account.
 
 Each provider has four independently reported sources: `quota`, `budget`,
 `grants`, and `policy-events`. Missing or unreadable inputs do not erase healthy
@@ -37,7 +40,7 @@ provider-neutral confidence and reason arrays.
 
 The contract is an allowlist, not a redacted dump. It may expose only:
 
-- provider IDs and the stable `default` profile ID;
+- provider IDs and the selected stable configured profile ID;
 - normalized quota window percentages and reset timestamps;
 - derived budget risk, confidence, and reason codes;
 - reset-grant count and earliest available expiry;
@@ -63,7 +66,7 @@ sidecar bytes.
 
 The same service is now exposed through three read-only surfaces:
 
-- `scriba context --json` returns `scriba.context.v1`.
+- `scriba context --json [--profile <id>]` returns `scriba.context.v1`.
 - An opt-in owner-only Unix API serves `GET /v1/health`, `GET /v1/context`,
   and replayable SSE at `GET /v1/events`.
 - `scriba mcp` runs a stdio MCP server with exactly two tools:
@@ -76,7 +79,13 @@ The socket parent is private (`0700`) and the socket is mode `0600`. This is a
 same-UID trust boundary, not isolation from malicious code already running as
 the same user. TCP and bearer-authenticated network serving remain absent.
 
-SSE clients reconnect with `Last-Event-ID` or `?cursor=`. New connections
+Context and event requests accept `?profile=<id>`; omission selects the enabled
+default. MCP accepts the same optional `profile` argument on both tools.
+Unknown, disabled, duplicate, empty, or whitespace-padded selections fail with
+a bounded code and never fall back to another account.
+
+SSE clients reconnect with `Last-Event-ID` or `?cursor=` and repeat the same
+profile selector on reconnect. New connections
 capture the current high-water and tail future events; cursor
 `v1.0000000000000000` requests retained history. Expired cursors return `410`,
 future or malformed cursors return `400`, and heartbeats never advance the

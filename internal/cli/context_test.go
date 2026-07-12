@@ -23,6 +23,12 @@ func TestContextCommandContract(t *testing.T) {
 	if err := dispatch([]string{"context", "--redact", "--json"}); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
 		t.Fatalf("unsupported flag error = %v", err)
 	}
+	if err := dispatch([]string{"context", "--json", "--profile="}); err == nil || !strings.Contains(err.Error(), "profile id is required") {
+		t.Fatalf("empty profile error = %v", err)
+	}
+	if err := dispatch([]string{"context", "--json", "--profile=one", "--profile=two"}); err == nil || !strings.Contains(err.Error(), "only once") {
+		t.Fatalf("duplicate profile error = %v", err)
+	}
 }
 
 func TestContextInvalidFlagKeepsStdoutClean(t *testing.T) {

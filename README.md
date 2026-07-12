@@ -28,7 +28,8 @@ CLI, resident server, Telegram, Unix HTTP/SSE API, and stdio MCP.
 - Telegram notifications for weekly resets, low remaining limits, reset-grant
   expiry checkpoints, service health, and Codex Radar probability milestones.
 - Local SQLite cache/state. Source logs and provider APIs remain authoritative.
-- JSON-only `scriba context --json` for an allowlisted, read-only agent view of
+- JSON-only `scriba context --json [--profile <id>]` for an allowlisted,
+  read-only agent view of
   quota windows, budgets, grants, source freshness, and minimized policy events.
 - `scriba update --check` and `scriba update` for tagged release updates,
   with Homebrew-managed installs routed to `brew upgrade scriba`.
@@ -84,6 +85,7 @@ scriba codex limits
 scriba codex reset-grants
 scriba codex profile
 scriba context --json
+scriba context --json --profile work
 scriba update --check
 ```
 

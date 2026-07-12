@@ -9,6 +9,7 @@ import (
 
 	"github.com/agensfield/scriba/internal/budgetadapter"
 	"github.com/agensfield/scriba/internal/cache"
+	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
@@ -39,12 +40,12 @@ func (s *Service) Events(ctx context.Context, request EventPageRequest) (EventPa
 	if s.config.Clock != nil {
 		now = s.config.Clock().UTC()
 	}
-	profile := strings.TrimSpace(s.config.ProfileID)
-	if profile == "" {
-		profile = "default"
+	profile, err := s.selectProfile(request.ProfileID)
+	if err != nil {
+		return EventPage{}, err
 	}
 
-	selected, available, err := s.selectedCodex(ctx)
+	selected, available, err := s.selectedCodex(ctx, profile)
 	if err != nil {
 		if ctx.Err() != nil {
 			return EventPage{}, ctx.Err()
@@ -126,7 +127,7 @@ func parseEventCursor(value string) (int64, error) {
 	return seq, nil
 }
 
-func (s *Service) selectedCodex(ctx context.Context) (candidate, bool, error) {
+func (s *Service) selectedCodex(ctx context.Context, profile string) (candidate, bool, error) {
 	var cached candidate
 	haveCache := false
 	c, err := cache.OpenReadOnlyContext(ctx, s.config.CacheDir)
@@ -148,13 +149,22 @@ func (s *Service) selectedCodex(ctx context.Context) (candidate, bool, error) {
 		return candidate{}, false, err
 	}
 	defer func() { _ = st.Close() }()
-	o, ok, err := st.LoadLatestObservationForProvider(ctx, "codex")
+	var o resetwatch.Observation
+	var ok bool
+	if len(s.config.ProfileIDs) > 0 {
+		o, ok, err = st.LoadLatestObservationForProfile(ctx, profile)
+	} else {
+		o, ok, err = st.LoadLatestObservationForProvider(ctx, "codex")
+	}
 	if err != nil {
 		return candidate{}, false, err
 	}
 	stored := candidate{}
 	if ok && len(budgetadapter.FromResetwatch(o).Windows) > 0 {
 		stored = candidate{obs: o, provenance: "provider-api", fromStore: true, grantAt: o.ObservedAt}
+	}
+	if len(s.config.ProfileIDs) > 0 {
+		return stored, validCandidate(stored), nil
 	}
 	if validCandidate(stored) && (!haveCache || !stored.obs.ObservedAt.Before(cached.obs.ObservedAt)) {
 		return stored, true, nil
