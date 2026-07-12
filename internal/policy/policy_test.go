@@ -1,0 +1,288 @@
+package policy
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/agensfield/scriba/internal/resetwatch"
+)
+
+func TestParseConfigIsStrictAndCurrentPresetIsIndependent(t *testing.T) {
+	cfg, err := ParseConfig([]byte(`{"preset":"current"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Rules) != 4 {
+		t.Fatalf("current rules = %d", len(cfg.Rules))
+	}
+	cfg.Rules[0].Checkpoints[0] = 99
+	if got := CurrentPreset().Rules[0].Checkpoints[0]; got != 20 {
+		t.Fatalf("preset mutated: %d", got)
+	}
+	custom, err := ParseConfig([]byte(`{"preset":"custom","rules":[{"id":"x","kind":"remaining_checkpoint","windowKeys":["primary.weekly"],"checkpoints":[20,10]}]}`))
+	if err != nil || len(custom.Rules) != 1 || custom.Preset != "" {
+		t.Fatalf("custom config = %#v, %v", custom, err)
+	}
+
+	bad := []string{
+		`{"preset":"future"}`,
+		`{"preset":"current","unknown":true}`,
+		`{"preset":"current","rules":[]}`,
+		`{"rules":[{"id":"x","kind":"remaining_checkpoint","windowKeys":["weekly"],"checkpoints":[5,10]}]}`,
+		`{"rules":[{"id":"x","kind":"grant_available","checkpoints":[1]}]}`,
+	}
+	for _, raw := range bad {
+		if _, err := ParseConfig([]byte(raw)); err == nil {
+			t.Errorf("accepted invalid config %s", raw)
+		}
+	}
+}
+
+func TestCurrentRemainingMatchesResetwatchCandidate(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	resetAt := mustTime("2026-07-12T14:00:00Z")
+	used := 96.0
+	legacyObs := resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "acct"}, ObservedAt: now, Windows: []resetwatch.Window{{Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: resetAt}}}
+	legacy := resetwatch.WarningCandidates(legacyObs)
+	previous := map[StateKey]State{{RuleID: "current.remaining.primary", Subject: "primary.five_hour"}: {LastResetAt: resetAt}}
+	got, err := Evaluate(CurrentPreset(), Input{ProviderID: "codex", AccountRef: "acct", ObservedAt: now, Windows: []WindowObservation{{Key: "primary.five_hour", Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: resetAt}}, Previous: previous})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Events) != 1 || len(legacy) != 1 {
+		t.Fatalf("events policy=%#v legacy=%#v", got.Events, legacy)
+	}
+	e := got.Events[0]
+	if e.ID != legacy[0].ID || e.Checkpoint != legacy[0].ThresholdRemaining || e.RemainingPercent != legacy[0].RemainingPercent {
+		t.Fatalf("policy=%#v legacy=%#v", e, legacy[0])
+	}
+}
+
+func TestCurrentGrantFixturesMatchLegacyIDs(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	g := GrantObservation{ID: "credit-2", Status: "available", Title: "Reset", GrantedAt: mustTime("2026-07-12T09:00:00Z"), ExpiresAt: mustTime("2026-07-15T09:00:00Z")}
+	legacyObs := resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "acct"}, ObservedAt: now, ResetGrants: resetwatch.ResetGrants{Credits: []resetwatch.ResetCredit{{ID: g.ID, Status: g.Status, Title: g.Title, GrantedAt: g.GrantedAt, ExpiresAt: g.ExpiresAt}}}}
+	prev := map[StateKey]State{
+		{RuleID: "current.grant.available", Subject: "acct"}: {KnownGrantIdentities: []string{"credit-1\x002026-07-01T00:00:00Z\x002026-07-20T00:00:00Z"}},
+		{RuleID: "current.grant.expiry", Subject: g.ID}:      {},
+	}
+	got, err := Evaluate(CurrentPreset(), Input{ProviderID: "codex", AccountRef: "acct", ObservedAt: now, Grants: []GrantObservation{g}, Previous: prev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyGrant := resetwatch.ResetGrantEventCandidates(legacyObs)[0]
+	legacyExpiry := resetwatch.GrantExpiryWarningCandidates(legacyObs)
+	if len(got.Events) != 3 || len(legacyExpiry) != 2 {
+		t.Fatalf("policy=%#v legacy expiry=%#v", got.Events, legacyExpiry)
+	}
+	if got.Events[0].ID != legacyGrant.ID {
+		t.Fatalf("grant id %s != %s", got.Events[0].ID, legacyGrant.ID)
+	}
+	for i := range legacyExpiry {
+		if got.Events[i+1].ID != legacyExpiry[i].ID || got.Events[i+1].Checkpoint != legacyExpiry[i].ThresholdDays {
+			t.Fatalf("expiry=%#v legacy=%#v", got.Events[i+1], legacyExpiry[i])
+		}
+	}
+}
+
+func TestBootstrapSilencesEveryRuleAndSeedsDeterministicState(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	used := 96.0
+	in := Input{ProviderID: "codex", AccountRef: "acct", ObservedAt: now, Bootstrap: true, Windows: []WindowObservation{{Key: "primary.five_hour", Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: now.Add(5 * time.Hour)}, {Key: "primary.weekly", Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used, ResetAt: now.Add(7 * 24 * time.Hour), PeriodDuration: 7 * 24 * time.Hour}}, Grants: []GrantObservation{{ID: "g", Status: "available", ExpiresAt: now.Add(24 * time.Hour)}}}
+	a, err := Evaluate(CurrentPreset(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Evaluate(CurrentPreset(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Events) != 0 {
+		t.Fatalf("bootstrap emitted %#v", a.Events)
+	}
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("nondeterministic results\na=%#v\nb=%#v", a, b)
+	}
+	for _, x := range a.Explanations {
+		if x.Reason != ReasonBootstrap {
+			t.Fatalf("unexpected explanation %#v", x)
+		}
+	}
+}
+
+func TestResetTransitionMatchesCurrentHeuristics(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	oldReset := mustTime("2026-07-13T10:00:00Z")
+	nextReset := mustTime("2026-07-19T10:00:00Z")
+	used := 40.0
+	prevUsed := 34.0
+	prev := map[StateKey]State{{RuleID: "current.reset.weekly", Subject: "primary.weekly"}: {StableResetAt: oldReset, LastResetAt: oldReset, LastObservedAt: now.Add(-time.Hour), LastUsedPercent: &prevUsed}}
+	got, err := Evaluate(CurrentPreset(), Input{ProviderID: "codex", AccountRef: "acct", ObservedAt: now, Windows: []WindowObservation{{Key: "primary.weekly", Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used, ResetAt: nextReset, PeriodDuration: 7 * 24 * time.Hour}}, Previous: prev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Events) != 1 || got.Events[0].ResetKind != "early" {
+		t.Fatalf("events=%#v", got.Events)
+	}
+	want := resetwatch.EventID("codex", "acct", resetwatch.LabelWeeklyLimit, nextReset)
+	if got.Events[0].ID != want {
+		t.Fatalf("id=%s want=%s", got.Events[0].ID, want)
+	}
+}
+
+func TestCurrentResetGroupsSecondaryWeeklyTransitions(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	oldReset := mustTime("2026-07-13T10:00:00Z")
+	nextReset := mustTime("2026-07-19T10:00:00Z")
+	used := 40.0
+	previous := map[StateKey]State{
+		{RuleID: "current.reset.weekly", Subject: "primary.weekly"}: {StableResetAt: oldReset},
+		{RuleID: "current.reset.weekly", Subject: "spark.weekly"}:   {StableResetAt: oldReset},
+	}
+	got, err := Evaluate(CurrentPreset(), Input{ProviderID: "codex", AccountRef: "acct", ObservedAt: now, Previous: previous, Windows: []WindowObservation{
+		{Key: "primary.weekly", Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used, ResetAt: nextReset},
+		{Key: "spark.weekly", Label: resetwatch.LabelSparkWeekly, UsedPercent: &used, ResetAt: nextReset},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Events) != 1 || !reflect.DeepEqual(got.Events[0].SecondaryLegacyLabels, []string{resetwatch.LabelSparkWeekly}) {
+		t.Fatalf("events=%#v", got.Events)
+	}
+}
+
+func TestEvaluationJSONContainsNoWallClockOrNondeterministicFields(t *testing.T) {
+	r, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: mustTime("2026-01-01T00:00:00Z"), Bootstrap: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := json.Marshal(r); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBootstrapThenSameObservationStaysSilent(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	used := 96.0
+	in := Input{AccountRef: "acct", ObservedAt: now, Bootstrap: true, Windows: []WindowObservation{{Key: "primary.five_hour", Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: now.Add(5 * time.Hour)}}, Grants: []GrantObservation{{ID: "g1", Status: "available", GrantedAt: now.Add(-time.Hour), ExpiresAt: now.Add(3 * 24 * time.Hour)}}}
+	first, err := Evaluate(CurrentPreset(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Bootstrap = false
+	in.Previous = first.States
+	in.ObservedAt = now.Add(time.Minute)
+	second, err := Evaluate(CurrentPreset(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Events) != 0 || len(second.Events) != 0 {
+		t.Fatalf("first=%#v second=%#v", first.Events, second.Events)
+	}
+}
+
+func TestGrantCountRotationAndPostBootstrapIncrease(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	g1 := GrantObservation{ID: "g1", Status: "available", GrantedAt: now.Add(-time.Hour), ExpiresAt: now.Add(10 * 24 * time.Hour)}
+	base, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now, Bootstrap: true, Grants: []GrantObservation{g1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g2 := GrantObservation{ID: "g2", Status: "available", GrantedAt: now, ExpiresAt: now.Add(11 * 24 * time.Hour)}
+	rotation, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now.Add(time.Minute), Previous: base.States, Grants: []GrantObservation{g2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rotation.Events) != 0 {
+		t.Fatalf("equal-count rotation emitted %#v", rotation.Events)
+	}
+	g3 := GrantObservation{ID: "g3", Status: "available", GrantedAt: now, ExpiresAt: now.Add(12 * 24 * time.Hour)}
+	increase, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now.Add(2 * time.Minute), Previous: rotation.States, Grants: []GrantObservation{g2, g3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(increase.Events) != 1 || increase.Events[0].Kind != EventGrantAvailable || increase.Events[0].Subject != "g3" {
+		t.Fatalf("increase events %#v", increase.Events)
+	}
+}
+
+func TestNewPostBootstrapGrantExpiryIsNotSuppressedByMissingSubjectState(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	g := GrantObservation{ID: "new-grant", Status: "available", GrantedAt: now, ExpiresAt: now.Add(2 * 24 * time.Hour)}
+	accountKey := StateKey{RuleID: "current.grant.available", Subject: "acct"}
+	r, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now, Previous: map[StateKey]State{accountKey: {LastObservedAt: now.Add(-time.Hour)}}, Grants: []GrantObservation{g}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoints []int
+	for _, e := range r.Events {
+		if e.Kind == EventGrantExpiryCheckpoint {
+			checkpoints = append(checkpoints, e.Checkpoint)
+		}
+	}
+	if !reflect.DeepEqual(checkpoints, []int{5, 3}) {
+		t.Fatalf("expiry checkpoints %#v events=%#v", checkpoints, r.Events)
+	}
+}
+
+func TestChangedGrantExpiryResetsCheckpointsAndFallbackMatchesResetwatch(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	g := GrantObservation{Title: "Reset", Status: "available", GrantedAt: now.Add(-time.Hour), ExpiresAt: now.Add(2 * 24 * time.Hour)}
+	normalized := normalizeGrants([]GrantObservation{g})[0]
+	legacy := resetwatch.ResetGrantEventCandidates(resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "acct"}, ObservedAt: now, ResetGrants: resetwatch.ResetGrants{Credits: []resetwatch.ResetCredit{{Title: g.Title, Status: g.Status, GrantedAt: g.GrantedAt, ExpiresAt: g.ExpiresAt}}}})[0]
+	if normalized.ID != legacy.CreditID {
+		t.Fatalf("fallback %s != %s", normalized.ID, legacy.CreditID)
+	}
+	key := StateKey{RuleID: "current.grant.expiry", Subject: normalized.ID}
+	prev := map[StateKey]State{key: {LastObservedAt: now.Add(-time.Hour), GrantExpiresAt: now.Add(10 * 24 * time.Hour), ReachedCheckpoints: []int{5, 3, 1}}}
+	r, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now, Previous: prev, Grants: []GrantObservation{g}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expiry []Event
+	for _, e := range r.Events {
+		if e.Kind == EventGrantExpiryCheckpoint {
+			expiry = append(expiry, e)
+		}
+	}
+	if len(expiry) != 2 || expiry[0].Checkpoint != 5 || expiry[1].Checkpoint != 3 {
+		t.Fatalf("expiry events %#v", expiry)
+	}
+}
+
+func TestStaleObservationsAndUnsafeDuplicatesAreRejectedOrIgnored(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	used := 99.0
+	key := StateKey{RuleID: "current.remaining.primary", Subject: "primary.five_hour"}
+	prev := map[StateKey]State{key: {LastObservedAt: now, LastResetAt: now.Add(5 * time.Hour)}}
+	r, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now.Add(-time.Minute), Previous: prev, Windows: []WindowObservation{{Key: "primary.five_hour", Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: now.Add(5 * time.Hour)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Events) != 0 || r.Explanations[0].Reason != ReasonStaleObservation || !reflect.DeepEqual(r.States[key], prev[key]) {
+		t.Fatalf("stale result %#v", r)
+	}
+	bad := []Input{
+		{AccountRef: "acct", ObservedAt: now, Windows: []WindowObservation{{Key: "primary.weekly", Label: "Weekly limit"}, {Key: "primary.weekly", Label: "Weekly limit"}}},
+		{AccountRef: "bad\x00ref", ObservedAt: now},
+		{AccountRef: "acct", ObservedAt: now, Grants: []GrantObservation{{ID: "g", ExpiresAt: now.Add(time.Hour)}, {ID: "g", ExpiresAt: now.Add(time.Hour)}}},
+	}
+	for _, in := range bad {
+		if _, err := Evaluate(CurrentPreset(), in); err == nil {
+			t.Errorf("accepted %#v", in)
+		}
+	}
+	if _, err := Evaluate(Config{Preset: PresetCurrent, Rules: []Rule{{ID: "x"}}}, Input{AccountRef: "acct", ObservedAt: now}); err == nil {
+		t.Fatal("accepted current preset with rules")
+	}
+}
+
+func mustTime(v string) time.Time {
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
