@@ -205,6 +205,16 @@ retry-through-outbox behavior are proven.
 
 ### 3.1 Shared agent context
 
+Status: CLI slice completed and deployed at `e3cd9b2`. The allowlisted
+`AgentContextService`, `scriba.context.v1` and minimized `scriba.event.v1`
+contracts, and JSON-only `scriba context --json` are live. The deployment smoke
+returned eight independently described sources, Codex on the `default` profile,
+zero events, and unavailable/missing Claude data without failing the envelope.
+Repeated reads preserved database hashes and schema/policy/outbox counts, and
+the privacy-forbidden grep was clean. Full Go race/check gates and all 18 Swift
+tests passed. The Unix-socket API/SSE and stdio MCP portions, including parity
+proof, have not started and are not implied by this checkpoint.
+
 - Add one allowlisted `AgentContextService` over read-only cache/store opens.
 - Define `scriba.context.v1` and minimized `scriba.event.v1` envelopes with
   per-source age, staleness, availability, and provenance.
@@ -217,6 +227,10 @@ retry-through-outbox behavior are proven.
 Gate: CLI, API, and MCP are semantically identical for one fixture; read-only
 queries leave database hashes, mtimes, schemas, and row counts unchanged;
 forbidden identifiers never appear.
+
+Current gate status: partially passed. The CLI contract, read-only and privacy
+proofs, and deployment receipt are complete; API/SSE/MCP implementation and
+cross-surface semantic parity remain.
 
 ### 3.2 Multi-account profiles
 

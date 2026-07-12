@@ -34,6 +34,11 @@ Claude Code and Codex usage tracker.
 - Stable `scriba.v1` status, Codex limits, profile, and reset-grant JSON outputs,
   plus `scriba.budget.v1` reports, have checked-in Draft 2020-12 schemas and
   canonical validation goldens.
+- Wave 3.1 shared agent context is deployed through commit `e3cd9b2`.
+  `scriba context --json` emits the allowlisted `scriba.context.v1` projection
+  from read-only cache/store inputs, with independent freshness and absence per
+  source, the `default` profile, and minimized durable policy events. HTTP/SSE
+  and MCP parity remain future work.
 - `scriba codex budget` and `scriba claude budget` derive provider-neutral quota
   pacing from fresh provider windows. They use percentage points rather than
   local token counts and intentionally have no `--fast` mode. Codex may use up
@@ -90,6 +95,13 @@ Claude Code and Codex usage tracker.
   four policy transition kinds persist through the typed ledgers and canonical
   outbox with identical payloads, and a real SQLite/Telegram SDK test proves
   failed delivery backoff and successful retry of the same row.
+- The Wave 3.1 devbox receipt uses the Linux amd64 artifact with SHA-256
+  `b57cd17bc2dc26a557abdc558e2f3e96f6b7fc2b69a2126f3f630a73df1bf467`.
+  The service was active and healthy at `e3cd9b2`, schema 8. A context smoke
+  returned `scriba.context.v1`, eight sources, Codex under `default`, zero
+  events, and honest unavailable/missing Claude sources. Two context reads left
+  main/cache database hashes and schema/policy/outbox counts unchanged
+  (`8|15|0|40|41`); the forbidden-data grep was clean.
 - Telegram `getUpdates` batches are durably staged as exact raw JSON before the
   polling dependency can advance its cursor. Pending updates replay after a
   crash, while malformed updates dead-letter visibly.
@@ -174,8 +186,9 @@ apps/macos/Scripts/package_zip.sh release
 - Execute the accepted local usage control-plane program in
   [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
   migration safety, the canonical outbox, budget surfaces, and the schema-v8
-  policy runtime and deployed inspection CLI surfaces are completed
-  checkpoints. Agent interfaces, profiles, and surface parity remain.
+  policy runtime, deployed inspection CLI surfaces, and the Wave 3.1 context
+  CLI are completed checkpoints. API/SSE/MCP parity, profiles, and remaining
+  surface parity remain.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.
 - Decide whether ad-hoc signed zip distribution is enough before

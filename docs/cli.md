@@ -14,6 +14,7 @@ scriba status
 scriba status --fast
 scriba status --no-remote
 scriba status --redact --json
+scriba context --json
 scriba schema
 scriba config path
 scriba config show --json
@@ -47,6 +48,20 @@ cache schema/WAL state, cache size, and latest snapshot age. It reports `ok`,
 
 `--fast` reads the cached status snapshot only. It is intended for the menu bar,
 Telegram, and agent reads that should not trigger a foreground scan.
+
+## Agent Context
+
+`scriba context --json` is intentionally JSON-only. It reads the status cache
+and server store without provider refresh or mutation and emits the allowlisted
+`scriba.context.v1` contract. `--cache-dir` and `--state-path` override its two
+read sources. Sources report independent availability, provenance, freshness,
+and reason codes, so a missing Claude observation does not suppress valid
+Codex context. The current profile ID is `default`.
+
+The checked-in schema is
+[`context.schema.json`](../schemas/context.schema.json). See
+[`agent-context.md`](agent-context.md) for source precedence, privacy exclusions,
+partial-result behavior, and the current CLI-only surface boundary.
 
 ## Config
 
