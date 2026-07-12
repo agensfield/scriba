@@ -23,7 +23,17 @@ create table if not exists notification_outbox (
  check((status='delivered')=(delivered_at is not null)),
  check((status='dead_letter')=(dead_lettered_at is not null))
 );
-create index if not exists idx_notification_outbox_claim on notification_outbox(status,available_at,lease_expires_at,created_at);`
+create index if not exists idx_notification_outbox_claim on notification_outbox(status,available_at,lease_expires_at,created_at);
+create table if not exists telegram_updates (
+ bot_ref text not null, update_id integer not null, raw_json text not null check(json_valid(raw_json)),
+ status text not null check(status in ('pending','processed','dead')),
+ attempts integer not null default 0 check(attempts>=0), available_at text not null,
+ last_error text, processed_at text, dead_at text, created_at text not null, updated_at text not null,
+ primary key(bot_ref,update_id),
+ check((status='processed')=(processed_at is not null)),
+ check((status='dead')=(dead_at is not null))
+);
+create index if not exists idx_telegram_updates_due on telegram_updates(bot_ref,status,available_at,update_id);`
 
 func (s *Store) migrateNotificationOutbox(ctx context.Context) (retErr error) {
 	conn, err := s.db.Conn(ctx)

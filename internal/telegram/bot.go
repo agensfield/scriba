@@ -45,6 +45,14 @@ type OffsetStore interface {
 	SetTelegramOffset(context.Context, string, int64) error
 }
 
+type UpdateStore interface {
+	StageTelegramUpdates(context.Context, string, []store.TelegramUpdateInput, time.Time) error
+	DueTelegramUpdates(context.Context, string, time.Time, int) ([]store.TelegramUpdate, error)
+	MarkTelegramUpdateProcessed(context.Context, string, int64, time.Time) (bool, error)
+	MarkTelegramUpdateFailure(context.Context, string, int64, string, time.Time) (bool, error)
+	MarkTelegramUpdateDead(context.Context, string, int64, string, time.Time) (bool, error)
+}
+
 type DeliveryStore interface {
 	EnsureDelivery(context.Context, string, string) (store.Delivery, error)
 	MarkDeliverySending(context.Context, string, string) error
@@ -85,6 +93,11 @@ type Service struct {
 	mu                sync.Mutex
 	lastManualRefresh time.Time
 	apiTimeout        time.Duration
+	updates           UpdateStore
+	updateWake        chan struct{}
+	startBot          func(context.Context)
+	retryLoop         func(context.Context)
+	inboxLoop         func(context.Context)
 }
 
 const (
@@ -104,7 +117,10 @@ func newBotService(cfg BotConfig, controller Controller, offsets OffsetStore, de
 	if cfg.ChatID == 0 {
 		return nil, errors.New("telegram chat id is required")
 	}
-	svc := &Service{cfg: cfg, controller: controller, offsets: offsets, deliveries: deliveries, radar: radarClient, botRef: "default", logger: slog.Default(), apiTimeout: telegramAPITimeout}
+	svc := &Service{cfg: cfg, controller: controller, offsets: offsets, deliveries: deliveries, radar: radarClient, botRef: "default", logger: slog.Default(), apiTimeout: telegramAPITimeout, updateWake: make(chan struct{}, 1)}
+	if inbox, ok := offsets.(UpdateStore); ok {
+		svc.updates = inbox
+	}
 	var options []tgbot.Option
 	if offsets != nil {
 		if offset, ok, err := offsets.GetTelegramOffset(context.Background(), svc.botRef); err != nil {
@@ -114,17 +130,26 @@ func newBotService(cfg BotConfig, controller Controller, offsets OffsetStore, de
 			options = append(options, tgbot.WithInitialOffset(offset))
 		}
 	}
+	client := tgbot.HttpClient(&http.Client{Timeout: telegramHTTPTimeout})
 	options = append(options,
-		tgbot.WithHTTPClient(telegramPollTimeout, &http.Client{Timeout: telegramHTTPTimeout}),
 		tgbot.WithAllowedUpdates(tgbot.AllowedUpdates{"message", "callback_query"}),
 		tgbot.WithDefaultHandler(svc.handleUpdate),
 	)
 	options = append(options, extraOptions...)
+	// This must remain the final HTTP-client option: otherwise an option can
+	// silently bypass the durable getUpdates barrier.
+	if svc.updates != nil {
+		client = &stagingHTTPClient{next: client, store: svc.updates, botRef: svc.botRef}
+	}
+	options = append(options, tgbot.WithHTTPClient(telegramPollTimeout, client))
 	b, err := tgbot.New(cfg.Token, options...)
 	if err != nil {
 		return nil, err
 	}
 	svc.bot = b
+	svc.startBot = b.Start
+	svc.retryLoop = svc.retryDeliveries
+	svc.inboxLoop = svc.processTelegramUpdates
 	return svc, nil
 }
 
@@ -133,14 +158,17 @@ func (s *Service) Start(ctx context.Context) {
 		s.logger.Warn("telegram command registration failed", "error", err)
 	}
 	retryDone := make(chan struct{})
+	inboxDone := make(chan struct{})
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	go func() {
 		defer close(retryDone)
-		s.retryDeliveries(ctx)
+		s.retryLoop(workerCtx)
 	}()
-	s.bot.Start(ctx)
-	if ctx.Err() != nil {
-		<-retryDone
-	}
+	go func() { defer close(inboxDone); s.inboxLoop(workerCtx) }()
+	s.startBot(ctx)
+	cancelWorkers()
+	<-retryDone
+	<-inboxDone
 }
 
 func (s *Service) RegisterCommands(ctx context.Context) error {
@@ -301,28 +329,35 @@ func (s *Service) NotifyHealth(ctx context.Context, notice server.HealthNotice) 
 }
 
 func (s *Service) handleUpdate(ctx context.Context, b *tgbot.Bot, update *models.Update) {
-	handled := false
-	defer func() {
-		if handled && s.offsets != nil {
-			if err := s.offsets.SetTelegramOffset(ctx, s.botRef, update.ID); err != nil {
-				s.logger.Warn("telegram offset persist failed", "update_id", update.ID, "error", err)
-			}
+	if s.updates != nil {
+		select {
+		case s.updateWake <- struct{}{}:
+		default:
 		}
-	}()
+		return
+	}
+	if err := s.dispatchUpdate(ctx, update); err != nil {
+		s.logger.Warn("telegram update failed", "update_id", update.ID, "error", err)
+		return
+	}
+	if s.offsets != nil {
+		_ = s.offsets.SetTelegramOffset(ctx, s.botRef, update.ID)
+	}
+	_ = b
+}
+
+func (s *Service) dispatchUpdate(ctx context.Context, update *models.Update) error {
 	if !s.authorized(update) {
 		s.logUnauthorized(update)
-		handled = true
-		return
+		return nil
 	}
 	if update.CallbackQuery != nil {
 		s.logger.Info("telegram callback received", "update_id", update.ID, "data", update.CallbackQuery.Data)
 		s.handleCallback(ctx, update.CallbackQuery)
-		handled = true
-		return
+		return nil
 	}
 	if update.Message == nil || update.Message.Text == "" {
-		handled = true
-		return
+		return nil
 	}
 	text := strings.TrimSpace(update.Message.Text)
 	s.logger.Info("telegram command received", "update_id", update.ID, "command", commandName(text))
@@ -330,11 +365,10 @@ func (s *Service) handleUpdate(ctx context.Context, b *tgbot.Bot, update *models
 	if reply != "" {
 		if _, err := s.send(ctx, reply, markup); err != nil {
 			s.logger.Warn("telegram command reply failed", "update_id", update.ID, "command", commandName(text), "error", err)
-			return
+			return err
 		}
 	}
-	handled = true
-	_ = b
+	return nil
 }
 
 func (s *Service) handleCommand(ctx context.Context, text string) (string, models.ReplyMarkup) {
