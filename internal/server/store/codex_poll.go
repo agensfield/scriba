@@ -29,6 +29,7 @@ type CodexPollInput struct {
 
 type CodexPollResult struct {
 	Bootstrap                bool
+	LegacyDecision           resetwatch.Decision
 	PolicyEvents             []policy.Event
 	ResetEvents              []resetwatch.Event
 	WarningEvents            []resetwatch.WarningEvent
@@ -134,6 +135,7 @@ func (s *Store) ApplyCodexPoll(ctx context.Context, input CodexPollInput) (Codex
 		return empty, err
 	}
 	inserted.Bootstrap = bootstrap
+	inserted.LegacyDecision = decision
 	return inserted, nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -90,7 +91,11 @@ func TestPollIntervalSetting(t *testing.T) {
 
 func TestRefreshEmitsLimitWarningsOncePerCheckpoint(t *testing.T) {
 	ctx := context.Background()
+	baseline := probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")
+	baselineUsed := 70.0
+	baseline.Lines[1].Used = &baselineUsed
 	fetcher := &fakeFetcher{results: []remote.ProbeResult{
+		baseline,
 		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
 		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
 	}}
@@ -100,25 +105,34 @@ func TestRefreshEmitsLimitWarningsOncePerCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
-	if len(first.Warnings) != 1 || first.Warnings[0].Label != resetwatch.LabelFiveHour || first.Warnings[0].ThresholdRemaining != 5 {
+	if len(first.Warnings) != 0 {
 		t.Fatalf("unexpected first warnings: %#v", first.Warnings)
-	}
-	if len(notifier.warnings) != 1 {
-		t.Fatalf("expected warning notification, got %d", len(notifier.warnings))
 	}
 	second, err := srv.RefreshNow(ctx)
 	if err != nil {
 		t.Fatalf("second refresh: %v", err)
 	}
-	if len(second.Warnings) != 0 || len(notifier.warnings) != 1 {
-		t.Fatalf("expected deduped warning, result=%#v notifications=%d", second.Warnings, len(notifier.warnings))
+	if len(second.Warnings) != 1 || second.Warnings[0].Label != resetwatch.LabelFiveHour || second.Warnings[0].ThresholdRemaining != 5 {
+		t.Fatalf("unexpected second warnings: %#v", second.Warnings)
+	}
+	if len(notifier.warnings) != 1 {
+		t.Fatalf("expected warning notification, got %d", len(notifier.warnings))
+	}
+	third, err := srv.RefreshNow(ctx)
+	if err != nil {
+		t.Fatalf("third refresh: %v", err)
+	}
+	if len(third.Warnings) != 0 || len(notifier.warnings) != 1 {
+		t.Fatalf("expected deduped warning, result=%#v notifications=%d", third.Warnings, len(notifier.warnings))
 	}
 }
 
 func TestRefreshEmitsGrantExpiryWarningsOncePerCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	expiresAt := time.Now().UTC().Add(23 * time.Hour).Format(time.RFC3339Nano)
+	baselineExpiresAt := time.Now().UTC().Add(10 * 24 * time.Hour).Format(time.RFC3339Nano)
 	fetcher := &fakeFetcher{results: []remote.ProbeResult{
+		probeResultWithGrant("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z", baselineExpiresAt),
 		probeResultWithGrant("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z", expiresAt),
 		probeResultWithGrant("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z", expiresAt),
 	}}
@@ -128,18 +142,78 @@ func TestRefreshEmitsGrantExpiryWarningsOncePerCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
-	if len(first.GrantWarnings) != 3 {
-		t.Fatalf("expected three grant warnings, got %#v", first.GrantWarnings)
-	}
-	if len(notifier.grantWarnings) != 3 {
-		t.Fatalf("expected grant warning notifications, got %d", len(notifier.grantWarnings))
+	if len(first.GrantWarnings) != 0 {
+		t.Fatalf("bootstrap should be silent, got %#v", first.GrantWarnings)
 	}
 	second, err := srv.RefreshNow(ctx)
 	if err != nil {
 		t.Fatalf("second refresh: %v", err)
 	}
-	if len(second.GrantWarnings) != 0 || len(notifier.grantWarnings) != 3 {
-		t.Fatalf("expected deduped grant warnings, result=%#v notifications=%d", second.GrantWarnings, len(notifier.grantWarnings))
+	if len(second.GrantWarnings) != 3 || len(notifier.grantWarnings) != 3 {
+		t.Fatalf("expected three grant warnings, result=%#v notifications=%d", second.GrantWarnings, len(notifier.grantWarnings))
+	}
+	third, err := srv.RefreshNow(ctx)
+	if err != nil {
+		t.Fatalf("third refresh: %v", err)
+	}
+	if len(third.GrantWarnings) != 0 || len(notifier.grantWarnings) != 3 {
+		t.Fatalf("expected deduped grant warnings, result=%#v notifications=%d", third.GrantWarnings, len(notifier.grantWarnings))
+	}
+}
+
+func TestPollOnceUsesAtomicApplyAndMapsTypedResults(t *testing.T) {
+	ctx := context.Background()
+	base := openStore(t)
+	want := store.CodexPollResult{
+		LegacyDecision:           resetwatch.Decision{States: []resetwatch.WindowState{{AccountRef: "acct_123", Label: resetwatch.LabelFiveHour}}, Events: []resetwatch.Event{{ID: "reset-1"}}},
+		ResetEvents:              []resetwatch.Event{{ID: "reset-1"}},
+		WarningEvents:            []resetwatch.WarningEvent{{ID: "warning-1"}},
+		GrantExpiryWarningEvents: []resetwatch.GrantExpiryWarning{{ID: "grant-warning-1"}},
+		ResetGrantEvents:         []resetwatch.ResetGrantEvent{{ID: "grant-1"}},
+	}
+	spy := &atomicPollStore{Store: base, result: want}
+	notifier := &fakeNotifier{}
+	srv := New(spy, &fakeFetcher{results: []remote.ProbeResult{probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")}}, notifier, Config{
+		NotificationTarget: "telegram:42",
+		JokeTone:           "spicy",
+	})
+
+	got, err := srv.pollOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spy.applyCalls != 1 || spy.oldCalls != 0 {
+		t.Fatalf("apply calls=%d old calls=%d", spy.applyCalls, spy.oldCalls)
+	}
+	if spy.input.NotificationTarget != "telegram:42" || spy.input.CommittedAt.IsZero() || spy.input.CommittedAt.Location() != time.UTC {
+		t.Fatalf("unexpected atomic input: %#v", spy.input)
+	}
+	chooser, ok := spy.input.ResetOptions.JokeChooser.(resetwatch.CatalogJokeChooser)
+	if !ok || chooser.Tone != "spicy" {
+		t.Fatalf("unexpected joke chooser: %#v", spy.input.ResetOptions.JokeChooser)
+	}
+	if got.Inserted != 1 || !reflect.DeepEqual(got.Decision, want.LegacyDecision) || !reflect.DeepEqual(got.Warnings, want.WarningEvents) || !reflect.DeepEqual(got.GrantWarnings, want.GrantExpiryWarningEvents) || !reflect.DeepEqual(got.ResetGrants, want.ResetGrantEvents) {
+		t.Fatalf("typed results not mapped exactly: %#v", got)
+	}
+	if len(notifier.resets) != 1 || len(notifier.warnings) != 1 || len(notifier.grantWarnings) != 1 || len(notifier.resetGrants) != 1 {
+		t.Fatalf("typed notifier wake calls missing: %#v", notifier)
+	}
+}
+
+func TestPollOnceAtomicApplyFailureDoesNotNotify(t *testing.T) {
+	base := openStore(t)
+	spy := &atomicPollStore{Store: base, err: errors.New("atomic write failed")}
+	notifier := &fakeNotifier{}
+	srv := New(spy, &fakeFetcher{results: []remote.ProbeResult{probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")}}, notifier, Config{})
+
+	if _, err := srv.pollOnce(context.Background()); err == nil || err.Error() != "atomic write failed" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spy.applyCalls != 1 || spy.oldCalls != 0 {
+		t.Fatalf("apply calls=%d old calls=%d", spy.applyCalls, spy.oldCalls)
+	}
+	if len(notifier.baselines)+len(notifier.resets)+len(notifier.warnings)+len(notifier.grantWarnings)+len(notifier.resetGrants)+len(notifier.radarAlerts) != 0 {
+		t.Fatalf("transaction failure notified: %#v", notifier)
 	}
 }
 
@@ -362,6 +436,46 @@ func openStore(t *testing.T) *store.Store {
 type fakeFetcher struct {
 	results []remote.ProbeResult
 	index   int
+}
+
+type atomicPollStore struct {
+	Store
+	input      store.CodexPollInput
+	result     store.CodexPollResult
+	err        error
+	applyCalls int
+	oldCalls   int
+}
+
+func (s *atomicPollStore) ApplyCodexPoll(_ context.Context, input store.CodexPollInput) (store.CodexPollResult, error) {
+	s.applyCalls++
+	s.input = input
+	return s.result, s.err
+}
+
+func (s *atomicPollStore) LoadWindowStates(context.Context, string) (map[string]resetwatch.WindowState, error) {
+	s.oldCalls++
+	return nil, errors.New("legacy LoadWindowStates called")
+}
+
+func (s *atomicPollStore) ApplyDecision(context.Context, resetwatch.Observation, resetwatch.Decision, ...string) (int, error) {
+	s.oldCalls++
+	return 0, errors.New("legacy ApplyDecision called")
+}
+
+func (s *atomicPollStore) InsertWarningEvents(context.Context, []resetwatch.WarningEvent, ...string) ([]resetwatch.WarningEvent, error) {
+	s.oldCalls++
+	return nil, errors.New("legacy InsertWarningEvents called")
+}
+
+func (s *atomicPollStore) InsertGrantExpiryWarningEvents(context.Context, []resetwatch.GrantExpiryWarning, ...string) ([]resetwatch.GrantExpiryWarning, error) {
+	s.oldCalls++
+	return nil, errors.New("legacy InsertGrantExpiryWarningEvents called")
+}
+
+func (s *atomicPollStore) InsertResetGrantEvents(context.Context, resetwatch.Observation, []resetwatch.ResetGrantEvent, ...string) ([]resetwatch.ResetGrantEvent, error) {
+	s.oldCalls++
+	return nil, errors.New("legacy InsertResetGrantEvents called")
 }
 
 func (f *fakeFetcher) FetchLimits(context.Context) (remote.ProbeResult, error) {

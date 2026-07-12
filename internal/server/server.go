@@ -38,17 +38,13 @@ const (
 var ErrRefreshInProgress = errors.New("refresh already in progress")
 
 type Store interface {
-	LoadWindowStates(context.Context, string) (map[string]resetwatch.WindowState, error)
-	ApplyDecision(context.Context, resetwatch.Observation, resetwatch.Decision, ...string) (int, error)
+	ApplyCodexPoll(context.Context, store.CodexPollInput) (store.CodexPollResult, error)
 	GetSetting(context.Context, string) (string, bool, error)
 	SetSetting(context.Context, string, string) error
 	DeleteSetting(context.Context, string) error
 	LoadLastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
 	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
-	InsertWarningEvents(context.Context, []resetwatch.WarningEvent, ...string) ([]resetwatch.WarningEvent, error)
-	InsertGrantExpiryWarningEvents(context.Context, []resetwatch.GrantExpiryWarning, ...string) ([]resetwatch.GrantExpiryWarning, error)
-	InsertResetGrantEvents(context.Context, resetwatch.Observation, []resetwatch.ResetGrantEvent, ...string) ([]resetwatch.ResetGrantEvent, error)
 	InsertRadarAlertEvent(context.Context, radar.ProbabilityAlert, ...string) (bool, error)
 	Stats(context.Context) (store.Stats, error)
 }
@@ -494,18 +490,20 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 	if len(obs.Windows) == 0 {
 		return PollResult{}, errors.New("codex limits response had no reset windows")
 	}
-	states, err := s.store.LoadWindowStates(ctx, obs.Account.Ref)
-	if err != nil {
-		return PollResult{}, err
-	}
-	baseline := states[resetwatch.StateKey(obs.Account.Ref, resetwatch.LabelWeeklyLimit)].StableResetAt.IsZero()
-	decision := resetwatch.Decide(obs, states, resetwatch.Options{
-		JokeChooser: resetwatch.CatalogJokeChooser{Tone: s.cfg.JokeTone},
+	applied, err := s.store.ApplyCodexPoll(ctx, store.CodexPollInput{
+		Observation:        obs,
+		NotificationTarget: s.cfg.NotificationTarget,
+		ResetOptions: resetwatch.Options{
+			JokeChooser: resetwatch.CatalogJokeChooser{Tone: s.cfg.JokeTone},
+		},
+		CommittedAt: time.Now().UTC(),
 	})
-	inserted, err := s.store.ApplyDecision(ctx, obs, decision, s.cfg.NotificationTarget)
 	if err != nil {
 		return PollResult{}, err
 	}
+	baseline := applied.Bootstrap
+	decision := applied.LegacyDecision
+	inserted := len(applied.ResetEvents)
 	heartbeat := s.consumeStartupHeartbeat()
 	if baseline || heartbeat {
 		if err := s.notifier.NotifyBaseline(ctx, BaselineNotice{Account: obs.Account, ObservedAt: obs.ObservedAt, Windows: obs.Windows, SnapshotJSON: obs.SnapshotJSON}); err != nil {
@@ -515,18 +513,9 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 	if err := s.pruneIfDue(ctx); err != nil {
 		s.logger.Warn("scriba observation prune failed", "error", err)
 	}
-	warnings, err := s.store.InsertWarningEvents(ctx, resetwatch.WarningCandidates(obs), s.cfg.NotificationTarget)
-	if err != nil {
-		return PollResult{}, err
-	}
-	grantWarnings, err := s.store.InsertGrantExpiryWarningEvents(ctx, resetwatch.GrantExpiryWarningCandidates(obs), s.cfg.NotificationTarget)
-	if err != nil {
-		return PollResult{}, err
-	}
-	resetGrants, err := s.store.InsertResetGrantEvents(ctx, obs, resetwatch.ResetGrantEventCandidates(obs), s.cfg.NotificationTarget)
-	if err != nil {
-		return PollResult{}, err
-	}
+	warnings := applied.WarningEvents
+	grantWarnings := applied.GrantExpiryWarningEvents
+	resetGrants := applied.ResetGrantEvents
 	if inserted > 0 {
 		for _, event := range decision.Events {
 			if err := s.notifier.NotifyReset(ctx, event); err != nil {
