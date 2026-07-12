@@ -12,6 +12,7 @@ import (
 var publicOutputSchemaNames = []string{
 	"status", "codex-limits", "codex-profile", "codex-reset-grants", "budget",
 	"policy-validate", "policy-list", "policy-explain", "outbox-list",
+	"context", "event",
 }
 
 func TestPublicOutputSchemas(t *testing.T) {
@@ -57,6 +58,9 @@ func TestPublicOutputSchemasAllowOptionalOmissions(t *testing.T) {
 		"codex-profile":      map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-profile-backend", "profile": map[string]any{}, "stats": map[string]any{}, "metadata": map[string]any{}, "authState": map[string]any{"ok": false}},
 		"codex-reset-grants": map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-backend", "mode": "live", "authState": map[string]any{"ok": false}, "resetCredits": []any{}, "summary": map[string]any{"available": 0}},
 		"policy-validate":    map[string]any{"schemaVersion": "scriba.policy-validate.v1", "valid": false, "file": "invalid.json", "rules": []any{}, "errors": []any{"invalid policy"}},
+		"context": map[string]any{"schemaVersion": "scriba.context.v1", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{
+			map[string]any{"sourceId": "codex-quota", "kind": "quota", "availability": "unavailable", "provenance": []any{map[string]any{"source": "status-cache"}}, "reasonCode": "missing"},
+		}, "providers": []any{}, "events": []any{}},
 	}
 	for name, payload := range cases {
 		schema, err := publicOutputCompiler(t, root).Compile("https://agensfield.dev/scriba/schemas/" + name + ".schema.json")
@@ -65,6 +69,34 @@ func TestPublicOutputSchemasAllowOptionalOmissions(t *testing.T) {
 		}
 		if err := schema.Validate(payload); err != nil {
 			t.Errorf("%s: optional omissions rejected: %v", name, err)
+		}
+	}
+}
+
+func TestAgentSchemasRejectNonAllowlistedFields(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join("..", "..", "schemas")
+	cases := []struct {
+		name, schema string
+		payload      any
+	}{
+		{"context-account", "context", map[string]any{"schemaVersion": "scriba.context.v1", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{}, "providers": []any{}, "events": []any{}, "accountRef": "secret"}},
+		{"context-config", "context", map[string]any{"schemaVersion": "scriba.context.v1", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{}, "providers": []any{}, "events": []any{}, "configHash": "secret"}},
+	}
+	for _, field := range []string{"creditId", "grantId", "ruleId", "accountRef", "snapshot", "target", "chatId", "configHash", "semanticKey"} {
+		data := map[string]any{"windowKey": "primary.weekly", "checkpointPercent": 20, "usedPercent": 80, "remainingPercentPoints": 20, field: "secret"}
+		cases = append(cases, struct {
+			name, schema string
+			payload      any
+		}{"event-" + field, "event", map[string]any{"schemaVersion": "scriba.event.v1", "id": "event-1", "providerId": "codex", "profileId": "default", "kind": "remaining_checkpoint", "detectedAt": "2026-07-12T12:00:00Z", "data": data}})
+	}
+	for _, tc := range cases {
+		schema, err := publicOutputCompiler(t, root).Compile("https://agensfield.dev/scriba/schemas/" + tc.schema + ".schema.json")
+		if err != nil {
+			t.Fatalf("%s: compile schema: %v", tc.name, err)
+		}
+		if err := schema.Validate(tc.payload); err == nil {
+			t.Errorf("%s: accepted non-allowlisted identifier", tc.name)
 		}
 	}
 }

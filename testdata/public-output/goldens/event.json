@@ -1,0 +1,1 @@
+{"data":{"previousResetAt":"2026-07-12T09:00:00Z","resetAt":"2026-07-19T09:00:00Z","resetKind":"scheduled","windowKey":"primary.weekly"},"detectedAt":"2026-07-12T11:55:00Z","id":"policy-event-1","kind":"reset_transition","profileId":"default","providerId":"codex","schemaVersion":"scriba.event.v1"}
