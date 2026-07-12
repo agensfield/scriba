@@ -92,6 +92,12 @@ Claude Code and Codex usage tracker.
   and parity tests. Profiles move to server schema v11. Live devbox remains
   schema 8 until copied-live migration, previous-binary restore-copy, and
   deployment gates pass.
+- A fresh verified online schema-v8 backup passed the disposable schema-v10
+  rehearsal through `0d97c27`: idempotence, integrity, replay/high-water,
+  unchanged business-table data, older-binary refusal, and untouched-v8
+  restore-copy opening all passed. Live activation still requires the same
+  proof from a new stopped-service backup; see
+  [`schema-v10-migration.md`](schema-v10-migration.md).
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and
   `grant_expiry_checkpoint`. Its `current` preset preserves the existing

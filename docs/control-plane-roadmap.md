@@ -241,11 +241,13 @@ queries leave database hashes, mtimes, schemas, and row counts unchanged;
 forbidden identifiers never appear.
 
 Current gate status: local implementation and cross-surface parity passed;
-deployment remains. Before activation, a copied-live schema-v8 database must
-pass v10 migration, idempotence, integrity, replay/high-water, unchanged
-business-state, and previous-binary restore-copy checks. The live service then
-needs Unix socket ownership, HTTP/SSE reconnect, MCP, privacy, and read-only
-smokes.
+deployment remains. A fresh online schema-v8 backup passed disposable v10
+migration, idempotence, integrity, replay/high-water, unchanged business-state,
+and previous-binary restore-copy checks; see
+[`schema-v10-migration.md`](schema-v10-migration.md). Live activation still
+requires an authoritative stopped-service backup and repetition against that
+exact artifact. The live service then needs Unix socket ownership, HTTP/SSE
+reconnect, MCP, privacy, read-only, journal, and second-restart smokes.
 
 ### 3.2 Multi-account profiles
 
