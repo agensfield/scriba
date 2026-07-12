@@ -3,8 +3,8 @@
 This document records the Wave 2.1 budget and policy boundary. Schema v8 and
 atomic policy evaluation are live on the devbox. The read-only policy
 inspection CLI surfaces were deployed at commit `a168e34`. Exact
-fixture-transition and Telegram retry proof still keep the Wave 2 release gate
-open.
+fixture-transition and Telegram retry-through-outbox proof landed at commit
+`6bfbcb3`, closing the Wave 2 release gate.
 
 ## Budget Surfaces
 
@@ -98,6 +98,7 @@ schema, rows, attempts, and leases; SQLite's own live-WAL coordination may
 touch transient sidecar bookkeeping.
 
 The live migration and deployment evidence is recorded in
-[`schema-v8-migration.md`](schema-v8-migration.md). Exact fixture-transition
-events and Telegram retry-through-outbox behavior remain the open Wave 2
-release proof.
+[`schema-v8-migration.md`](schema-v8-migration.md). The release proof drives a
+bootstrap and a multi-kind transition through the real evaluator and SQLite
+transaction, then drives a policy notification through real SQLite claim,
+failure backoff, reclaim, Telegram SDK decoding, and fenced success.

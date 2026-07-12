@@ -172,7 +172,8 @@ policy persistence/event production, bootstrap without replay, copied-live
 migration proof, and the devbox deployment receipt are complete. Read-only
 policy validation/list/explanation and outbox-list inspection surfaces are also
 deployed at commit `a168e34`, with typed JSON schemas and read-only store
-access. The remaining Wave 2 release gate stays open.
+access. The Wave 2 release gate was closed by the integration proof in
+`6bfbcb3`.
 
 - Normalize stable provider budget keys before policy evaluation.
 - Support closed rule kinds for remaining checkpoints, reset transitions,
@@ -192,10 +193,13 @@ event and one outbox row.
 Wave 2 release gate: live Codex pacing agrees with current windows, policy
 bootstrap emits nothing, subsequent fixture transitions emit exactly the
 expected events, and Telegram retries continue through the shared outbox.
+Passed at `6bfbcb3`: the composed fixture covers all four policy kinds and
+policy/outbox identity and payload parity; a real temporary SQLite outbox and
+Telegram SDK test proves failure, backoff, reclaim, and delivered completion.
 
-Current gate status: live pacing, silent bootstrap, runtime cutover, and
-read-only inspection surfaces are proven. Exact subsequent fixture-transition
-events and Telegram retry-through-outbox proof remain open.
+Current gate status: passed. Live pacing, silent bootstrap, runtime cutover,
+read-only inspection, exact subsequent fixture transitions, and Telegram
+retry-through-outbox behavior are proven.
 
 ## Wave 3: Agent Interfaces, Profiles, and Surface Parity
 

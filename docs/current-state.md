@@ -86,6 +86,10 @@ Claude Code and Codex usage tracker.
   redaction, and publish the typed `scriba.policy-validate.v1`,
   `scriba.policy-list.v1`, `scriba.policy-explain.v1`, and
   `scriba.outbox-list.v1` JSON contracts.
+- The Wave 2 release gate is closed at `6bfbcb3`. Composed fixtures prove all
+  four policy transition kinds persist through the typed ledgers and canonical
+  outbox with identical payloads, and a real SQLite/Telegram SDK test proves
+  failed delivery backoff and successful retry of the same row.
 - Telegram `getUpdates` batches are durably staged as exact raw JSON before the
   polling dependency can advance its cursor. Pending updates replay after a
   crash, while malformed updates dead-letter visibly.
@@ -171,8 +175,7 @@ apps/macos/Scripts/package_zip.sh release
   [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
   migration safety, the canonical outbox, budget surfaces, and the schema-v8
   policy runtime and deployed inspection CLI surfaces are completed
-  checkpoints. Exact fixture-transition and Telegram-retry release proof,
-  agent interfaces, profiles, and surface parity remain.
+  checkpoints. Agent interfaces, profiles, and surface parity remain.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.
 - Decide whether ad-hoc signed zip distribution is enough before

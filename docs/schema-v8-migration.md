@@ -72,6 +72,21 @@ output removed account references. The service journal contained no startup or
 SQLite error, and all pending, leased, expired, and dead-letter queue counts
 remained zero.
 
-This inspection deployment does not alter the migration evidence above. Exact
-fixture-transition events and Telegram retry-through-outbox proof remain open
-for the Wave 2 release gate.
+This inspection deployment does not alter the migration evidence above.
+
+## Wave 2 release proof
+
+Commit `6bfbcb3` closed the final non-production release proof. A composed
+bootstrap and transition fixture now exercises the real policy evaluator and
+atomic SQLite apply path across all four rule kinds. It asserts the expected
+event ordering, typed legacy projections, semantic policy-event fields,
+deterministic outbox identity and target, versioning, and byte-identical policy
+event/outbox payloads.
+
+A second integration fixture produces a policy transition through that same
+store path, then uses the real SQLite outbox and Telegram SDK against a local
+HTTP server. The first send times out, the same row returns to pending with one
+attempt and bounded backoff, and its next claim completes as delivered with two
+attempts and provider message ID `42`. Repeated race runs, the full Go race
+suite, `just check`, and all 18 Swift tests passed. The Wave 2 release gate is
+closed.
