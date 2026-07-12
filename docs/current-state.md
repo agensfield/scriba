@@ -89,15 +89,21 @@ Claude Code and Codex usage tracker.
   `fc663de` adds the reviewed Unix socket ownership primitive. Commits
   `29fd69a` through `e659570` add the Unix HTTP/SSE and stdio MCP transports,
   supervised CLI/server wiring, exact response contracts, and real lifecycle
-  and parity tests. Profiles move to server schema v11. Live devbox remains
-  schema 8 until copied-live migration, previous-binary restore-copy, and
-  deployment gates pass.
+  and parity tests. Profiles move to server schema v11. Wave 3.1 is deployed at
+  `9bf7392` on live schema 10 with the owner-only context API enabled.
 - A fresh verified online schema-v8 backup passed the disposable schema-v10
   rehearsal through `0d97c27`: idempotence, integrity, replay/high-water,
   unchanged business-table data, older-binary refusal, and untouched-v8
-  restore-copy opening all passed. Live activation still requires the same
-  proof from a new stopped-service backup; see
+  restore-copy opening all passed. The authoritative stopped-service proof and
+  activation receipt followed in
   [`schema-v10-migration.md`](schema-v10-migration.md).
+- The authoritative stopped-service schema-v8 backup and live schema-v10
+  cutover subsequently passed. Unix HTTP/SSE and both stdio MCP tools passed
+  privacy, restart, and journal smokes. OpenAI's temporary removal of the
+  five-hour bucket is handled by a default-on compatibility flag with
+  `SCRIBA_FEATURE_CODEX_TEMPORARY_NO_FIVE_HOUR=false` as the kill switch.
+  Weekly-only responses do not fabricate five-hour resets, warnings, budgets,
+  or agent context, and the last durable five-hour state is preserved.
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and
   `grant_expiry_checkpoint`. Its `current` preset preserves the existing

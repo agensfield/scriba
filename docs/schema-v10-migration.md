@@ -55,3 +55,45 @@ restore-copy checks against that exact stopped-service artifact. Only then
 install the candidate, enable the owner-only context API, restart, and run
 health, context, SSE reconnect, MCP, privacy, read-only, journal, and second
 restart smokes.
+
+## Live activation receipt
+
+The gate above was completed later on 2026-07-12 after CI run
+`29207667932` passed Go race/vet, lint/security, and macOS Go/Swift. OpenAI had
+temporarily removed the five-hour limit and moved the lone seven-day bucket
+into `primary_window`; commit `9bf7392` added a default-on compatibility flag
+without changing normal two-window responses. The kill switch is
+`SCRIBA_FEATURE_CODEX_TEMPORARY_NO_FIVE_HOUR=false`. Commit `b790a9a` proves
+that a disappearing five-hour window emits no reset or warning and preserves
+its last durable state.
+
+The service was stopped before the authoritative schema-v8 backup:
+
+- path: `/home/arda/.local/state/scriba/backups/scriba-server-backup-20260712T202802.201684285Z-e917af8544ee.sqlite`
+- SHA-256: `99748dd1756985cc32b77b6c9c72615eb00387c3192e26963930e3c33625673f`
+- candidate SHA-256: `288e0c90d29e9231b4cb760076a838aebdd6c46f94f430db934c90dfdf8e5a25`
+- preserved business-table data SHA-256: `d9df354fd1581dcdf933af250fd53bf0187290a36872da77cb8abe0fc2ddf26a`
+- evidence directory: `/home/arda/.local/state/scriba/cutovers/v10-20260712T202802Z`
+
+The exact stopped-service artifact repeated migration, idempotence, integrity,
+unchanged business data, old-binary refusal, and untouched-v8 restore-copy
+proof. The candidate was then installed, the owner-only context API was
+enabled, and the service migrated live to schema 10.
+
+Two starts and fresh polls proved:
+
+- healthy commit `9bf7392`, schema 10, zero poll failures;
+- private `0700` socket parent and owner-only `0600` socket;
+- healthy local API plus `scriba.context.v1` and replayable SSE;
+- both stdio MCP tools through the official SDK client;
+- clean forbidden-field checks across context, SSE, and MCP;
+- latest durable primary and Spark windows labeled weekly with seven-day
+  durations, while the absent five-hour state retained its last observation;
+- exactly one legitimate `primary.weekly` early-reset transition caused by
+  OpenAI's announced global reset, with no fabricated five-hour transition;
+- two policy events mapped exactly to replay sequences 1 and 2;
+- 15 policy states, two policy events, 42 delivered outbox rows, 43 attempts,
+  and no pending/dead delivery work;
+- `quick_check=ok`, zero foreign-key violations, and a clean service journal.
+
+Wave 3.1 agent transport deployment is complete.
