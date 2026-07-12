@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/agensfield/scriba/internal/pricing"
 )
@@ -20,11 +21,20 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	if *out == "internal/pricing/catalog.json" {
-		panic("refusing to overwrite the reviewed runtime catalog")
-	}
-	if err := os.WriteFile(*out, canonical, 0o644); err != nil {
+	runtimeCatalog, err := filepath.Abs("internal/pricing/catalog.json")
+	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("wrote review candidate %s; compare every rate and provenance field with the primary source\n", *out)
+	candidate, err := filepath.Abs(*out)
+	if err != nil {
+		panic(err)
+	}
+	if candidate == runtimeCatalog {
+		panic("refusing to overwrite the reviewed runtime catalog")
+	}
+	// #nosec G703 -- the maintainer explicitly selects the candidate path; the runtime catalog is excluded above.
+	if err := os.WriteFile(candidate, canonical, 0o600); err != nil {
+		panic(err)
+	}
+	fmt.Printf("wrote review candidate %s; compare every rate and provenance field with the primary source\n", candidate)
 }
