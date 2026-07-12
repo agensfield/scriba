@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"slices"
+	"time"
 )
 
 const (
@@ -23,6 +25,8 @@ const (
 type RuleKind string
 
 var canonicalIdentifier = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
+
+const maxJitterSeconds = int64(math.MaxInt64 / int64(time.Second))
 
 type Config struct {
 	Preset string `json:"preset,omitempty"`
@@ -119,8 +123,8 @@ func (r Rule) validate() error {
 		if len(r.WindowKeys) == 0 || len(r.Checkpoints) != 0 {
 			return errors.New("reset transition requires windowKeys and no checkpoints")
 		}
-		if r.ClockJitterSec < 0 || r.DueJitterSec < 0 {
-			return errors.New("jitter cannot be negative")
+		if r.ClockJitterSec < 0 || r.DueJitterSec < 0 || int64(r.ClockJitterSec) > maxJitterSeconds || int64(r.DueJitterSec) > maxJitterSeconds {
+			return errors.New("jitter must fit safely in time.Duration")
 		}
 	case KindGrantAvailable:
 		if len(r.WindowKeys) != 0 || len(r.SecondaryWindowKeys) != 0 || len(r.Checkpoints) != 0 || r.ClockJitterSec != 0 || r.DueJitterSec != 0 {
@@ -135,6 +139,15 @@ func (r Rule) validate() error {
 	}
 	if hasBlankOrDuplicate(r.WindowKeys) || hasBlankOrDuplicate(r.SecondaryWindowKeys) {
 		return errors.New("windowKeys must be trimmed and unique")
+	}
+	primary := map[string]bool{}
+	for _, key := range r.WindowKeys {
+		primary[key] = true
+	}
+	for _, key := range r.SecondaryWindowKeys {
+		if primary[key] {
+			return errors.New("primary and secondary windowKeys must not overlap")
+		}
 	}
 	return nil
 }

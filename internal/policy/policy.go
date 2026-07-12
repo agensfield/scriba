@@ -13,6 +13,8 @@ import (
 
 type StateKey struct{ RuleID, Subject string }
 
+const observationWatermarkSubject = "_observation"
+
 func (k StateKey) MarshalText() ([]byte, error) {
 	return []byte(k.RuleID + "\x00" + k.Subject), nil
 }
@@ -126,6 +128,9 @@ func Evaluate(cfg Config, in Input) (Result, error) {
 	if err := validateInput(in); err != nil {
 		return Result{}, err
 	}
+	if err := validatePrevious(cfg, in.Previous); err != nil {
+		return Result{}, err
+	}
 	r := Result{States: map[StateKey]State{}}
 	for k, v := range in.Previous {
 		r.States[k] = cloneState(v)
@@ -137,8 +142,13 @@ func Evaluate(cfg Config, in Input) (Result, error) {
 		}
 	}
 	grants := normalizeGrants(in.Grants)
-	sort.Slice(grants, func(i, j int) bool { return grantIdentity(grants[i]) < grantIdentity(grants[j]) })
 	for _, rule := range cfg.Rules {
+		watermarkKey := StateKey{rule.ID, observationWatermarkSubject}
+		watermark := in.Previous[watermarkKey]
+		if stale(in.ObservedAt, watermark.LastObservedAt) {
+			explain(&r, rule, observationWatermarkSubject, false, ReasonStaleObservation)
+			continue
+		}
 		switch rule.Kind {
 		case KindRemainingCheckpoint:
 			evalRemaining(&r, rule, in, windows)
@@ -149,6 +159,8 @@ func Evaluate(cfg Config, in Input) (Result, error) {
 		case KindGrantExpiryCheckpoint:
 			evalExpiry(&r, rule, in, grants)
 		}
+		watermark.LastObservedAt = in.ObservedAt.UTC()
+		r.States[watermarkKey] = watermark
 	}
 	return r, nil
 }
@@ -285,19 +297,28 @@ func evalGrants(out *Result, rule Rule, in Input, grants []GrantObservation) {
 		}
 		available = append(available, g)
 	}
+	sort.SliceStable(available, func(i, j int) bool {
+		if !available[i].GrantedAt.Equal(available[j].GrantedAt) {
+			return available[i].GrantedAt.Before(available[j].GrantedAt)
+		}
+		if !available[i].ExpiresAt.Equal(available[j].ExpiresAt) {
+			return available[i].ExpiresAt.Before(available[j].ExpiresAt)
+		}
+		return available[i].ID < available[j].ID
+	})
 	currentCount := len(available)
 	if in.AvailableCount != nil {
 		currentCount = *in.AvailableCount
 	}
-	delta := currentCount - prev.AvailableGrantCount
+	countIncreased := currentCount > prev.AvailableGrantCount
 	newGrants := make([]GrantObservation, 0)
 	for _, g := range available {
 		if !known[grantIdentity(g)] {
 			newGrants = append(newGrants, g)
 		}
 	}
-	for i, g := range newGrants {
-		emit := !in.Bootstrap && delta > i
+	for _, g := range newGrants {
+		emit := !in.Bootstrap && countIncreased
 		reason := ReasonEqualCountRotation
 		if in.Bootstrap {
 			reason = ReasonBootstrap
@@ -330,6 +351,7 @@ func evalGrants(out *Result, rule Rule, in Input, grants []GrantObservation) {
 }
 
 func evalExpiry(out *Result, rule Rule, in Input, grants []GrantObservation) {
+	start := len(out.Events)
 	for _, g := range grants {
 		if (g.Status != "" && g.Status != "available") || !g.ExpiresAt.After(in.ObservedAt) {
 			explain(out, rule, g.ID, false, ReasonGrantInactive)
@@ -366,6 +388,13 @@ func evalExpiry(out *Result, rule Rule, in Input, grants []GrantObservation) {
 		out.States[key] = next
 		explain(out, rule, g.ID, emitted, reason)
 	}
+	sort.SliceStable(out.Events[start:], func(i, j int) bool {
+		a, b := out.Events[start+i], out.Events[start+j]
+		if !a.Grant.ExpiresAt.Equal(b.Grant.ExpiresAt) {
+			return a.Grant.ExpiresAt.Before(b.Grant.ExpiresAt)
+		}
+		return a.Checkpoint > b.Checkpoint
+	})
 }
 
 func explain(out *Result, r Rule, subject string, emit bool, reason string) {
@@ -478,6 +507,52 @@ func validateInput(in Input) error {
 		}
 	}
 	return nil
+}
+
+func validatePrevious(cfg Config, previous map[StateKey]State) error {
+	rules := map[string]bool{}
+	for _, rule := range cfg.Rules {
+		rules[rule.ID] = true
+	}
+	for key, state := range previous {
+		if !rules[key.RuleID] {
+			return fmt.Errorf("previous state references unknown rule %q", key.RuleID)
+		}
+		if state.AvailableGrantCount < 0 {
+			return fmt.Errorf("previous state %q has negative available grant count", key.Subject)
+		}
+		if state.LastUsedPercent != nil && (math.IsNaN(*state.LastUsedPercent) || math.IsInf(*state.LastUsedPercent, 0) || *state.LastUsedPercent < 0 || *state.LastUsedPercent > 100) {
+			return fmt.Errorf("previous state %q has invalid used percent", key.Subject)
+		}
+		seenCheckpoints := map[int]bool{}
+		for _, cp := range state.ReachedCheckpoints {
+			if cp < 0 || cp > 3650 || seenCheckpoints[cp] {
+				return fmt.Errorf("previous state %q has invalid checkpoints", key.Subject)
+			}
+			seenCheckpoints[cp] = true
+		}
+		seenIdentities := map[string]bool{}
+		for _, identity := range state.KnownGrantIdentities {
+			if seenIdentities[identity] || !validGrantIdentity(identity) {
+				return fmt.Errorf("previous state %q has invalid grant identity", key.Subject)
+			}
+			seenIdentities[identity] = true
+		}
+	}
+	return nil
+}
+
+func validGrantIdentity(identity string) bool {
+	parts := strings.Split(identity, "\x00")
+	if len(parts) != 3 || !safeExternalIdentifier(parts[0]) {
+		return false
+	}
+	for _, raw := range parts[1:] {
+		if _, err := time.Parse(time.RFC3339Nano, raw); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func availableGrantLen(grants []GrantObservation) int {

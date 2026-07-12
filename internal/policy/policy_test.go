@@ -2,6 +2,8 @@ package policy
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -166,7 +168,7 @@ func TestEvaluationJSONContainsNoWallClockOrNondeterministicFields(t *testing.T)
 func TestBootstrapThenSameObservationStaysSilent(t *testing.T) {
 	now := mustTime("2026-07-12T10:00:00Z")
 	used := 96.0
-	in := Input{AccountRef: "acct", ObservedAt: now, Bootstrap: true, Windows: []WindowObservation{{Key: "primary.five_hour", Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: now.Add(5 * time.Hour)}}, Grants: []GrantObservation{{ID: "g1", Status: "available", GrantedAt: now.Add(-time.Hour), ExpiresAt: now.Add(3 * 24 * time.Hour)}}}
+	in := Input{AccountRef: "acct", ObservedAt: now, Bootstrap: true, Windows: []WindowObservation{{Key: "primary.five_hour", Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: now.Add(5 * time.Hour)}}, Grants: []GrantObservation{{ID: "g1", Status: "available", ExpiresAt: now.Add(3 * 24 * time.Hour)}}}
 	first, err := Evaluate(CurrentPreset(), in)
 	if err != nil {
 		t.Fatal(err)
@@ -276,6 +278,121 @@ func TestStaleObservationsAndUnsafeDuplicatesAreRejectedOrIgnored(t *testing.T) 
 	}
 	if _, err := Evaluate(Config{Preset: PresetCurrent, Rules: []Rule{{ID: "x"}}}, Input{AccountRef: "acct", ObservedAt: now}); err == nil {
 		t.Fatal("accepted current preset with rules")
+	}
+}
+
+func TestGrantCountIncreaseEmitsEveryNewCandidateInResetwatchOrder(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	count := 2
+	grants := []GrantObservation{
+		{ID: "z", Status: "available", GrantedAt: now.Add(-time.Hour), ExpiresAt: now.Add(10 * 24 * time.Hour)},
+		{ID: "a", Status: "available", GrantedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(11 * 24 * time.Hour)},
+	}
+	prev := map[StateKey]State{{RuleID: "current.grant.available", Subject: "acct"}: {AvailableGrantCount: 1, LastObservedAt: now.Add(-time.Hour)}}
+	r, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now, AvailableCount: &count, Previous: prev, Grants: grants})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range r.Events {
+		if e.Kind == EventGrantAvailable {
+			got = append(got, e.Subject)
+		}
+	}
+	if !reflect.DeepEqual(got, []string{"a", "z"}) {
+		t.Fatalf("availability order %#v", got)
+	}
+}
+
+func TestExpiryOrderingMatchesResetwatchAcrossGrants(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	grants := []GrantObservation{
+		{ID: "b", Status: "available", ExpiresAt: now.Add(2 * 24 * time.Hour)},
+		{ID: "a", Status: "available", ExpiresAt: now.Add(2 * 24 * time.Hour)},
+		{ID: "early", Status: "available", ExpiresAt: now.Add(23 * time.Hour)},
+	}
+	r, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now, Previous: map[StateKey]State{}, Grants: grants})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range r.Events {
+		if e.Kind == EventGrantExpiryCheckpoint {
+			got = append(got, e.Subject+":"+fmt.Sprint(e.Checkpoint))
+		}
+	}
+	warnings := resetwatch.GrantExpiryWarningCandidates(resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "acct"}, ObservedAt: now, ResetGrants: resetwatch.ResetGrants{Credits: []resetwatch.ResetCredit{{ID: "b", Status: "available", ExpiresAt: grants[0].ExpiresAt}, {ID: "a", Status: "available", ExpiresAt: grants[1].ExpiresAt}, {ID: "early", Status: "available", ExpiresAt: grants[2].ExpiresAt}}}})
+	var want []string
+	for _, w := range warnings {
+		want = append(want, w.CreditID+":"+fmt.Sprint(w.ThresholdDays))
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v want %#v", got, want)
+	}
+}
+
+func TestObservationWatermarkBlocksOlderAbsentSubjectReappearance(t *testing.T) {
+	t1 := mustTime("2026-07-12T10:00:00Z")
+	newer, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: t1, Bootstrap: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := 99.0
+	older, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: t1.Add(-time.Hour), Previous: newer.States, Windows: []WindowObservation{{Key: "primary.five_hour", Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: t1.Add(4 * time.Hour)}}, Grants: []GrantObservation{{ID: "old", Status: "available", ExpiresAt: t1.Add(2 * 24 * time.Hour)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(older.Events) != 0 {
+		t.Fatalf("older reappearance emitted %#v", older.Events)
+	}
+	for _, x := range older.Explanations {
+		if x.Subject == observationWatermarkSubject && x.Reason != ReasonStaleObservation {
+			t.Fatalf("watermark explanation %#v", x)
+		}
+	}
+}
+
+func TestCustomDottedWindowAndConfigSafety(t *testing.T) {
+	cfg := Config{Rules: []Rule{{ID: "custom.remaining", Kind: KindRemainingCheckpoint, WindowKeys: []string{"provider.team.weekly"}, Checkpoints: []int{10}}}}
+	now := mustTime("2026-07-12T10:00:00Z")
+	used := 95.0
+	first, err := Evaluate(cfg, Input{AccountRef: "acct", ObservedAt: now, Bootstrap: true, Windows: []WindowObservation{{Key: "provider.team.weekly", Label: "Team weekly", UsedPercent: &used, ResetAt: now.Add(7 * 24 * time.Hour)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Evaluate(cfg, Input{AccountRef: "acct", ObservedAt: now.Add(time.Minute), Previous: first.States, Windows: []WindowObservation{{Key: "provider.team.weekly", Label: "Team weekly", UsedPercent: &used, ResetAt: now.Add(7 * 24 * time.Hour)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Events) != 0 {
+		t.Fatalf("repeat emitted %#v", second.Events)
+	}
+	bad := Config{Rules: []Rule{{ID: "bad.reset", Kind: KindResetTransition, WindowKeys: []string{"same.key"}, SecondaryWindowKeys: []string{"same.key"}}}}
+	if err := bad.Validate(); err == nil {
+		t.Fatal("accepted overlapping window keys")
+	}
+	if int64(^uint(0)>>1) > maxJitterSeconds {
+		huge := int(maxJitterSeconds + 1)
+		bad = Config{Rules: []Rule{{ID: "bad.jitter", Kind: KindResetTransition, WindowKeys: []string{"x.y"}, ClockJitterSec: huge}}}
+		if err := bad.Validate(); err == nil {
+			t.Fatal("accepted overflowing jitter")
+		}
+	}
+}
+
+func TestInvalidPersistedStateRejected(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	negative := -1
+	bad := []map[StateKey]State{
+		{{RuleID: "current.grant.available", Subject: "acct"}: {AvailableGrantCount: -1}},
+		{{RuleID: "current.remaining.primary", Subject: "primary.weekly"}: {LastUsedPercent: func() *float64 { v := math.NaN(); return &v }()}},
+		{{RuleID: "current.grant.available", Subject: "acct"}: {KnownGrantIdentities: []string{"unsafe"}}},
+		{{RuleID: "unknown.rule", Subject: "acct"}: {AvailableGrantCount: negative}},
+	}
+	for _, previous := range bad {
+		if _, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now, Previous: previous}); err == nil {
+			t.Errorf("accepted %#v", previous)
+		}
 	}
 }
 
