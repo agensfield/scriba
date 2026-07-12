@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -209,6 +208,6 @@ func assertSQLiteIntegrity(t *testing.T, s *Store) {
 		if err := rows.Scan(&table, &rowID, &parent, &fk); err != nil {
 			t.Fatal(err)
 		}
-		t.Fatal(fmt.Sprintf("foreign key violation: table=%s row=%v parent=%s fk=%d", table, rowID, parent, fk))
+		t.Fatalf("foreign key violation: table=%s row=%v parent=%s fk=%d", table, rowID, parent, fk)
 	}
 }
