@@ -150,7 +150,7 @@ insert into radar_alert_deliveries(id,alert_id,target,status,attempts,created_at
 	if err = s.migrateNotificationOutbox(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	var version int
 	if err = s.db.QueryRow(`select max(version) from schema_migrations`).Scan(&version); err != nil || version != 7 {
 		t.Fatalf("version=%d err=%v", version, err)
@@ -191,7 +191,7 @@ insert into radar_alert_deliveries(id,alert_id,target,status,attempts,created_at
 		t.Fatal(err)
 	}
 	s = &Store{db: db, path: path}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if err = s.migrateNotificationOutbox(ctx); err == nil {
 		t.Fatal("expected invalid payload migration failure")
 	}
@@ -239,7 +239,7 @@ func TestOutboxConflictingSemanticDuplicateFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	err = EnqueueOutbox(context.Background(), tx, OutboxEnqueue{ID: "different", EventKind: "reset", Source: "other", EventID: "same", Target: "telegram:1", PayloadVersion: 1, PayloadJSON: `{"different":true}`}, now)
 	if err == nil {
 		t.Fatal("expected semantic conflict")

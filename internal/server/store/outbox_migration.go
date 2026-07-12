@@ -40,7 +40,7 @@ func (s *Store) migrateNotificationOutbox(ctx context.Context) (retErr error) {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	var version sql.NullInt64
 	if err = conn.QueryRowContext(ctx, `select max(version) from schema_migrations`).Scan(&version); err != nil {
 		return err

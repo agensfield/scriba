@@ -30,7 +30,7 @@ func (s *Store) StageTelegramUpdates(ctx context.Context, botRef string, updates
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var high int64
 	if err = tx.QueryRowContext(ctx, `select coalesce((select last_update_id from telegram_offsets where bot_ref=?),-1)`, botRef).Scan(&high); err != nil {
 		return err
@@ -65,7 +65,7 @@ func (s *Store) DueTelegramUpdates(ctx context.Context, botRef string, now time.
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []TelegramUpdate
 	for rows.Next() {
 		var u TelegramUpdate

@@ -88,7 +88,7 @@ func (s *Store) ClaimOutbox(ctx context.Context, now time.Time, lease time.Durat
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `update notification_outbox set status='dead_letter',dead_lettered_at=?,lease_token=null,lease_expires_at=null,updated_at=? where status='leased' and lease_expires_at<=? and attempts>=?`, formatTime(now), formatTime(now), formatTime(now), OutboxMaxAttempts); err != nil {
 		return nil, err
 	}
@@ -98,7 +98,7 @@ returning id,event_kind,source,coalesce(profile_ref,''),coalesce(account_ref,'')
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []OutboxMessage
 	for rows.Next() {
 		m, err := scanOutbox(rows)
