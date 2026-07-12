@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -304,4 +305,24 @@ func assertText(t *testing.T, lines []model.MetricLine, label string, value any)
 		return
 	}
 	t.Fatalf("missing text line %q in %#v", label, lines)
+}
+
+func TestClassifyProbeErrorIsBounded(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want ProbeErrorClass
+	}{
+		{usageHTTPError{status: http.StatusUnauthorized}, ProbeErrorAuth},
+		{fmt.Errorf("wrapped: %w", usageHTTPError{status: http.StatusForbidden}), ProbeErrorAuth},
+		{profileHTTPError{status: http.StatusForbidden}, ProbeErrorAuth},
+		{usageHTTPError{status: http.StatusTooManyRequests}, ProbeErrorRateLimited},
+		{fmt.Errorf("wrapped: %w", profileHTTPError{status: http.StatusTooManyRequests}), ProbeErrorRateLimited},
+		{profileHTTPError{status: http.StatusBadGateway}, ProbeErrorUnavailable},
+		{fmt.Errorf("wrapped: %w", usageHTTPError{status: http.StatusServiceUnavailable}), ProbeErrorUnavailable},
+		{errors.New("/secret/auth.json bearer nope"), ProbeErrorUnknown},
+	} {
+		if got := ClassifyProbeError(tc.err); got != tc.want {
+			t.Fatalf("err=%v got=%q want=%q", tc.err, got, tc.want)
+		}
+	}
 }

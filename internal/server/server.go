@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -35,22 +34,35 @@ const (
 	FailureAlertThreshold   = 3
 )
 
-var ErrRefreshInProgress = errors.New("refresh already in progress")
+var (
+	ErrRefreshInProgress = errors.New("refresh already in progress")
+	ErrAllProfilesFailed = errors.New("all profiles failed")
+	ErrProfileAuthPaths  = errors.New("explicit profile requires auth paths")
+)
 
 type Store interface {
 	ApplyCodexPoll(context.Context, store.CodexPollInput) (store.CodexPollResult, error)
 	GetSetting(context.Context, string) (string, bool, error)
 	SetSetting(context.Context, string, string) error
-	DeleteSetting(context.Context, string) error
 	LoadLastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
 	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
 	InsertRadarAlertEvent(context.Context, radar.ProbabilityAlert, ...string) (bool, error)
 	Stats(context.Context) (store.Stats, error)
+	ListProfileHealth(context.Context) ([]store.ProfileHealth, error)
+	RecordProfilePollAttempt(context.Context, string, time.Time) error
+	RecordProfilePollSuccess(context.Context, string, time.Time, time.Time) error
+	RecordProfilePollFailure(context.Context, string, time.Time, time.Time, string, string) error
+	AbortProfilePollAttempt(context.Context, string, time.Time) error
+	CompareAndSwapProfileAlertState(context.Context, string, string, string) (bool, error)
 }
 
 type Fetcher interface {
 	FetchLimits(context.Context) (remote.ProbeResult, error)
+}
+
+type ProfileFetcher interface {
+	FetchProfileLimits(context.Context, Profile) (remote.ProbeResult, error)
 }
 
 type RadarFetcher interface {
@@ -68,11 +80,24 @@ type Notifier interface {
 }
 
 type Config struct {
+	Profiles                 []Profile
 	NotificationTarget       string
 	AccountLabel             string
 	JokeTone                 string
 	StartupHeartbeat         bool
 	ObservationRetentionDays int
+}
+
+type Profile struct {
+	Ref, Label         string
+	AuthPaths          []string
+	Default            bool
+	AllowAuthDiscovery bool
+}
+
+type ProfileIdentity struct {
+	Ref   string `json:"ref"`
+	Label string `json:"label"`
 }
 
 type Server struct {
@@ -83,13 +108,15 @@ type Server struct {
 	cfg      Config
 	logger   *slog.Logger
 
-	mu         sync.Mutex
-	refreshing bool
-	heartbeat  bool
-	intervalCh chan struct{}
+	mu             sync.Mutex
+	refreshing     bool
+	heartbeat      bool
+	intervalCh     chan struct{}
+	profileTimeout time.Duration
 }
 
 type BaselineNotice struct {
+	Profile      ProfileIdentity
 	Account      resetwatch.Account
 	ObservedAt   time.Time
 	Windows      []resetwatch.Window
@@ -97,6 +124,7 @@ type BaselineNotice struct {
 }
 
 type PollResult struct {
+	Profile       ProfileIdentity
 	Observation   resetwatch.Observation
 	Decision      resetwatch.Decision
 	Inserted      int
@@ -105,6 +133,21 @@ type PollResult struct {
 	ResetGrants   []resetwatch.ResetGrantEvent
 	RadarAlerts   []radar.ProbabilityAlert
 	Baseline      bool
+}
+
+type ProfilePollFailure struct {
+	Kind, Code string
+}
+
+type ProfilePollResult struct {
+	Profile ProfileIdentity
+	PollResult
+	Failure *ProfilePollFailure
+}
+
+type RefreshResult struct {
+	Profiles    []ProfilePollResult
+	RadarAlerts []radar.ProbabilityAlert
 }
 
 type HealthStatus string
@@ -143,9 +186,24 @@ type Health struct {
 	QueueReason              string           `json:"queueReason,omitempty"`
 	Outbox                   store.QueueStats `json:"outbox"`
 	TelegramInbox            store.InboxStats `json:"telegramInbox"`
+	Profiles                 []ProfileHealth  `json:"profiles,omitempty"`
+}
+
+type ProfileHealth struct {
+	Profile             ProfileIdentity `json:"profile"`
+	Status              HealthStatus    `json:"status"`
+	LastSuccessAt       *time.Time      `json:"lastSuccessAt,omitempty"`
+	LastAttemptAt       *time.Time      `json:"lastAttemptAt,omitempty"`
+	LastFailureAt       *time.Time      `json:"lastFailureAt,omitempty"`
+	FailureKind         string          `json:"failureKind,omitempty"`
+	LastErrorCode       string          `json:"lastErrorCode,omitempty"`
+	ConsecutiveFailures int             `json:"consecutiveFailures"`
+	NextPollEstimateAt  *time.Time      `json:"nextPollEstimateAt,omitempty"`
+	IsStale             bool            `json:"isStale"`
 }
 
 type HealthNotice struct {
+	Profile  ProfileIdentity
 	Health   Health
 	Recovery bool
 }
@@ -164,17 +222,21 @@ func New(st Store, fetcher Fetcher, notifier Notifier, cfg Config) *Server {
 	if cfg.AccountLabel == "" {
 		cfg.AccountLabel = "personal"
 	}
+	if len(cfg.Profiles) == 0 {
+		cfg.Profiles = []Profile{{Ref: "default", Label: cfg.AccountLabel, Default: true, AllowAuthDiscovery: true}}
+	}
 	if cfg.ObservationRetentionDays == 0 {
 		cfg.ObservationRetentionDays = 120
 	}
 	return &Server{
-		store:      st,
-		fetcher:    fetcher,
-		notifier:   notifier,
-		cfg:        cfg,
-		logger:     slog.Default(),
-		heartbeat:  cfg.StartupHeartbeat,
-		intervalCh: make(chan struct{}, 1),
+		store:          st,
+		fetcher:        fetcher,
+		notifier:       notifier,
+		cfg:            cfg,
+		logger:         slog.Default(),
+		heartbeat:      cfg.StartupHeartbeat,
+		intervalCh:     make(chan struct{}, 1),
+		profileTimeout: DefaultRefreshTimeout,
 	}
 }
 
@@ -213,41 +275,37 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) RefreshNow(ctx context.Context) (PollResult, error) {
+	result, err := s.RefreshProfilesNow(ctx)
+	for _, profile := range result.Profiles {
+		if profile.Failure == nil && profile.Profile.Ref == s.defaultProfile().Ref {
+			profile.RadarAlerts = result.RadarAlerts
+			return profile.PollResult, err
+		}
+	}
+	for _, profile := range result.Profiles {
+		if profile.Failure == nil {
+			profile.RadarAlerts = result.RadarAlerts
+			return profile.PollResult, err
+		}
+	}
+	return PollResult{RadarAlerts: result.RadarAlerts}, err
+}
+
+func (s *Server) RefreshProfilesNow(ctx context.Context) (RefreshResult, error) {
 	if !s.beginRefresh() {
-		return PollResult{}, ErrRefreshInProgress
+		return RefreshResult{}, ErrRefreshInProgress
 	}
 	defer s.endRefresh()
-	pollCtx := ctx
-	cancel := func() {}
-	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > DefaultRefreshTimeout {
-		pollCtx, cancel = context.WithTimeout(ctx, DefaultRefreshTimeout)
-	}
-	defer cancel()
-	attemptCtx, attemptCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	if err := s.store.SetSetting(attemptCtx, SettingPollAttemptAt, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		attemptCancel()
-		return PollResult{}, err
-	}
-	attemptCancel()
-	result, err := s.pollOnce(pollCtx)
-	bookkeepingCtx, bookkeepingCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer bookkeepingCancel()
-	if err != nil {
-		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
-			_ = s.store.DeleteSetting(bookkeepingCtx, SettingPollAttemptAt)
-			return PollResult{}, err
+	return s.refreshProfiles(ctx)
+}
+
+func (s *Server) defaultProfile() Profile {
+	for _, profile := range s.cfg.Profiles {
+		if profile.Default {
+			return profile
 		}
-		if recordErr := s.recordPollFailure(bookkeepingCtx, err); recordErr != nil {
-			s.logger.Warn("scriba poll failure recording failed", "error", recordErr)
-		}
-		_ = s.store.DeleteSetting(bookkeepingCtx, SettingPollAttemptAt)
-		return PollResult{}, err
 	}
-	if err := s.recordPollSuccess(bookkeepingCtx); err != nil {
-		return result, fmt.Errorf("record poll success: %w", err)
-	}
-	_ = s.store.DeleteSetting(bookkeepingCtx, SettingPollAttemptAt)
-	return result, nil
+	return s.cfg.Profiles[0]
 }
 
 func (s *Server) PollInterval(ctx context.Context) (time.Duration, error) {
@@ -331,6 +389,44 @@ func (s *Server) Health(ctx context.Context) (Health, error) {
 	}
 	health.Outbox = queueStats.Outbox
 	health.TelegramInbox = queueStats.TelegramInbox
+	profileRows, err := s.store.ListProfileHealth(ctx)
+	if err != nil {
+		return health, err
+	}
+	if len(profileRows) > 0 {
+		health.Profiles = make([]ProfileHealth, 0, len(profileRows))
+		health.Status = HealthOK
+		rowsByRef := make(map[string]store.ProfileHealth, len(profileRows))
+		for _, row := range profileRows {
+			rowsByRef[row.ProfileRef] = row
+		}
+		for _, configured := range s.cfg.Profiles {
+			row, exists := rowsByRef[configured.Ref]
+			if !exists {
+				continue
+			}
+			if !row.Enabled {
+				continue
+			}
+			profile := profileHealthFromStore(row, interval, health.StaleAfter, time.Now().UTC())
+			health.Profiles = append(health.Profiles, profile)
+			health.Status = worseHealth(health.Status, profile.Status)
+			if row.IsDefault {
+				health.LastSuccessAt = profile.LastSuccessAt
+				health.LastAttemptAt = profile.LastAttemptAt
+				health.LastFailureAt = profile.LastFailureAt
+				health.FailureKind = profile.FailureKind
+				health.LastError = profile.LastErrorCode
+				health.ConsecutiveFailures = profile.ConsecutiveFailures
+				health.NextPollEstimateAt = profile.NextPollEstimateAt
+				health.IsStale = profile.IsStale
+			}
+		}
+		if len(health.Profiles) == 0 {
+			health.Status = HealthUnknown
+		}
+		return applyQueueHealth(health), nil
+	}
 	success, ok, err := s.timeSetting(ctx, SettingPollSuccessAt)
 	if err != nil {
 		return health, err
@@ -404,93 +500,20 @@ func applyQueueHealth(health Health) Health {
 	return health
 }
 
-func (s *Server) recordPollFailure(ctx context.Context, pollErr error) error {
-	count, err := s.intSetting(ctx, SettingPollFailureCount)
+func (s *Server) pollProfile(ctx context.Context, profile Profile) (PollResult, string, error) {
+	result, err := s.fetchProfileLimits(ctx, profile)
 	if err != nil {
-		return err
-	}
-	count++
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.store.SetSetting(ctx, SettingPollFailureAt, now); err != nil {
-		return err
-	}
-	if err := s.store.SetSetting(ctx, SettingPollFailureCount, strconv.Itoa(count)); err != nil {
-		return err
-	}
-	if err := s.store.SetSetting(ctx, SettingPollFailureError, pollErr.Error()); err != nil {
-		return err
-	}
-	if count < FailureAlertThreshold {
-		return nil
-	}
-	alertState, _, err := s.store.GetSetting(ctx, SettingHealthAlertState)
-	if err != nil {
-		return err
-	}
-	if alertState == "failing" {
-		return nil
-	}
-	health, err := s.Health(ctx)
-	if err != nil {
-		return err
-	}
-	if notifyErr := s.notifier.NotifyHealth(ctx, HealthNotice{Health: health}); notifyErr != nil {
-		s.logger.Warn("scriba health failure notification failed", "error", notifyErr)
-		return notifyErr
-	}
-	return s.store.SetSetting(ctx, SettingHealthAlertState, "failing")
-}
-
-func (s *Server) recordPollSuccess(ctx context.Context) error {
-	wasFailing := false
-	if alertState, ok, err := s.store.GetSetting(ctx, SettingHealthAlertState); err != nil {
-		return err
-	} else if ok && alertState == "failing" {
-		wasFailing = true
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.store.SetSetting(ctx, SettingPollSuccessAt, now); err != nil {
-		return err
-	}
-	if err := s.store.SetSetting(ctx, SettingPollFailureCount, "0"); err != nil {
-		return err
-	}
-	if err := s.store.SetSetting(ctx, SettingPollFailureError, ""); err != nil {
-		return err
-	}
-	if err := s.store.SetSetting(ctx, SettingHealthAlertState, "ok"); err != nil {
-		return err
-	}
-	if !wasFailing {
-		return nil
-	}
-	health, err := s.Health(ctx)
-	if err != nil {
-		return err
-	}
-	if notifyErr := s.notifier.NotifyHealth(ctx, HealthNotice{Health: health, Recovery: true}); notifyErr != nil {
-		s.logger.Warn("scriba health recovery notification failed", "error", notifyErr)
-		return notifyErr
-	}
-	return nil
-}
-
-func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
-	result, err := s.fetcher.FetchLimits(ctx)
-	if err != nil {
-		return PollResult{}, err
+		return PollResult{}, "fetch", err
 	}
 	if !result.AuthState.OK {
-		if result.AuthState.Error == "" {
-			return PollResult{}, errors.New("codex auth unavailable")
-		}
-		return PollResult{}, errors.New(result.AuthState.Error)
+		return PollResult{}, "auth", errors.New("codex auth unavailable")
 	}
-	obs := s.observation(result)
+	obs := s.observationForProfile(result, profile)
 	if len(obs.Windows) == 0 {
-		return PollResult{}, errors.New("codex limits response had no reset windows")
+		return PollResult{}, "shape", errors.New("codex limits response had no reset windows")
 	}
 	applied, err := s.store.ApplyCodexPoll(ctx, store.CodexPollInput{
+		ProfileRef:         profile.Ref,
 		Observation:        obs,
 		NotificationTarget: s.cfg.NotificationTarget,
 		ResetOptions: resetwatch.Options{
@@ -499,19 +522,16 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 		CommittedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		return PollResult{}, err
+		return PollResult{}, "apply", err
 	}
 	baseline := applied.AccountBaseline
 	decision := applied.LegacyDecision
 	inserted := len(applied.ResetEvents)
 	heartbeat := s.consumeStartupHeartbeat()
 	if baseline || heartbeat {
-		if err := s.notifier.NotifyBaseline(ctx, BaselineNotice{Account: obs.Account, ObservedAt: obs.ObservedAt, Windows: obs.Windows, SnapshotJSON: obs.SnapshotJSON}); err != nil {
+		if err := s.notifier.NotifyBaseline(ctx, BaselineNotice{Profile: ProfileIdentity{Ref: profile.Ref, Label: profile.Label}, Account: obs.Account, ObservedAt: obs.ObservedAt, Windows: obs.Windows, SnapshotJSON: obs.SnapshotJSON}); err != nil {
 			s.logger.Warn("scriba baseline notification failed", "error", err)
 		}
-	}
-	if err := s.pruneIfDue(ctx); err != nil {
-		s.logger.Warn("scriba observation prune failed", "error", err)
 	}
 	warnings := applied.WarningEvents
 	grantWarnings := applied.GrantExpiryWarningEvents
@@ -538,16 +558,12 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 			s.logger.Warn("scriba reset grant loaded notification failed", "event_id", event.ID, "error", err)
 		}
 	}
-	radarAlerts, err := s.pollRadar(ctx)
-	if err != nil {
-		s.logger.Warn("scriba radar poll failed", "error", err)
-	}
-	for _, alert := range radarAlerts {
-		if err := s.notifier.NotifyRadarProbability(ctx, alert); err != nil {
-			s.logger.Warn("scriba radar probability notification failed", "alert_id", alert.ID, "error", err)
-		}
-	}
-	return PollResult{Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, GrantWarnings: grantWarnings, ResetGrants: resetGrants, RadarAlerts: radarAlerts, Baseline: baseline}, nil
+	return PollResult{Profile: ProfileIdentity{Ref: profile.Ref, Label: profile.Label}, Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, GrantWarnings: grantWarnings, ResetGrants: resetGrants, Baseline: baseline}, "", nil
+}
+
+func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
+	result, _, err := s.pollProfile(ctx, s.defaultProfile())
+	return result, err
 }
 
 func (s *Server) pollRadar(ctx context.Context) ([]radar.ProbabilityAlert, error) {
@@ -654,15 +670,19 @@ func (s *Server) pruneIfDue(ctx context.Context) error {
 }
 
 func (s *Server) observation(result remote.ProbeResult) resetwatch.Observation {
+	return s.observationForProfile(result, s.defaultProfile())
+}
+
+func (s *Server) observationForProfile(result remote.ProbeResult, profile Profile) resetwatch.Observation {
 	plan := planFromLines(result.Lines)
 	auth := result.AuthState
 	account := resetwatch.Account{
 		Ref:   accountRef(auth),
-		Label: s.cfg.AccountLabel,
+		Label: profile.Label,
 		Email: auth.Email,
 		Plan:  plan,
 	}
-	snapshotJSON := resetwatch.SnapshotJSON(result)
+	snapshotJSON := resetwatch.SnapshotJSON(sanitizeProbeResult(result))
 	return resetwatch.Observation{
 		ProviderID:   resetwatch.ProviderCodex,
 		Account:      account,
@@ -701,6 +721,13 @@ func (s *Server) consumeStartupHeartbeat() bool {
 
 func (CodexFetcher) FetchLimits(ctx context.Context) (remote.ProbeResult, error) {
 	return remotecodex.FetchLimits(ctx, nil)
+}
+
+func (CodexFetcher) FetchProfileLimits(ctx context.Context, profile Profile) (remote.ProbeResult, error) {
+	if len(profile.AuthPaths) == 0 && !profile.AllowAuthDiscovery {
+		return remote.ProbeResult{}, ErrProfileAuthPaths
+	}
+	return remotecodex.FetchLimitsWithOptions(ctx, nil, remotecodex.FetchOptions{AuthPaths: profile.AuthPaths})
 }
 
 func (NoopNotifier) NotifyBaseline(context.Context, BaselineNotice) error {

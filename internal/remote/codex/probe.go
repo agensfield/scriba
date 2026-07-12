@@ -526,6 +526,39 @@ type profileHTTPError struct {
 	status int
 }
 
+type ProbeErrorClass string
+
+const (
+	ProbeErrorUnknown     ProbeErrorClass = "unknown"
+	ProbeErrorAuth        ProbeErrorClass = "auth"
+	ProbeErrorRateLimited ProbeErrorClass = "rate_limited"
+	ProbeErrorUnavailable ProbeErrorClass = "unavailable"
+)
+
+// ClassifyProbeError exposes only a bounded operational class. It never
+// returns provider response text, credential paths, or tokens.
+func ClassifyProbeError(err error) ProbeErrorClass {
+	status := 0
+	var usageErr usageHTTPError
+	if errors.As(err, &usageErr) {
+		status = usageErr.status
+	}
+	var profileErr profileHTTPError
+	if errors.As(err, &profileErr) {
+		status = profileErr.status
+	}
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return ProbeErrorAuth
+	case status == http.StatusTooManyRequests:
+		return ProbeErrorRateLimited
+	case status >= 500:
+		return ProbeErrorUnavailable
+	default:
+		return ProbeErrorUnknown
+	}
+}
+
 func (e profileHTTPError) Error() string {
 	return fmt.Sprintf("codex profile request failed: %d", e.status)
 }

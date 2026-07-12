@@ -335,7 +335,7 @@ func TestStartupHeartbeatOnlySendsOnce(t *testing.T) {
 func TestHealthRecordsPollFailuresAndRecovery(t *testing.T) {
 	ctx := context.Background()
 	fetcher := fakeFetcherFunc(func(context.Context) (remote.ProbeResult, error) {
-		return remote.ProbeResult{}, errors.New("401 auth exploded")
+		return remote.ProbeResult{AuthState: remote.AuthState{OK: false}}, nil
 	})
 	notifier := &fakeNotifier{}
 	srv := New(openStore(t), fetcher, notifier, Config{})
@@ -408,7 +408,7 @@ func TestRefreshNowIsSingleFlight(t *testing.T) {
 func TestHealthMarksExpiredAttemptInterrupted(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
-	if err := st.SetSetting(ctx, SettingPollAttemptAt, time.Now().Add(-DefaultRefreshTimeout-time.Second).UTC().Format(time.RFC3339Nano)); err != nil {
+	if err := st.RecordProfilePollAttempt(ctx, "default", time.Now().Add(-DefaultRefreshTimeout-time.Second).UTC()); err != nil {
 		t.Fatal(err)
 	}
 	srv := New(st, nil, nil, Config{})
@@ -431,7 +431,11 @@ func TestHealthDegradesForQueueWithoutOverwritingPollFailure(t *testing.T) {
 	if ok, err := st.MarkTelegramUpdateDead(ctx, "bot", 1, "bad update", now); err != nil || !ok {
 		t.Fatalf("dead ok=%v err=%v", ok, err)
 	}
-	if err := st.SetSetting(ctx, SettingPollFailureError, "401 auth exploded"); err != nil {
+	attempt := now.Add(time.Second)
+	if err := st.RecordProfilePollAttempt(ctx, "default", attempt); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordProfilePollFailure(ctx, "default", attempt, attempt.Add(time.Second), store.ProfileFailureAuth, store.ProfileErrorUnauthorized); err != nil {
 		t.Fatal(err)
 	}
 	health, err := New(st, nil, nil, Config{}).Health(ctx)
@@ -441,7 +445,7 @@ func TestHealthDegradesForQueueWithoutOverwritingPollFailure(t *testing.T) {
 	if health.Status != HealthDegraded || health.QueueReason != "dead_letters" || health.TelegramInbox.Dead != 1 {
 		t.Fatalf("health: %#v", health)
 	}
-	if health.FailureKind != "auth" || health.LastError != "401 auth exploded" {
+	if health.FailureKind != "auth" || health.LastError != store.ProfileErrorUnauthorized {
 		t.Fatalf("poll failure overwritten: %#v", health)
 	}
 }
@@ -517,13 +521,14 @@ func (f fakeFetcherFunc) FetchLimits(ctx context.Context) (remote.ProbeResult, e
 }
 
 type fakeNotifier struct {
-	baselines     []BaselineNotice
-	resets        []resetwatch.Event
-	warnings      []resetwatch.WarningEvent
-	grantWarnings []resetwatch.GrantExpiryWarning
-	resetGrants   []resetwatch.ResetGrantEvent
-	radarAlerts   []radar.ProbabilityAlert
-	health        []HealthNotice
+	baselines      []BaselineNotice
+	resets         []resetwatch.Event
+	warnings       []resetwatch.WarningEvent
+	grantWarnings  []resetwatch.GrantExpiryWarning
+	resetGrants    []resetwatch.ResetGrantEvent
+	radarAlerts    []radar.ProbabilityAlert
+	health         []HealthNotice
+	healthFailures int
 }
 
 func (n *fakeNotifier) NotifyBaseline(_ context.Context, notice BaselineNotice) error {
@@ -558,6 +563,10 @@ func (n *fakeNotifier) NotifyRadarProbability(_ context.Context, alert radar.Pro
 
 func (n *fakeNotifier) NotifyHealth(_ context.Context, notice HealthNotice) error {
 	n.health = append(n.health, notice)
+	if n.healthFailures > 0 {
+		n.healthFailures--
+		return errors.New("health notifier failed")
+	}
 	return nil
 }
 

@@ -23,6 +23,13 @@ const (
 	ProfileErrorUnavailable     = "unavailable"
 	ProfileErrorInvalidResponse = "invalid_response"
 	ProfileErrorInternal        = "internal"
+	ProfileErrorAuthUnavailable = "auth_unavailable"
+	ProfileErrorAuthRejected    = "auth_rejected"
+	ProfileErrorNoResetWindows  = "no_reset_windows"
+	ProfileErrorRequestFailed   = "request_failed"
+	ProfileErrorPersistence     = "persistence_failed"
+	ProfileErrorAccountOwned    = "account_owned"
+	ProfileErrorProfileDisabled = "profile_disabled"
 )
 
 type ProfileHealth struct {
@@ -36,7 +43,7 @@ type ProfileHealth struct {
 
 func validFailure(kind, code string) bool {
 	kinds := map[string]bool{"": true, "legacy": true, "auth": true, "network": true, "provider": true, "internal": true}
-	codes := map[string]bool{"": true, "unauthorized": true, "rate_limited": true, "timeout": true, "unavailable": true, "invalid_response": true, "internal": true}
+	codes := map[string]bool{"": true, "unauthorized": true, "rate_limited": true, "timeout": true, "unavailable": true, "invalid_response": true, "internal": true, "auth_unavailable": true, "auth_rejected": true, "no_reset_windows": true, "request_failed": true, "persistence_failed": true, "account_owned": true, "profile_disabled": true}
 	return kinds[kind] && codes[code] && (kind != "" || code == "")
 }
 
