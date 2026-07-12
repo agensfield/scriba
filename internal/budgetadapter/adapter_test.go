@@ -9,11 +9,11 @@ import (
 
 func TestWindowKeyExactMappings(t *testing.T) {
 	tests := map[string]struct{ provider, label string }{
-		"five_hour": {"codex", "5h limit"}, "seven_day": {"codex", "Weekly limit"},
-		"spark_five_hour": {"codex", "Spark 5h"}, "spark_seven_day": {"codex", "Spark weekly"},
-		"review_five_hour": {"codex", "Review 5h"}, "review_seven_day": {"codex", "Review weekly"},
-		"oauth_apps_seven_day": {"claude", "OAuth Apps"}, "sonnet_seven_day": {"claude", "Sonnet"},
-		"claude_design_seven_day": {"claude", "Claude Design"}, "claude_routines_seven_day": {"claude", "Claude Routines"},
+		"primary.five_hour": {"codex", "5h limit"}, "primary.weekly": {"codex", "Weekly limit"},
+		"spark.five_hour": {"codex", "Spark 5h"}, "spark.weekly": {"codex", "Spark weekly"},
+		"review.five_hour": {"codex", "Review 5h"}, "review.weekly": {"codex", "Review weekly"},
+		"oauth_apps.weekly": {"claude", "OAuth Apps"}, "sonnet.weekly": {"claude", "Sonnet"},
+		"design.weekly": {"claude", "Claude Design"}, "routines.weekly": {"claude", "Claude Routines"},
 	}
 	for want, tc := range tests {
 		if got, ok := WindowKey(tc.provider, tc.label); !ok || string(got) != want {

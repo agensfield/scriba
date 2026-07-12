@@ -173,16 +173,24 @@ func evaluateWindow(in Input, o WindowObservation, now time.Time) (w Window) {
 	}
 	safe := remaining / tr.Hours()
 	w.SafeHourlyAllowancePercentPoints = ptr(safe)
-	w.SafeDailyAllowancePercentPoints = ptr(safe * 24)
+	daily := math.Min(remaining, safe*24)
+	w.SafeDailyAllowancePercentPoints = ptr(daily)
 	if pace == nil || *pace <= 0 {
 		if pace != nil {
 			add("burn_zero")
 		}
 		add("projection_unavailable")
 	} else {
-		p := in.Observation.ObservedAt.Add(time.Duration(remaining / (*pace) * float64(time.Hour)))
+		projectionDuration, ok := durationHours(remaining / *pace)
+		if !ok {
+			add("projection_unavailable")
+			w.Confidence = confidence(w, count, recentSpan)
+			w.Risk = risk(w, now)
+			return w
+		}
+		p := in.Observation.ObservedAt.Add(projectionDuration)
 		w.ProjectedExhaustionAt = &p
-		m := o.ResetAt.Sub(p).Milliseconds()
+		m := p.Sub(o.ResetAt).Milliseconds()
 		w.TemporalMarginMS = &m
 	}
 	w.Confidence = confidence(w, count, recentSpan)
@@ -209,7 +217,7 @@ func recentEstimate(in Input, o WindowObservation) (*float64, int, time.Duration
 				mismatch = true
 				continue
 			}
-			if x.UsedPercent == nil || !finite(*x.UsedPercent) {
+			if x.UsedPercent == nil || !finite(*x.UsedPercent) || *x.UsedPercent < 0 || *x.UsedPercent > 100 {
 				continue
 			}
 			if o.UsedPercent != nil && *x.UsedPercent > *o.UsedPercent {
@@ -235,7 +243,7 @@ func recentEstimate(in Input, o WindowObservation) (*float64, int, time.Duration
 	oldest := eligible[0]
 	delta := *o.UsedPercent - *oldest.Windows[0].UsedPercent
 	v := delta / in.Observation.ObservedAt.Sub(oldest.ObservedAt).Hours()
-	return ptr(v), len(eligible), in.Observation.ObservedAt.Sub(oldest.ObservedAt), ""
+	return ptr(v), len(eligible) + 1, in.Observation.ObservedAt.Sub(oldest.ObservedAt), ""
 }
 
 func confidence(w Window, count int, recentSpan time.Duration) string {
@@ -260,7 +268,7 @@ func confidence(w Window, count int, recentSpan time.Duration) string {
 	return c
 }
 func risk(w Window, now time.Time) string {
-	if w.Freshness == "stale" || w.Freshness == "unknown" || w.RemainingPercentPoints == nil || w.TimeRemainingMS == nil || *w.TimeRemainingMS <= 0 {
+	if w.Freshness == "stale" || w.Freshness == "unknown" || w.RemainingPercentPoints == nil || w.TimeRemainingMS == nil || *w.TimeRemainingMS <= 0 || w.PaceBurnPercentPointsPerHour == nil || w.SafeHourlyAllowancePercentPoints == nil || (*w.PaceBurnPercentPointsPerHour > 0 && w.ProjectedExhaustionAt == nil) {
 		return "unknown"
 	}
 	if *w.RemainingPercentPoints == 0 || (w.ProjectedExhaustionAt != nil && !w.ProjectedExhaustionAt.After(now)) {
@@ -277,6 +285,12 @@ func risk(w Window, now time.Time) string {
 		return "elevated"
 	}
 	return "low"
+}
+func durationHours(hours float64) (time.Duration, bool) {
+	if !finite(hours) || hours < 0 || hours > float64(math.MaxInt64)/float64(time.Hour) {
+		return 0, false
+	}
+	return time.Duration(hours * float64(time.Hour)), true
 }
 func freshness(observed, now time.Time) string {
 	age := now.Sub(observed)

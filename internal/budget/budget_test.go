@@ -23,11 +23,24 @@ func TestEvaluateGolden(t *testing.T) {
 	if *w.RecentBurnPercentPointsPerHour != 10 || *w.PaceBurnPercentPointsPerHour != 10 {
 		t.Fatalf("bad recent/pace: %#v", w)
 	}
-	if *w.SafeHourlyAllowancePercentPoints != 40 || w.Risk != "low" || w.Freshness != "fresh" || w.Confidence != "low" {
+	if *w.SafeHourlyAllowancePercentPoints != 40 || *w.SafeDailyAllowancePercentPoints != 80 || w.Risk != "low" || w.Freshness != "fresh" || w.Confidence != "medium" {
 		t.Fatalf("bad categories: %#v", w)
+	}
+	if *w.TemporalMarginMS <= 0 {
+		t.Fatalf("expected positive safe temporal margin: %#v", w)
 	}
 	if _, err := json.Marshal(r); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEvaluateRejectsUnboundedProjection(t *testing.T) {
+	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	used := 0.001
+	r := Evaluate(Input{HistoryState: HistoryEmpty, Observation: Observation{ObservedAt: now, Windows: []WindowObservation{{Key: "weekly", UsedPercent: &used, ResetAt: now.Add(24 * time.Hour), PeriodDuration: 7 * 24 * time.Hour}}}}, now)
+	w := r.Windows[0]
+	if w.ProjectedExhaustionAt != nil || w.TemporalMarginMS != nil || w.Risk != "unknown" {
+		t.Fatalf("unbounded projection must remain unavailable: %#v", w)
 	}
 }
 

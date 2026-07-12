@@ -11,17 +11,17 @@ import (
 )
 
 const (
-	KeyFiveHour         budget.WindowKey = "five_hour"
-	KeySevenDay         budget.WindowKey = "seven_day"
-	KeySparkFiveHour    budget.WindowKey = "spark_five_hour"
-	KeySparkSevenDay    budget.WindowKey = "spark_seven_day"
-	KeyReviewFiveHour   budget.WindowKey = "review_five_hour"
-	KeyReviewSevenDay   budget.WindowKey = "review_seven_day"
-	KeyOAuthSevenDay    budget.WindowKey = "oauth_apps_seven_day"
-	KeySonnetSevenDay   budget.WindowKey = "sonnet_seven_day"
-	KeyDesignSevenDay   budget.WindowKey = "claude_design_seven_day"
-	KeyRoutinesSevenDay budget.WindowKey = "claude_routines_seven_day"
-	KeyExtraWindow      budget.WindowKey = "claude_extra_window"
+	KeyFiveHour         budget.WindowKey = "primary.five_hour"
+	KeySevenDay         budget.WindowKey = "primary.weekly"
+	KeySparkFiveHour    budget.WindowKey = "spark.five_hour"
+	KeySparkSevenDay    budget.WindowKey = "spark.weekly"
+	KeyReviewFiveHour   budget.WindowKey = "review.five_hour"
+	KeyReviewSevenDay   budget.WindowKey = "review.weekly"
+	KeyOAuthSevenDay    budget.WindowKey = "oauth_apps.weekly"
+	KeySonnetSevenDay   budget.WindowKey = "sonnet.weekly"
+	KeyDesignSevenDay   budget.WindowKey = "design.weekly"
+	KeyRoutinesSevenDay budget.WindowKey = "routines.weekly"
+	KeyExtraWindow      budget.WindowKey = "extra.current"
 )
 
 // FromResetwatch converts a durable provider observation without consulting
@@ -47,6 +47,7 @@ func FromResetwatch(obs resetwatch.Observation) budget.Observation {
 // FromMetricLines converts a live provider response. Only progress windows are
 // accepted; badges, token counts, credits, and logs cannot affect budgets.
 func FromMetricLines(providerID string, observedAt time.Time, lines []model.MetricLine) budget.Observation {
+	providerID = strings.ToLower(strings.TrimSpace(providerID))
 	windows := make([]budget.WindowObservation, 0, len(lines))
 	for _, line := range lines {
 		if line.Type != "progress" {
