@@ -169,6 +169,44 @@ func TestProfilePollRotationOwnershipReplayAndAttribution(t *testing.T) {
 	}
 }
 
+func TestLoadLatestObservationForProfileIsolatesCurrentAccount(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if err := s.SyncProfiles(ctx, []ProfileSpec{{"one", "codex", "One", true, true}, {"two", "codex", "Two", true, false}}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 13, 2, 0, 0, 0, time.UTC)
+	one := pollInput(codexPollObservation(base, 20), "")
+	one.ProfileRef = "one"
+	one.Observation.Account.Ref = "acct-one"
+	if _, err := s.ApplyCodexPoll(ctx, one); err != nil {
+		t.Fatal(err)
+	}
+	two := pollInput(codexPollObservation(base.Add(time.Hour), 80), "")
+	two.ProfileRef = "two"
+	two.Observation.Account.Ref = "acct-two"
+	if _, err := s.ApplyCodexPoll(ctx, two); err != nil {
+		t.Fatal(err)
+	}
+
+	selected, ok, err := s.LoadLatestObservationForProfile(ctx, "one")
+	if err != nil || !ok || selected.Account.Ref != "acct-one" || !selected.ObservedAt.Equal(base) {
+		t.Fatalf("selected=%+v ok=%v err=%v", selected, ok, err)
+	}
+	if _, ok, err := s.LoadLatestObservationForProfile(ctx, "missing"); err != nil || ok {
+		t.Fatalf("missing ok=%v err=%v", ok, err)
+	}
+	if _, _, err := s.LoadLatestObservationForProfile(ctx, "INVALID"); !errors.Is(err, ErrInvalidProfile) {
+		t.Fatalf("invalid err=%v", err)
+	}
+	if err := s.SyncProfiles(ctx, []ProfileSpec{{"two", "codex", "Two", true, true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.LoadLatestObservationForProfile(ctx, "one"); err != nil || ok {
+		t.Fatalf("disabled ok=%v err=%v", ok, err)
+	}
+}
+
 func TestProfileBindingCurrentIsMonotonicAndDeterministic(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

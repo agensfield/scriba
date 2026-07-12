@@ -649,24 +649,53 @@ func (s *Store) LoadLastResetEvent(ctx context.Context) (resetwatch.Event, bool,
 }
 
 func (s *Store) LoadLatestObservation(ctx context.Context) (resetwatch.Observation, bool, error) {
-	return s.loadLatestObservation(ctx, "")
+	return s.loadLatestObservation(ctx, "", "")
 }
 
 func (s *Store) LoadLatestObservationForProvider(ctx context.Context, providerID string) (resetwatch.Observation, bool, error) {
 	if strings.TrimSpace(providerID) == "" {
 		return resetwatch.Observation{}, false, errors.New("provider id is required")
 	}
-	return s.loadLatestObservation(ctx, providerID)
+	return s.loadLatestObservation(ctx, providerID, "")
 }
 
-func (s *Store) loadLatestObservation(ctx context.Context, providerID string) (resetwatch.Observation, bool, error) {
+// LoadLatestObservationForProfile resolves one enabled profile's current
+// provider account, then loads only that account's newest observation.
+func (s *Store) LoadLatestObservationForProfile(ctx context.Context, profileRef string) (resetwatch.Observation, bool, error) {
+	if !validProfileRef(profileRef) {
+		return resetwatch.Observation{}, false, ErrInvalidProfile
+	}
+	var providerID, accountRef string
+	err := s.db.QueryRowContext(ctx, `
+select p.provider_id,pa.account_ref
+from profiles p
+join profile_accounts pa on pa.profile_ref=p.profile_ref and pa.provider_id=p.provider_id and pa.is_current=1
+where p.profile_ref=? and p.enabled=1`, profileRef).Scan(&providerID, &accountRef)
+	if errors.Is(err, sql.ErrNoRows) {
+		return resetwatch.Observation{}, false, nil
+	}
+	if err != nil {
+		return resetwatch.Observation{}, false, err
+	}
+	return s.loadLatestObservation(ctx, providerID, accountRef)
+}
+
+func (s *Store) loadLatestObservation(ctx context.Context, providerID, accountRef string) (resetwatch.Observation, bool, error) {
 	var obs resetwatch.Observation
 	var observationID, observedAt, snapshot string
-	where := ""
+	clauses := []string{}
 	args := []any{}
 	if providerID != "" {
-		where = "where o.provider_id = ?"
+		clauses = append(clauses, "o.provider_id = ?")
 		args = append(args, providerID)
+	}
+	if accountRef != "" {
+		clauses = append(clauses, "o.account_ref = ?")
+		args = append(args, accountRef)
+	}
+	where := ""
+	if len(clauses) > 0 {
+		where = "where " + strings.Join(clauses, " and ")
 	}
 	err := s.db.QueryRowContext(ctx, `
 select o.id, o.provider_id, o.account_ref, a.label, a.email, a.plan, o.observed_at, o.snapshot_json
