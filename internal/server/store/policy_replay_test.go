@@ -26,7 +26,7 @@ func insertReplayTestEvent(t *testing.T, s *Store, id, provider, account, detect
 
 func makeReplayV8(t *testing.T, s *Store) {
 	t.Helper()
-	if _, err := s.db.Exec(`drop trigger policy_events_replay_after_insert; drop table policy_event_replay; delete from schema_migrations where version=9`); err != nil {
+	if _, err := s.db.Exec(`drop trigger policy_events_replay_after_insert; drop table policy_event_replay; delete from schema_migrations where version>=9`); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -60,8 +60,61 @@ func TestPolicyReplayMigrationBackfillsDeterministicallyAndIsIdempotent(t *testi
 		t.Fatalf("backfill order=%v", got)
 	}
 	var versions int
-	if err := s.db.QueryRow(`select count(*) from schema_migrations where version=9`).Scan(&versions); err != nil || versions != 1 {
+	if err := s.db.QueryRow(`select count(*) from schema_migrations where version=10`).Scan(&versions); err != nil || versions != 1 {
 		t.Fatalf("versions=%d err=%v", versions, err)
+	}
+}
+
+func TestPolicyReplayMigratesExactCommittedV9PreservingSequenceAndHighWater(t *testing.T) {
+	s := openTestStore(t)
+	insertReplayTestAccount(t, s, "codex", "acct")
+	insertReplayTestEvent(t, s, "one", "codex", "acct", "2026-07-12T00:00:00Z")
+	insertReplayTestEvent(t, s, "two", "codex", "acct", "2026-07-12T00:00:01Z")
+	if _, err := s.db.Exec(`drop trigger policy_events_replay_after_insert; drop table policy_event_replay; delete from schema_migrations where version>=9; ` + policyReplayV9SchemaSQL + `; insert into schema_migrations(version,applied_at) values(9,'2026-07-12T00:00:02Z'); delete from policy_events where id='two'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.migratePolicyEventReplay(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.migratePolicyEventReplay(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var seq, version int
+	if err := s.db.QueryRow(`select seq from sqlite_sequence where name='policy_event_replay'`).Scan(&seq); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(`select max(version) from schema_migrations`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := s.db.QueryRow(`select policy_event_id from policy_event_replay where replay_seq=1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if seq != 2 || version != 10 || id != "one" {
+		t.Fatalf("seq=%d version=%d id=%q", seq, version, id)
+	}
+}
+
+func TestPolicyReplayMigratesFullyPrunedCommittedV9PreservingHighWater(t *testing.T) {
+	s := openTestStore(t)
+	insertReplayTestAccount(t, s, "codex", "acct")
+	insertReplayTestEvent(t, s, "one", "codex", "acct", "2026-07-12T00:00:00Z")
+	insertReplayTestEvent(t, s, "two", "codex", "acct", "2026-07-12T00:00:01Z")
+	if _, err := s.db.Exec(`drop trigger policy_events_replay_after_insert; drop table policy_event_replay; delete from schema_migrations where version>=9; ` + policyReplayV9SchemaSQL + `; insert into schema_migrations(version,applied_at) values(9,'2026-07-12T00:00:02Z'); delete from policy_events`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.migratePolicyEventReplay(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var seq, mappings int
+	if err := s.db.QueryRow(`select seq from sqlite_sequence where name='policy_event_replay'`).Scan(&seq); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(`select count(*) from policy_event_replay`).Scan(&mappings); err != nil {
+		t.Fatal(err)
+	}
+	if seq != 2 || mappings != 0 {
+		t.Fatalf("seq=%d mappings=%d", seq, mappings)
 	}
 }
 
@@ -103,14 +156,14 @@ func TestPolicyReplayPagingIsolationHighWaterAndCancellation(t *testing.T) {
 		insertReplayTestEvent(t, s, event.id, "codex", event.account, "2026-07-12T00:00:00Z")
 	}
 	ctx := context.Background()
-	first, err := s.LoadPolicyEventReplay(ctx, "codex", "a", 0, 2)
+	first, err := s.LoadPolicyEventReplay(ctx, "codex", "a", 0, 0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(first.Events) != 2 || first.Events[0].PolicyEventID != "one" || first.Events[1].PolicyEventID != "two" {
 		t.Fatalf("first=%#v", first)
 	}
-	second, err := s.LoadPolicyEventReplay(ctx, "codex", "a", first.NextCursor, 2)
+	second, err := s.LoadPolicyEventReplay(ctx, "codex", "a", first.NextCursor, 0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,22 +174,32 @@ func TestPolicyReplayPagingIsolationHighWaterAndCancellation(t *testing.T) {
 	if _, err := s.db.Exec(`delete from policy_events where id in ('two','three')`); err != nil {
 		t.Fatal(err)
 	}
-	pruned, err := s.LoadPolicyEventReplay(ctx, "codex", "a", first.NextCursor, 2)
+	pruned, err := s.LoadPolicyEventReplay(ctx, "codex", "a", first.NextCursor, 0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pruned.HighWater != high || pruned.OldestAvailable == 0 {
+	if pruned.HighWater != high || pruned.OldestAvailable == 0 || len(pruned.Events) != 1 || pruned.Events[0].PolicyEventID != "" {
 		t.Fatalf("pruned=%#v high=%d", pruned, high)
+	}
+	if _, err := s.db.Exec(`delete from policy_events; delete from policy_event_replay`); err != nil {
+		t.Fatal(err)
+	}
+	fullyPruned, err := s.LoadPolicyEventReplay(ctx, "codex", "a", 0, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullyPruned.HighWater != high || fullyPruned.OldestAvailable != 0 {
+		t.Fatalf("fully pruned=%#v", fullyPruned)
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := s.LoadPolicyEventReplay(canceled, "codex", "a", 0, 1); err == nil {
+	if _, err := s.LoadPolicyEventReplay(canceled, "codex", "a", 0, 0, 1); err == nil {
 		t.Fatal("canceled replay succeeded")
 	}
 }
 
-func TestPolicyReplayRejectsMalformedClaimedV9(t *testing.T) {
-	for _, mutation := range []string{`drop trigger policy_events_replay_after_insert`, `drop table policy_event_replay`, `drop trigger policy_events_replay_after_insert; create trigger policy_events_replay_after_insert after insert on policy_events when 0 begin insert into policy_event_replay(policy_event_id) values(new.id); end`} {
+func TestPolicyReplayRejectsMalformedClaimedV10(t *testing.T) {
+	for _, mutation := range []string{`drop trigger policy_events_replay_after_insert`, `drop table policy_event_replay`, `drop trigger policy_events_replay_after_insert; create trigger policy_events_replay_after_insert after insert on policy_events when 0 begin insert into policy_event_replay(policy_event_id,provider_id,account_ref) values(new.id,new.provider_id,new.account_ref); end`, `insert into accounts(account_ref,provider_id,label,email,plan,updated_at) values('acct','codex','','','','2026-07-12T00:00:00Z'); insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values('event','event','limit_warning','event','rule','weekly_limit','remaining_checkpoint','codex','acct','rev','hash',1,'{}','2026-07-12T00:00:00Z','2026-07-12T00:00:00Z'); update policy_event_replay set account_ref='wrong' where policy_event_id='event'`} {
 		t.Run(mutation, func(t *testing.T) {
 			s := openTestStore(t)
 			if _, err := s.db.Exec(mutation); err != nil {
@@ -167,7 +230,7 @@ func TestPolicyReplayMigrationConcurrentCallsRecordOneVersion(t *testing.T) {
 		}
 	}
 	var versions int
-	if err := s.db.QueryRow(`select count(*) from schema_migrations where version=9`).Scan(&versions); err != nil || versions != 1 {
+	if err := s.db.QueryRow(`select count(*) from schema_migrations where version=10`).Scan(&versions); err != nil || versions != 1 {
 		t.Fatalf("versions=%d err=%v", versions, err)
 	}
 }
@@ -223,7 +286,7 @@ func TestLoadPolicyEventReplaySnapshotExcludesConcurrentInsert(t *testing.T) {
 	}
 	results := make(chan result, 1)
 	go func() {
-		page, err := a.LoadPolicyEventReplay(context.Background(), "codex", "acct", 0, 10)
+		page, err := a.LoadPolicyEventReplay(context.Background(), "codex", "acct", 0, 0, 10)
 		results <- result{page: page, err: err}
 	}()
 	<-captured
@@ -237,11 +300,18 @@ func TestLoadPolicyEventReplaySnapshotExcludesConcurrentInsert(t *testing.T) {
 		t.Fatalf("in-flight page=%#v", got.page)
 	}
 	a.loadPolicyReplayFault = nil
-	page, err := a.LoadPolicyEventReplay(context.Background(), "codex", "acct", 0, 10)
+	page, err := a.LoadPolicyEventReplay(context.Background(), "codex", "acct", 0, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Events) != 2 || page.Events[1].PolicyEventID != "second" || page.HighWater != 2 {
 		t.Fatalf("next page=%#v", page)
+	}
+	pinned, err := a.LoadPolicyEventReplay(context.Background(), "codex", "acct", 0, 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.HighWater != 1 || len(pinned.Events) != 1 || pinned.Events[0].PolicyEventID != "first" {
+		t.Fatalf("pinned page=%#v", pinned)
 	}
 }

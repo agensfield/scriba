@@ -59,7 +59,7 @@ limit ?`, providerID, accountRef, limit)
 		if err := rows.Scan(&id, &legacyKind, &ruleKind, &providerID, &payloadVersion, &payloadJSON, &detectedAt); err != nil {
 			return nil, err
 		}
-		event, err := minimizeAgentEvent(id, legacyKind, ruleKind, providerID, payloadVersion, payloadJSON, parseDBTime(detectedAt))
+		event, err := MinimizeAgentEvent(id, legacyKind, ruleKind, providerID, payloadVersion, payloadJSON, parseDBTime(detectedAt))
 		if err != nil {
 			return nil, err
 		}
@@ -71,7 +71,7 @@ limit ?`, providerID, accountRef, limit)
 	return events, nil
 }
 
-func minimizeAgentEvent(id, legacyKind, ruleKind, providerID string, payloadVersion int, payloadJSON string, detectedAt time.Time) (AgentEventRecord, error) {
+func MinimizeAgentEvent(id, legacyKind, ruleKind, providerID string, payloadVersion int, payloadJSON string, detectedAt time.Time) (AgentEventRecord, error) {
 	event := AgentEventRecord{ID: id, Kind: policy.EventKind(ruleKind), ProviderID: providerID, DetectedAt: detectedAt}
 	payload, err := DecodeOutboxPayload(OutboxMessage{EventKind: legacyKind, EventID: id, PayloadVersion: payloadVersion, PayloadJSON: payloadJSON})
 	if err != nil {

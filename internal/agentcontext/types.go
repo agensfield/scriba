@@ -63,6 +63,32 @@ type Event struct {
 	Data          EventData `json:"data"`
 }
 
+const EventsSchemaVersion = "scriba.events.v1"
+
+type EventPageRequest struct {
+	Mode   string
+	Cursor string
+	Limit  int
+}
+
+type EventPage struct {
+	SchemaVersion string          `json:"schemaVersion"`
+	GeneratedAt   time.Time       `json:"generatedAt"`
+	Events        []Event         `json:"events"`
+	Cursor        EventPageCursor `json:"cursor"`
+}
+
+type EventPageCursor struct {
+	Next      string `json:"next"`
+	HighWater string `json:"highWater"`
+}
+
+type EventPageError struct {
+	ReasonCode string `json:"reasonCode"`
+}
+
+func (e *EventPageError) Error() string { return "event page unavailable: " + e.ReasonCode }
+
 type EventData interface{ isAgentEventData() }
 type RemainingCheckpoint struct {
 	WindowKey              string     `json:"windowKey"`

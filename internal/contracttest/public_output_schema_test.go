@@ -12,7 +12,7 @@ import (
 var publicOutputSchemaNames = []string{
 	"status", "codex-limits", "codex-profile", "codex-reset-grants", "budget",
 	"policy-validate", "policy-list", "policy-explain", "outbox-list",
-	"context", "event",
+	"context", "event", "events",
 }
 
 func TestPublicOutputSchemas(t *testing.T) {
@@ -82,6 +82,7 @@ func TestAgentSchemasRejectNonAllowlistedFields(t *testing.T) {
 	}{
 		{"context-account", "context", map[string]any{"schemaVersion": "scriba.context.v1", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{}, "providers": []any{}, "events": []any{}, "accountRef": "secret"}},
 		{"context-config", "context", map[string]any{"schemaVersion": "scriba.context.v1", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{}, "providers": []any{}, "events": []any{}, "configHash": "secret"}},
+		{"events-account", "events", map[string]any{"schemaVersion": "scriba.events.v1", "generatedAt": "2026-07-12T12:00:00Z", "events": []any{}, "cursor": map[string]any{"next": "v1.0000000000000000", "highWater": "v1.0000000000000000"}, "accountRef": "secret"}},
 	}
 	for _, field := range []string{"creditId", "grantId", "ruleId", "accountRef", "snapshot", "target", "chatId", "configHash", "semanticKey"} {
 		data := map[string]any{"windowKey": "primary.weekly", "checkpointPercent": 20, "usedPercent": 80, "remainingPercentPoints": 20, field: "secret"}
