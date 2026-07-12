@@ -1,7 +1,13 @@
 package codex
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/agensfield/scriba/internal/model"
@@ -76,6 +82,85 @@ func TestLinesFromUsageResponseSupportsTemporaryNoFiveHourShape(t *testing.T) {
 		assertProgress(t, lines, "5h limit", 0, "2026-07-19T20:15:45Z")
 		assertProgress(t, lines, "Spark 5h", 0, "2026-07-19T20:19:55Z")
 	})
+}
+
+func TestExplicitAuthPathsIsolateLimitsAndProfileRequests(t *testing.T) {
+	dir := t.TempDir()
+	authA := writeTestAuth(t, dir, "a", "token-a", "acct-a")
+	authB := writeTestAuth(t, dir, "b", "token-b", "acct-b")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		token := r.Header.Get("Authorization")
+		account := r.Header.Get("ChatGPT-Account-Id")
+		wantAccount := map[string]string{"Bearer token-a": "acct-a", "Bearer token-b": "acct-b"}[token]
+		if wantAccount == "" || account != wantAccount {
+			t.Errorf("cross-profile auth: authorization=%q account=%q want=%q", token, account, wantAccount)
+		}
+		switch r.URL.Path {
+		case "/usage":
+			_, _ = fmt.Fprintf(w, `{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":1,"reset_at":1784492145,"limit_window_seconds":604800}}}`)
+		case "/profile":
+			_, _ = fmt.Fprintf(w, `{"profile":{"username":%q},"stats":{},"metadata":{}}`, account)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	oldUsage, oldProfile := usageURL, profileURL
+	usageURL, profileURL = server.URL+"/usage", server.URL+"/profile"
+	t.Cleanup(func() { usageURL, profileURL = oldUsage, oldProfile })
+
+	for _, tc := range []struct {
+		path, account string
+	}{{authA, "acct-a"}, {authB, "acct-b"}} {
+		opts := FetchOptions{AuthPaths: []string{tc.path}}
+		limits, err := FetchLimitsWithOptions(context.Background(), server.Client(), opts)
+		if err != nil || limits.AuthState.AccountID != tc.account || len(limits.Lines) == 0 {
+			t.Fatalf("limits account=%s result=%+v err=%v", tc.account, limits, err)
+		}
+		profile, err := FetchProfileWithOptions(context.Background(), server.Client(), opts)
+		if err != nil || profile.AuthState.AccountID != tc.account || profile.Profile.Username != tc.account {
+			t.Fatalf("profile account=%s result=%+v err=%v", tc.account, profile, err)
+		}
+	}
+	if requests != 4 {
+		t.Fatalf("requests=%d, want 4", requests)
+	}
+}
+
+func TestExplicitMissingAuthPathNeverFallsBackToCodexHome(t *testing.T) {
+	dir := t.TempDir()
+	_ = writeTestAuth(t, dir, "auth", "ambient-token", "ambient-account")
+	t.Setenv("CODEX_HOME", filepath.Join(dir, "auth"))
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+	oldUsage := usageURL
+	usageURL = server.URL
+	t.Cleanup(func() { usageURL = oldUsage })
+
+	result, err := FetchLimitsWithOptions(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{filepath.Join(dir, "missing.json")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AuthState.OK || requests != 0 {
+		t.Fatalf("explicit path fell back: auth=%+v requests=%d", result.AuthState, requests)
+	}
+}
+
+func writeTestAuth(t *testing.T, dir, name, token, account string) string {
+	t.Helper()
+	home := filepath.Join(dir, name)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "auth.json")
+	payload := fmt.Sprintf(`{"tokens":{"access_token":%q,"account_id":%q},"last_refresh":"2026-07-12T00:00:00Z"}`, token, account)
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestLinesFromUsageResponseShowsResetCreditExpiry(t *testing.T) {

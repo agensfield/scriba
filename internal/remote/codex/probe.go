@@ -72,6 +72,12 @@ type resetCredit struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
+// FetchOptions binds one request to explicit Codex credential files. Empty
+// paths preserve legacy discovery for callers that have not adopted profiles.
+type FetchOptions struct {
+	AuthPaths []string
+}
+
 type ProfileResult struct {
 	SchemaVersion string                   `json:"schemaVersion,omitempty"`
 	ProviderID    string                   `json:"providerId"`
@@ -185,7 +191,7 @@ func AuthPaths() []string {
 
 func ProbeContext(ctx context.Context, includeHTTP bool) (remote.ProbeResult, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	auth, err := loadAuth(ctx, nil, false)
+	auth, err := loadAuth(ctx, nil, false, nil)
 	if err != nil {
 		return remote.ProbeResult{}, err
 	}
@@ -208,11 +214,15 @@ func ProbeContext(ctx context.Context, includeHTTP bool) (remote.ProbeResult, er
 }
 
 func FetchProfile(ctx context.Context, client *http.Client) (ProfileResult, error) {
+	return FetchProfileWithOptions(ctx, client, FetchOptions{})
+}
+
+func FetchProfileWithOptions(ctx context.Context, client *http.Client, opts FetchOptions) (ProfileResult, error) {
 	if client == nil {
 		client = defaultHTTPClient
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	auth, err := loadAuth(ctx, client, false)
+	auth, err := loadAuth(ctx, client, false, opts.AuthPaths)
 	if err != nil {
 		return ProfileResult{}, err
 	}
@@ -226,7 +236,7 @@ func FetchProfile(ctx context.Context, client *http.Client) (ProfileResult, erro
 	}
 	parsed, err := fetchProfile(ctx, client, auth)
 	if isAuthHTTPError(err) {
-		auth, err = loadAuth(ctx, client, true)
+		auth, err = loadAuth(ctx, client, true, opts.AuthPaths)
 		if err != nil {
 			return ProfileResult{}, err
 		}
@@ -242,11 +252,15 @@ func FetchProfile(ctx context.Context, client *http.Client) (ProfileResult, erro
 }
 
 func FetchLimits(ctx context.Context, client *http.Client) (remote.ProbeResult, error) {
+	return FetchLimitsWithOptions(ctx, client, FetchOptions{})
+}
+
+func FetchLimitsWithOptions(ctx context.Context, client *http.Client, opts FetchOptions) (remote.ProbeResult, error) {
 	if client == nil {
 		client = defaultHTTPClient
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	auth, err := loadAuth(ctx, client, false)
+	auth, err := loadAuth(ctx, client, false, opts.AuthPaths)
 	if err != nil {
 		return remote.ProbeResult{}, err
 	}
@@ -260,7 +274,7 @@ func FetchLimits(ctx context.Context, client *http.Client) (remote.ProbeResult, 
 	}
 	parsed, err := fetchUsage(ctx, client, auth)
 	if isAuthHTTPError(err) {
-		auth, err = loadAuth(ctx, client, true)
+		auth, err = loadAuth(ctx, client, true, opts.AuthPaths)
 		if err != nil {
 			return remote.ProbeResult{}, err
 		}
@@ -575,8 +589,8 @@ func isAuthHTTPError(err error) bool {
 	return err != nil && errors.As(err, &profileErr) && (profileErr.status == http.StatusUnauthorized || profileErr.status == http.StatusForbidden)
 }
 
-func loadAuth(ctx context.Context, client *http.Client, forceRefresh bool) (remote.AuthState, error) {
-	creds, err := codexauth.Load(ctx, codexauth.LoadOptions{Client: client, ForceRefresh: forceRefresh})
+func loadAuth(ctx context.Context, client *http.Client, forceRefresh bool, paths []string) (remote.AuthState, error) {
+	creds, err := codexauth.Load(ctx, codexauth.LoadOptions{Paths: paths, Client: client, ForceRefresh: forceRefresh})
 	if err != nil {
 		return remote.AuthState{}, err
 	}

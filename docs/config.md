@@ -5,7 +5,16 @@ and accepts an explicit JSON config via `--config`.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "defaultProfileId": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "label": "Personal",
+      "enabled": true,
+      "codexAuthPaths": ["/Users/arda/.codex/auth.json"]
+    }
+  ],
   "cacheDir": "/Users/arda/.cache/scriba",
   "timezone": "Europe/Istanbul",
   "providers": {
@@ -39,6 +48,19 @@ and accepts an explicit JSON config via `--config`.
   }
 }
 ```
+
+Config v2 establishes explicit profile identity and Codex auth routing. Profile
+IDs are stable lowercase slugs up to 32 characters; one enabled profile must be
+the default, and every enabled profile needs at least one absolute auth-file
+path. Cleaned auth paths cannot be duplicated across profiles. Scriba never
+persists these paths into server SQLite or exposes them through public JSON.
+
+Existing schema-v1 files continue to load without being rewritten. Scriba
+normalizes them in memory to one implicit `default` profile using the existing
+`server.accountLabel` and legacy Codex auth discovery. Explicit schema-v2 files
+never fall back to ambient `CODEX_HOME` discovery. Multi-profile resident
+polling and public selectors land in the following Wave 3.2 slices; this commit
+only freezes config and request-isolation contracts.
 
 `server.contextAPI` is opt-in. When enabled without `socketPath`, Scriba places
 `context.sock` beside the resolved server database. An explicit socket path
