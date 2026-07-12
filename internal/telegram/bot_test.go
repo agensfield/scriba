@@ -3,10 +3,16 @@ package telegram
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
 	"github.com/agensfield/scriba/internal/model"
@@ -414,6 +420,94 @@ func TestUncertainSendErrorSkipsPlainTextFallback(t *testing.T) {
 	if isUncertainSendError(errors.New("Bad Request: can't parse entities")) {
 		t.Fatal("formatting errors should still allow plain text fallback")
 	}
+}
+
+func TestHandleUpdateOnlyAdvancesAfterSuccessfulOrIgnoredUpdate(t *testing.T) {
+	offsets := &fakeOffsetStore{}
+	svc := &Service{cfg: BotConfig{ChatID: 123, AllowedUserIDs: []int64{7}}, offsets: offsets, botRef: "default", logger: slog.Default()}
+
+	svc.handleUpdate(context.Background(), nil, &models.Update{ID: 10, Message: &models.Message{Chat: models.Chat{ID: 999}, From: &models.User{ID: 7}, Text: "/help"}})
+	svc.handleUpdate(context.Background(), nil, &models.Update{ID: 11, Message: &models.Message{Chat: models.Chat{ID: 123}, From: &models.User{ID: 7}}})
+	if got := offsets.values; len(got) != 2 || got[0] != 10 || got[1] != 11 {
+		t.Fatalf("ignored updates should advance cursor in order, got %v", got)
+	}
+}
+
+func TestFailedCommandReplyLeavesCursorAndIsBoundedWithoutFallback(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		time.Sleep(200 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1,"date":0,"chat":{"id":123,"type":"private"}}}`))
+	}))
+	defer server.Close()
+
+	b, err := tgbot.New("test", tgbot.WithServerURL(server.URL), tgbot.WithSkipGetMe())
+	if err != nil {
+		t.Fatal(err)
+	}
+	offsets := &fakeOffsetStore{}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, offsets: offsets, botRef: "default", bot: b, logger: slog.Default(), apiTimeout: 30 * time.Millisecond}
+	started := time.Now()
+	svc.handleUpdate(context.Background(), b, &models.Update{ID: 12, Message: &models.Message{Chat: models.Chat{ID: 123}, From: &models.User{ID: 7}, Text: "/help"}})
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("hanging send was not bounded: %s", elapsed)
+	}
+	if len(offsets.values) != 0 {
+		t.Fatalf("failed reply advanced cursor: %v", offsets.values)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 1 {
+		t.Fatalf("ambiguous timeout retried send, got %d requests", requests)
+	}
+}
+
+func TestRestartPollsAfterPersistedUpdate(t *testing.T) {
+	requestSeen := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		select {
+		case requestSeen <- string(body):
+		default:
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"result":[]}`))
+	}))
+	defer server.Close()
+	offsets := &fakeOffsetStore{stored: 44, storedOK: true}
+	svc, err := newBotService(BotConfig{Token: "test", ChatID: 123}, nil, offsets, nil, radar.Client{}, tgbot.WithServerURL(server.URL), tgbot.WithSkipGetMe())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go svc.bot.Start(ctx)
+	select {
+	case got := <-requestSeen:
+		if !strings.Contains(got, "name=\"offset\"\r\n\r\n45\r\n") {
+			t.Fatalf("restart request %q does not poll after persisted update 44", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for restart poll")
+	}
+}
+
+type fakeOffsetStore struct {
+	stored   int64
+	storedOK bool
+	values   []int64
+}
+
+func (f *fakeOffsetStore) GetTelegramOffset(context.Context, string) (int64, bool, error) {
+	return f.stored, f.storedOK, nil
+}
+
+func (f *fakeOffsetStore) SetTelegramOffset(_ context.Context, _ string, offset int64) error {
+	f.values = append(f.values, offset)
+	return nil
 }
 
 func TestCommandNameNormalizesBotSuffix(t *testing.T) {

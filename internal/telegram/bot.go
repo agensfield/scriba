@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -83,16 +84,27 @@ type Service struct {
 	logger            *slog.Logger
 	mu                sync.Mutex
 	lastManualRefresh time.Time
+	apiTimeout        time.Duration
 }
 
+const (
+	telegramPollTimeout = 30 * time.Second
+	telegramHTTPTimeout = 35 * time.Second
+	telegramAPITimeout  = 12 * time.Second
+)
+
 func NewBotService(cfg BotConfig, controller Controller, offsets OffsetStore, deliveries DeliveryStore, radarClient radar.Client) (*Service, error) {
+	return newBotService(cfg, controller, offsets, deliveries, radarClient)
+}
+
+func newBotService(cfg BotConfig, controller Controller, offsets OffsetStore, deliveries DeliveryStore, radarClient radar.Client, extraOptions ...tgbot.Option) (*Service, error) {
 	if strings.TrimSpace(cfg.Token) == "" {
 		return nil, errors.New("telegram bot token is required")
 	}
 	if cfg.ChatID == 0 {
 		return nil, errors.New("telegram chat id is required")
 	}
-	svc := &Service{cfg: cfg, controller: controller, offsets: offsets, deliveries: deliveries, radar: radarClient, botRef: "default", logger: slog.Default()}
+	svc := &Service{cfg: cfg, controller: controller, offsets: offsets, deliveries: deliveries, radar: radarClient, botRef: "default", logger: slog.Default(), apiTimeout: telegramAPITimeout}
 	var options []tgbot.Option
 	if offsets != nil {
 		if offset, ok, err := offsets.GetTelegramOffset(context.Background(), svc.botRef); err != nil {
@@ -103,9 +115,11 @@ func NewBotService(cfg BotConfig, controller Controller, offsets OffsetStore, de
 		}
 	}
 	options = append(options,
+		tgbot.WithHTTPClient(telegramPollTimeout, &http.Client{Timeout: telegramHTTPTimeout}),
 		tgbot.WithAllowedUpdates(tgbot.AllowedUpdates{"message", "callback_query"}),
 		tgbot.WithDefaultHandler(svc.handleUpdate),
 	)
+	options = append(options, extraOptions...)
 	b, err := tgbot.New(cfg.Token, options...)
 	if err != nil {
 		return nil, err
@@ -118,14 +132,23 @@ func (s *Service) Start(ctx context.Context) {
 	if err := s.RegisterCommands(ctx); err != nil {
 		s.logger.Warn("telegram command registration failed", "error", err)
 	}
-	go s.retryDeliveries(ctx)
+	retryDone := make(chan struct{})
+	go func() {
+		defer close(retryDone)
+		s.retryDeliveries(ctx)
+	}()
 	s.bot.Start(ctx)
+	if ctx.Err() != nil {
+		<-retryDone
+	}
 }
 
 func (s *Service) RegisterCommands(ctx context.Context) error {
 	if s.bot == nil {
 		return nil
 	}
+	ctx, cancel := s.apiContext(ctx)
+	defer cancel()
 	_, err := s.bot.SetMyCommands(ctx, &tgbot.SetMyCommandsParams{Commands: []models.BotCommand{
 		{Command: "status", Description: "server health and polling state"},
 		{Command: "health", Description: "poll/auth health check"},
@@ -470,6 +493,8 @@ func (s *Service) answerCallback(ctx context.Context, id, text string) {
 	if s.bot == nil {
 		return
 	}
+	ctx, cancel := s.apiContext(ctx)
+	defer cancel()
 	_, _ = s.bot.AnswerCallbackQuery(ctx, &tgbot.AnswerCallbackQueryParams{CallbackQueryID: id, Text: text, CacheTime: 1})
 }
 
@@ -478,14 +503,16 @@ func (s *Service) editCallbackMessage(ctx context.Context, query *models.Callbac
 		_, _ = s.send(ctx, text, markup)
 		return
 	}
-	_, err := s.bot.EditMessageText(ctx, &tgbot.EditMessageTextParams{
+	editCtx, cancel := s.apiContext(ctx)
+	_, err := s.bot.EditMessageText(editCtx, &tgbot.EditMessageTextParams{
 		ChatID:      query.Message.Message.Chat.ID,
 		MessageID:   query.Message.Message.ID,
 		Text:        text,
 		ParseMode:   parseMode(text),
 		ReplyMarkup: markup,
 	})
-	if err != nil {
+	cancel()
+	if err != nil && !isUncertainSendError(err) && !strings.Contains(strings.ToLower(err.Error()), "message is not modified") {
 		_, _ = s.send(ctx, text, markup)
 	}
 }
@@ -649,12 +676,14 @@ func (s *Service) send(ctx context.Context, text string, markup models.ReplyMark
 		return nil, nil
 	}
 	started := time.Now()
-	message, err := s.bot.SendMessage(ctx, &tgbot.SendMessageParams{
+	sendCtx, cancel := s.apiContext(ctx)
+	message, err := s.bot.SendMessage(sendCtx, &tgbot.SendMessageParams{
 		ChatID:      s.cfg.ChatID,
 		Text:        text,
 		ParseMode:   parseMode(text),
 		ReplyMarkup: markup,
 	})
+	cancel()
 	if err == nil {
 		s.logger.Info("telegram send completed", "duration", time.Since(started).Round(time.Millisecond), "formatted", parseMode(text) != "")
 		return message, nil
@@ -663,15 +692,25 @@ func (s *Service) send(ctx context.Context, text string, markup models.ReplyMark
 		return message, err
 	}
 	s.logger.Warn("telegram formatted send failed; retrying plain text", "error", err)
-	message, err = s.bot.SendMessage(ctx, &tgbot.SendMessageParams{
+	sendCtx, cancel = s.apiContext(ctx)
+	message, err = s.bot.SendMessage(sendCtx, &tgbot.SendMessageParams{
 		ChatID:      s.cfg.ChatID,
 		Text:        stripTelegramHTML(text),
 		ReplyMarkup: markup,
 	})
+	cancel()
 	if err == nil {
 		s.logger.Info("telegram send completed", "duration", time.Since(started).Round(time.Millisecond), "formatted", false, "fallback", true)
 	}
 	return message, err
+}
+
+func (s *Service) apiContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := s.apiTimeout
+	if timeout <= 0 {
+		timeout = telegramAPITimeout
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 func isUncertainSendError(err error) bool {
