@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-12T01:26:00Z",
+  "timezone": "UTC",
+  "input": {
+    "kind": "sanitized_synthetic_codex",
+    "cached_input_tokens": 0,
+    "output_tokens": 1,
+    "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    "input_token_boundaries": [271999, 272000, 272001]
+  },
+  "tools": [
+    {
+      "name": "ccusage",
+      "repository": "https://github.com/ryoppippi/ccusage",
+      "commit": "997ad7f",
+      "version": "20.0.17",
+      "args": ["ccusage-codex", "daily", "--json", "--timezone", "UTC"],
+      "capture": "offline source projection"
+    },
+    {
+      "name": "openusage",
+      "repository": "https://github.com/robinebers/openusage",
+      "commit": "b0cb1e4",
+      "version": "unreleased source snapshot",
+      "args": ["pricing projection", "--timezone", "UTC"],
+      "capture": "offline source projection"
+    }
+  ],
+  "peer_projections": {
+    "ccusage": {
+      "tier_by_input": {"271999":"short","272000":"short","272001":"long"},
+      "rates_per_million": {
+        "gpt-5.6-sol": {"short_input":"5","short_output":"30","long_input":"10","long_output":"45"},
+        "gpt-5.6-terra": {"short_input":"2.5","short_output":"15","long_input":"5","long_output":"22.5"},
+        "gpt-5.6-luna": {"short_input":"1","short_output":"6","long_input":"2","long_output":"9"}
+      }
+    },
+    "openusage": {
+      "tier_by_input": {"271999":"flat","272000":"flat","272001":"flat"},
+      "rates_per_million": {
+        "gpt-5.6-sol": {"input":"5","output":"30"},
+        "gpt-5.6-terra": {"input":"2.5","output":"15"},
+        "gpt-5.6-luna": {"input":"1","output":"6"}
+      }
+    }
+  },
+  "scriba_expected": "codex-gpt-5.6.expected.json",
+  "policies": [
+    {"peer":"ccusage","decision":"match","reason":"Both apply long-context rates to the full request only above 272000 input tokens."},
+    {"peer":"openusage","decision":"waive-long-context-difference","reason":"The frozen snapshot exposes only flat GPT-5.6 rates; it remains comparable for model resolution and short rates, not long-context tier selection."}
+  ]
+}
