@@ -37,5 +37,14 @@ func OpenReadOnly(configured string) (*Cache, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	var schemaVersion int
+	if err := db.QueryRow(`select value from meta where key = 'schema_version'`).Scan(&schemaVersion); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("read cache schema version: %w", err)
+	}
+	if schemaVersion != SchemaVersion {
+		_ = db.Close()
+		return nil, fmt.Errorf("unsupported cache schema version %d (expected %d)", schemaVersion, SchemaVersion)
+	}
 	return &Cache{dir: dir, db: db}, nil
 }

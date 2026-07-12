@@ -125,3 +125,22 @@ func TestOpenReadOnlyLoadsStatusWithoutMutation(t *testing.T) {
 		assertFileState(t, path, before[path])
 	}
 }
+
+func TestOpenReadOnlyRejectsFutureSchema(t *testing.T) {
+	dir := t.TempDir()
+	writable, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writable.db.Exec(`update meta set value = ? where key = 'schema_version'`, SchemaVersion+1); err != nil {
+		_ = writable.Close()
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if readonly, err := OpenReadOnly(dir); err == nil {
+		_ = readonly.Close()
+		t.Fatal("OpenReadOnly accepted a future cache schema")
+	}
+}
