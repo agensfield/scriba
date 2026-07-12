@@ -115,7 +115,7 @@ func parseEventCursor(value string) (int64, error) {
 	}
 	digits := strings.TrimPrefix(value, "v1.")
 	for _, r := range digits {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			return 0, pageError("invalid_cursor")
 		}
 	}

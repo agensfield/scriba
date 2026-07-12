@@ -157,7 +157,7 @@ func verifyOwned(fi os.FileInfo, mode os.FileMode) error {
 	if !ok {
 		return fmt.Errorf("localapi: unavailable identity")
 	}
-	if st.Uid != uint32(os.Getuid()) {
+	if int64(st.Uid) != int64(os.Getuid()) {
 		return fmt.Errorf("localapi: foreign owner")
 	}
 	if fi.Mode().Perm() != mode {
@@ -170,7 +170,12 @@ func fileIdentity(fi os.FileInfo) (identity, error) {
 	if !ok {
 		return identity{}, fmt.Errorf("localapi: unavailable identity")
 	}
-	return identity{uint64(st.Dev), uint64(st.Ino)}, nil
+	dev, devErr := strconv.ParseUint(fmt.Sprint(st.Dev), 10, 64)
+	ino, inoErr := strconv.ParseUint(fmt.Sprint(st.Ino), 10, 64)
+	if devErr != nil || inoErr != nil {
+		return identity{}, fmt.Errorf("localapi: invalid identity")
+	}
+	return identity{dev, ino}, nil
 }
 func validSocket(fi os.FileInfo) (identity, bool) {
 	if fi == nil || fi.Mode()&os.ModeSocket == 0 || verifyOwned(fi, 0600) != nil {
@@ -186,7 +191,7 @@ func acquire(path string) (*os.File, *identity, error) {
 		return nil, nil, fmt.Errorf("localapi: open lease: %w", err)
 	}
 	f := os.NewFile(uintptr(fd), path)
-	bad := func(e error) (*os.File, *identity, error) { f.Close(); return nil, nil, e }
+	bad := func(e error) (*os.File, *identity, error) { return nil, nil, errors.Join(e, f.Close()) }
 	fi, err := f.Stat()
 	if err != nil {
 		return bad(err)
@@ -196,8 +201,7 @@ func acquire(path string) (*os.File, *identity, error) {
 	}
 	if err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) {
-			f.Close()
-			return nil, nil, &ActiveError{Path: strings.TrimSuffix(path, ".lock")}
+			return nil, nil, errors.Join(&ActiveError{Path: strings.TrimSuffix(path, ".lock")}, f.Close())
 		}
 		return bad(err)
 	}

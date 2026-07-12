@@ -32,12 +32,12 @@ func TestToolsAndCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ss.Close()
+	defer func() { _ = ss.Close() }()
 	cs, err := client.Connect(ctx, ct, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cs.Close()
+	defer func() { _ = cs.Close() }()
 
 	listed, err := cs.ListTools(ctx, nil)
 	if err != nil {
@@ -136,12 +136,12 @@ func TestSuccessfulEventsReadOnlyAndConcurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ss.Close()
+	defer func() { _ = ss.Close() }()
 	cs, err := client.Connect(ctx, clientT, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cs.Close()
+	defer func() { _ = cs.Close() }()
 	call := func() {
 		result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: ListEventsTool, Arguments: map[string]any{}})
 		if err != nil {
@@ -334,7 +334,7 @@ func createEventFixture(path string) error {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	base := time.Date(2026, 7, 12, 8, 0, 0, 0, time.UTC)
 	period := int64((5 * time.Hour) / time.Millisecond)
 	for i, used := range []float64{70, 81} {

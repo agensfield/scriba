@@ -77,13 +77,13 @@ func (s *HTTPServer) Run(ctx context.Context) error {
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = s.Shutdown(context.Background())
+			_ = s.Shutdown(context.WithoutCancel(ctx))
 		case <-done:
 		}
 	}()
 	err := s.server.Serve(s.listener)
 	close(done)
-	shutdownErr := s.Shutdown(context.Background())
+	shutdownErr := s.Shutdown(context.WithoutCancel(ctx))
 	if errors.Is(err, http.ErrServerClosed) || (ctx.Err() != nil && errors.Is(err, context.Canceled)) {
 		return shutdownErr
 	}

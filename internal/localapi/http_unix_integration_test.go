@@ -99,7 +99,7 @@ func TestUnixHTTPContextExactParityAndPrivacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := f.get(t, "/v1/context")
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	var got agentcontext.Context
 	if err = json.NewDecoder(r.Body).Decode(&got); err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func insertWarning(t *testing.T, f *unixHTTPFixture, id string, at time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	atText := at.Format(time.RFC3339Nano)
 	_, err = db.ExecContext(t.Context(), `insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, id, "limit_warning", id, "rule", "subject", "remaining_checkpoint", "codex", "acct-private-sentinel", "rev", "hash", 1, string(payload), atText, atText)
 	if err != nil {
@@ -184,7 +184,7 @@ func execStore(t *testing.T, f *unixHTTPFixture, query string, args ...any) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err = db.ExecContext(t.Context(), query, args...); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestUnixSSEExplicitBacklogDrainsImmediatelyInOrder(t *testing.T) {
 	insertWarning(t, f, "backlog-two", at.Add(time.Second))
 	insertWarning(t, f, "backlog-three", at.Add(2*time.Second))
 	r := f.get(t, "/v1/events?cursor=v1.0000000000000000")
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	reader := bufio.NewReader(r.Body)
 	if got := readSSEFrame(t, r.Body, reader); got != ": connected\n\n" {
 		t.Fatalf("connected=%q", got)
@@ -220,7 +220,7 @@ func TestUnixSSETombstoneAndPoisonAdvanceToValidEvent(t *testing.T) {
 	execStore(t, f, `update policy_events set payload_json='{}' where id='poison'`)
 	insertWarning(t, f, "after-poison", at.Add(2*time.Second))
 	r := f.get(t, "/v1/events?cursor=v1.0000000000000000")
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	reader := bufio.NewReader(r.Body)
 	_ = readSSEFrame(t, r.Body, reader)
 	for i := 0; i < 20; i++ {
@@ -243,7 +243,7 @@ func TestUnixSSEExpiredCursorBeforeHeaders(t *testing.T) {
 	insertWarning(t, f, "expired-two", at.Add(time.Second))
 	execStore(t, f, `delete from policy_event_replay where replay_seq=(select min(replay_seq) from policy_event_replay)`)
 	r := f.get(t, "/v1/events?cursor=v1.0000000000000000")
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	if r.StatusCode != http.StatusGone {
 		body, _ := io.ReadAll(r.Body)
 		t.Fatalf("status=%d body=%s", r.StatusCode, body)
@@ -261,7 +261,7 @@ func TestUnixSSECaptureLiveReconnectHeartbeatAndStreamCap(t *testing.T) {
 	if second.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("stream cap=%d", second.StatusCode)
 	}
-	second.Body.Close()
+	_ = second.Body.Close()
 	if frame := readSSEFrame(t, r.Body, reader); frame != ": heartbeat\n\n" {
 		t.Fatalf("heartbeat=%q", frame)
 	}
@@ -282,7 +282,7 @@ func TestUnixSSECaptureLiveReconnectHeartbeatAndStreamCap(t *testing.T) {
 	if cursor == "" {
 		t.Fatal("missing cursor")
 	}
-	r.Body.Close()
+	_ = r.Body.Close()
 	insertWarning(t, f, "event-two", time.Now().UTC().Add(time.Second))
 	req, _ := http.NewRequest(http.MethodGet, "http://unix/v1/events", nil)
 	req.Header.Set("Last-Event-ID", cursor)
@@ -296,7 +296,7 @@ func TestUnixSSECaptureLiveReconnectHeartbeatAndStreamCap(t *testing.T) {
 	if !strings.Contains(frame, "\"id\":\"event-two\"") || strings.Contains(frame, "event-one") {
 		t.Fatalf("reconnect frame=%q", frame)
 	}
-	replay.Body.Close()
+	_ = replay.Body.Close()
 }
 
 func TestUnixSSEFutureAndShutdownCleanup(t *testing.T) {
@@ -305,8 +305,8 @@ func TestUnixSSEFutureAndShutdownCleanup(t *testing.T) {
 	if r.StatusCode != http.StatusBadRequest {
 		t.Fatalf("future=%d", r.StatusCode)
 	}
-	io.Copy(io.Discard, r.Body)
-	r.Body.Close()
+	_, _ = io.Copy(io.Discard, r.Body)
+	_ = r.Body.Close()
 	f.cancel()
 	select {
 	case err := <-f.done:

@@ -137,12 +137,12 @@ func TestAgentContextTransportParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ss.Close()
+	defer func() { _ = ss.Close() }()
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "parity", Version: "1"}, nil).Connect(t.Context(), clientTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cs.Close()
+	defer func() { _ = cs.Close() }()
 	result, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: agentmcp.GetContextTool, Arguments: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestAgentContextTransportParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer check.Close()
+	defer func() { _ = check.Close() }()
 	versionAfter, err := check.SchemaVersion(t.Context())
 	if err != nil || versionAfter != versionBefore {
 		t.Fatalf("schema mutated: %d -> %d (%v)", versionBefore, versionAfter, err)
@@ -206,7 +206,7 @@ func seedParityEvent(t *testing.T, path string, at time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	stamp := at.Format(time.RFC3339Nano)
 	_, err = db.ExecContext(t.Context(), `insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, warning.ID, warning.ID, "limit_warning", warning.ID, "rule", "subject", "remaining_checkpoint", "codex", "PRIVATE_ACCOUNT", "rev", "PRIVATE_CONFIG", 1, string(payload), stamp, stamp)
 	if err != nil {
@@ -256,7 +256,7 @@ func businessCounts(t *testing.T, path string) map[string]int64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	counts := map[string]int64{}
 	for _, table := range []string{"limit_observations", "policy_events", "notification_outbox"} {
 		var count int64
