@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,6 +110,21 @@ func dispatch(args []string) error {
 			return err
 		}
 		return runStatus(opts)
+	case "context":
+		opts, rest, err := parse(args[1:], flagSpec{
+			Use:   "scriba context --json [flags]",
+			Flags: []string{"json", "config", "cache-dir", "state-path"},
+		})
+		if err != nil {
+			return err
+		}
+		if len(rest) > 0 {
+			return fmt.Errorf("scriba context does not accept positional arguments")
+		}
+		if !opts.jsonOut {
+			return fmt.Errorf("scriba context requires --json")
+		}
+		return runContext(opts)
 	case "claude", "codex":
 		if len(args) < 2 || isHelpArg(args[1]) {
 			fmt.Println(groupHelp(args[0]))
@@ -416,14 +432,19 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.StringVar(&opts.target, name, "", flagHelp[name].Usage)
 		}
 	}
-	fs.SetOutput(os.Stdout)
-	fs.Usage = func() { printUsage(spec) }
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
 	err := fs.Parse(args)
+	if errors.Is(err, flag.ErrHelp) {
+		printUsageTo(os.Stdout, spec)
+	} else if err != nil {
+		printUsageTo(os.Stderr, spec)
+	}
 	return opts, fs.Args(), err
 }
 
-func printUsage(spec flagSpec) {
-	_, _ = fmt.Fprintf(os.Stdout, "Usage: %s\n\nFlags:\n", spec.Use)
+func printUsageTo(w io.Writer, spec flagSpec) {
+	_, _ = fmt.Fprintf(w, "Usage: %s\n\nFlags:\n", spec.Use)
 	for _, name := range spec.Flags {
 		meta := flagHelp[name]
 		flagName := "--" + meta.Name
@@ -434,7 +455,7 @@ func printUsage(spec flagSpec) {
 		if meta.Default != "" {
 			line += fmt.Sprintf(" (default %q)", meta.Default)
 		}
-		_, _ = fmt.Fprintln(os.Stdout, line)
+		_, _ = fmt.Fprintln(w, line)
 	}
 }
 
@@ -1514,7 +1535,7 @@ func title(value string) string {
 
 func commands() map[string][]string {
 	return map[string][]string{
-		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "policy", "outbox", "cache", "bench", "telegram", "server", "update", "version"},
+		"root":     {"doctor", "status", "context", "claude", "codex", "schema", "config", "policy", "outbox", "cache", "bench", "telegram", "server", "update", "version"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks", "budget"},
 		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "profile", "budget"},
 		"config":   {"path", "show", "init", "telegram"},
@@ -1669,6 +1690,7 @@ Usage:
 
 Commands:
   status            combined local usage and remote limit snapshot
+  context           machine-readable agent context (requires --json)
   doctor            auth, paths, cache, and provider diagnostics
   claude            Claude Code usage reports
   codex             Codex usage reports, live limits, reset grants, profile
