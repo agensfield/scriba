@@ -28,8 +28,8 @@ const (
 
 var RefreshURL = "https://auth.openai.com/oauth/token"
 
-var errAuthChanged = errors.New("Codex auth changed during refresh; refusing to overwrite newer credentials")
-var errWriteCommitted = errors.New("Codex auth rename committed before durability sync failed")
+var errAuthChanged = errors.New("codex auth changed during refresh; refusing to overwrite newer credentials")
+var errWriteCommitted = errors.New("codex auth rename committed before durability sync failed")
 
 type Credentials struct {
 	OK           bool
