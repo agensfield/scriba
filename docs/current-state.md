@@ -31,8 +31,9 @@ Claude Code and Codex usage tracker.
   nonnegative without conflating cache-read tokens with uncached input.
 - Both provider parser caches use explicit semantic namespaces. Frozen corpus
   fixtures, cumulative-reset properties, and native fuzzers guard parsing.
-- Stable `scriba.v1` status, Codex limits, profile, and reset-grant JSON outputs
-  have checked-in Draft 2020-12 schemas and canonical validation goldens.
+- Stable `scriba.v1` status, Codex limits, profile, and reset-grant JSON outputs,
+  plus `scriba.budget.v1` reports, have checked-in Draft 2020-12 schemas and
+  canonical validation goldens.
 - Pricing is embedded from a hash-bound reviewed offline catalog. Maintainer
   refresh writes a candidate only; CI validates provenance, aliases, rates,
   tier thresholds, boundary goldens, and deterministic generation without

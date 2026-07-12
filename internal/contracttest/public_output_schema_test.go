@@ -12,7 +12,7 @@ import (
 func TestPublicOutputSchemas(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..")
-	cases := []string{"status", "codex-limits", "codex-profile", "codex-reset-grants"}
+	cases := []string{"status", "codex-limits", "codex-profile", "codex-reset-grants", "budget"}
 	for _, name := range cases {
 		name := name
 		t.Run(name, func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestPublicOutputSchemasAllowOptionalOmissions(t *testing.T) {
 func publicOutputCompiler(t *testing.T, schemaDir string) *jsonschema.Compiler {
 	t.Helper()
 	compiler := jsonschema.NewCompiler()
-	for _, name := range []string{"status", "codex-limits", "codex-profile", "codex-reset-grants"} {
+	for _, name := range []string{"status", "codex-limits", "codex-profile", "codex-reset-grants", "budget"} {
 		data, err := os.ReadFile(filepath.Join(schemaDir, name+".schema.json"))
 		if err != nil {
 			t.Fatal(err)
