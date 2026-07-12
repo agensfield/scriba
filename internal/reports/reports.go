@@ -28,15 +28,33 @@ func ApplyFiltersIn(events []model.LocalUsageEvent, filters Filters, location *t
 	until := normalizeBoundary(filters.Until, true, location)
 	out := events[:0]
 	for _, event := range events {
-		if since != "" && event.Timestamp < since {
+		if since != "" && timestampBefore(event.Timestamp, since) {
 			continue
 		}
-		if until != "" && event.Timestamp > until {
+		if until != "" && timestampAfter(event.Timestamp, until) {
 			continue
 		}
 		out = append(out, event)
 	}
 	return out
+}
+
+func timestampBefore(value, boundary string) bool {
+	valueTime, valueErr := time.Parse(time.RFC3339Nano, value)
+	boundaryTime, boundaryErr := time.Parse(time.RFC3339Nano, boundary)
+	if valueErr == nil && boundaryErr == nil {
+		return valueTime.Before(boundaryTime)
+	}
+	return value < boundary
+}
+
+func timestampAfter(value, boundary string) bool {
+	valueTime, valueErr := time.Parse(time.RFC3339Nano, value)
+	boundaryTime, boundaryErr := time.Parse(time.RFC3339Nano, boundary)
+	if valueErr == nil && boundaryErr == nil {
+		return valueTime.After(boundaryTime)
+	}
+	return value > boundary
 }
 
 func Daily(events []model.LocalUsageEvent, orderDesc bool) []model.DailyReportRow {

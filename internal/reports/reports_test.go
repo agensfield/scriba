@@ -60,3 +60,22 @@ func TestLocationRejectsInvalidName(t *testing.T) {
 		t.Fatal("expected invalid timezone error")
 	}
 }
+
+func TestApplyFiltersComparesRFC3339TimestampsAsInstants(t *testing.T) {
+	events := []model.LocalUsageEvent{
+		{Timestamp: "2026-07-10T00:30:00+03:00", TotalTokens: 1},
+		{Timestamp: "2026-07-09T22:00:00Z", TotalTokens: 2},
+	}
+	got := ApplyFilters(events, Filters{Since: "2026-07-09T21:45:00Z"})
+	if len(got) != 1 || got[0].TotalTokens != 2 {
+		t.Fatalf("filtered = %+v", got)
+	}
+}
+
+func TestApplyFiltersPreservesLexicalFallbackForInvalidTimestamps(t *testing.T) {
+	events := []model.LocalUsageEvent{{Timestamp: "bad-a"}, {Timestamp: "bad-z"}}
+	got := ApplyFilters(events, Filters{Since: "bad-m"})
+	if len(got) != 1 || got[0].Timestamp != "bad-z" {
+		t.Fatalf("filtered = %+v", got)
+	}
+}

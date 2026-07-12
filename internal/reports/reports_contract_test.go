@@ -41,10 +41,6 @@ func TestContractTimezoneAndDSTBuckets(t *testing.T) {
 }
 
 func TestContractNewYorkDSTDateFilter(t *testing.T) {
-	// TODO(contract): ApplyFiltersIn compares differently formatted RFC3339
-	// strings lexically, excluding part of this 23-hour local day. Do not freeze
-	// the undercount as a golden; enable this when filtering compares instants.
-	t.Skip("known defect: timezone date filter uses lexical timestamp comparison")
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +48,25 @@ func TestContractNewYorkDSTDateFilter(t *testing.T) {
 	events := []model.LocalUsageEvent{{Timestamp: "2026-03-08T04:59:59Z"}, {Timestamp: "2026-03-08T05:00:00Z"}, {Timestamp: "2026-03-09T03:59:59Z"}, {Timestamp: "2026-03-09T04:00:00Z"}}
 	got := ApplyFiltersIn(events, Filters{Since: "2026-03-08", Until: "2026-03-08"}, loc)
 	if len(got) != 2 || got[0].Timestamp != "2026-03-08T05:00:00Z" || got[1].Timestamp != "2026-03-09T03:59:59Z" {
+		t.Fatalf("filtered=%+v", got)
+	}
+}
+
+func TestContractNewYorkDSTFoldDateFilter(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []model.LocalUsageEvent{
+		{Timestamp: "2026-11-01T03:59:59Z"},
+		{Timestamp: "2026-11-01T04:00:00Z"},
+		{Timestamp: "2026-11-01T05:30:00-04:00"},
+		{Timestamp: "2026-11-01T01:30:00-05:00"},
+		{Timestamp: "2026-11-02T04:59:59Z"},
+		{Timestamp: "2026-11-02T05:00:00Z"},
+	}
+	got := ApplyFiltersIn(events, Filters{Since: "2026-11-01", Until: "2026-11-01"}, loc)
+	if len(got) != 4 || got[0].Timestamp != "2026-11-01T04:00:00Z" || got[3].Timestamp != "2026-11-02T04:59:59Z" {
 		t.Fatalf("filtered=%+v", got)
 	}
 }
