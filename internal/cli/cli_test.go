@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -122,6 +123,23 @@ func TestServerGroupHelpListsBackup(t *testing.T) {
 	text := groupHelp("server")
 	if !strings.Contains(text, "scriba server backup") || !strings.Contains(text, "--retention 14") {
 		t.Fatalf("server help missing backup contract:\n%s", text)
+	}
+}
+
+func TestSuperviseReturnsUnexpectedExitAndJoinsSibling(t *testing.T) {
+	joined := make(chan struct{})
+	err := supervise(context.Background(), func(context.Context) error { return nil }, func(ctx context.Context) error {
+		<-ctx.Done()
+		close(joined)
+		return ctx.Err()
+	})
+	if err == nil || !strings.Contains(err.Error(), "exited unexpectedly") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	select {
+	case <-joined:
+	default:
+		t.Fatal("supervisor returned before sibling joined")
 	}
 }
 

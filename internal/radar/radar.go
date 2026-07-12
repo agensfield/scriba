@@ -18,6 +18,8 @@ const (
 	BackupURL  = "https://codex-reset-radar.pages.dev/current.json"
 )
 
+var defaultHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 type Client struct {
 	URL        string
 	BackupURL  string
@@ -74,7 +76,7 @@ type Prediction struct {
 func (c Client) Fetch(ctx context.Context) (Current, error) {
 	client := c.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultHTTPClient
 	}
 	urls := c.urls()
 	var lastErr error

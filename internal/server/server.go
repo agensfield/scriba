@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -23,7 +24,9 @@ import (
 const (
 	DefaultPollInterval     = 5 * time.Minute
 	DefaultBackoff          = 30 * time.Second
+	DefaultRefreshTimeout   = 90 * time.Second
 	SettingPollInterval     = "poll_interval"
+	SettingPollAttemptAt    = "poll_attempt_at"
 	SettingLastPruneAt      = "last_prune_at"
 	SettingPollSuccessAt    = "poll_success_at"
 	SettingPollFailureAt    = "poll_failure_at"
@@ -41,6 +44,7 @@ type Store interface {
 	ApplyDecision(context.Context, resetwatch.Observation, resetwatch.Decision) (int, error)
 	GetSetting(context.Context, string) (string, bool, error)
 	SetSetting(context.Context, string, string) error
+	DeleteSetting(context.Context, string) error
 	LoadLastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
 	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
@@ -133,6 +137,7 @@ type Health struct {
 	PollInterval             time.Duration `json:"pollInterval"`
 	ObservationRetentionDays int           `json:"observationRetentionDays"`
 	LastSuccessAt            *time.Time    `json:"lastSuccessAt,omitempty"`
+	LastAttemptAt            *time.Time    `json:"lastAttemptAt,omitempty"`
 	LastFailureAt            *time.Time    `json:"lastFailureAt,omitempty"`
 	LastError                string        `json:"lastError,omitempty"`
 	FailureKind              string        `json:"failureKind,omitempty"`
@@ -214,16 +219,36 @@ func (s *Server) RefreshNow(ctx context.Context) (PollResult, error) {
 		return PollResult{}, ErrRefreshInProgress
 	}
 	defer s.endRefresh()
-	result, err := s.pollOnce(ctx)
-	if err != nil {
-		if recordErr := s.recordPollFailure(ctx, err); recordErr != nil {
-			s.logger.Warn("scriba poll failure recording failed", "error", recordErr)
-		}
+	pollCtx := ctx
+	cancel := func() {}
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > DefaultRefreshTimeout {
+		pollCtx, cancel = context.WithTimeout(ctx, DefaultRefreshTimeout)
+	}
+	defer cancel()
+	attemptCtx, attemptCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	if err := s.store.SetSetting(attemptCtx, SettingPollAttemptAt, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		attemptCancel()
 		return PollResult{}, err
 	}
-	if err := s.recordPollSuccess(ctx); err != nil {
-		s.logger.Warn("scriba poll success recording failed", "error", err)
+	attemptCancel()
+	result, err := s.pollOnce(pollCtx)
+	bookkeepingCtx, bookkeepingCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer bookkeepingCancel()
+	if err != nil {
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+			_ = s.store.DeleteSetting(bookkeepingCtx, SettingPollAttemptAt)
+			return PollResult{}, err
+		}
+		if recordErr := s.recordPollFailure(bookkeepingCtx, err); recordErr != nil {
+			s.logger.Warn("scriba poll failure recording failed", "error", recordErr)
+		}
+		_ = s.store.DeleteSetting(bookkeepingCtx, SettingPollAttemptAt)
+		return PollResult{}, err
 	}
+	if err := s.recordPollSuccess(bookkeepingCtx); err != nil {
+		return result, fmt.Errorf("record poll success: %w", err)
+	}
+	_ = s.store.DeleteSetting(bookkeepingCtx, SettingPollAttemptAt)
 	return result, nil
 }
 
@@ -309,6 +334,13 @@ func (s *Server) Health(ctx context.Context) (Health, error) {
 	if ok {
 		health.LastSuccessAt = &success
 	}
+	attempt, ok, err := s.timeSetting(ctx, SettingPollAttemptAt)
+	if err != nil {
+		return health, err
+	}
+	if ok {
+		health.LastAttemptAt = &attempt
+	}
 	failure, ok, err := s.timeSetting(ctx, SettingPollFailureAt)
 	if err != nil {
 		return health, err
@@ -328,6 +360,15 @@ func (s *Server) Health(ctx context.Context) (Health, error) {
 		health.FailureKind = classifyPollError(value)
 	}
 	now := time.Now().UTC()
+	if health.LastAttemptAt != nil &&
+		(health.LastSuccessAt == nil || health.LastAttemptAt.After(*health.LastSuccessAt)) &&
+		(health.LastFailureAt == nil || health.LastAttemptAt.After(*health.LastFailureAt)) &&
+		now.Sub(*health.LastAttemptAt) > DefaultRefreshTimeout {
+		health.Status = HealthDegraded
+		health.FailureKind = "interrupted"
+		health.LastError = "previous poll was interrupted before completion"
+		return health, nil
+	}
 	if health.LastFailureAt != nil && (health.LastSuccessAt == nil || health.LastFailureAt.After(*health.LastSuccessAt)) && count > 0 {
 		health.Status = HealthDegraded
 		next := health.LastFailureAt.Add(pollBackoff(count))
@@ -756,7 +797,9 @@ func classifyPollError(message string) string {
 	switch {
 	case strings.Contains(lowered, "auth"), strings.Contains(lowered, "token"), strings.Contains(lowered, "unauthorized"), strings.Contains(lowered, "forbidden"), strings.Contains(lowered, "401"), strings.Contains(lowered, "403"):
 		return "auth"
-	case strings.Contains(lowered, "timeout"), strings.Contains(lowered, "deadline"), strings.Contains(lowered, "temporary"), strings.Contains(lowered, "connection"), strings.Contains(lowered, "network"):
+	case strings.Contains(lowered, "timeout"), strings.Contains(lowered, "deadline"):
+		return "timeout"
+	case strings.Contains(lowered, "temporary"), strings.Contains(lowered, "connection"), strings.Contains(lowered, "network"):
 		return "network"
 	default:
 		return "backend"

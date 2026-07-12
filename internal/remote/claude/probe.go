@@ -25,6 +25,8 @@ const (
 	usageURL   = "https://api.anthropic.com/api/oauth/usage"
 )
 
+var defaultHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 type credentialFile struct {
 	ClaudeAIOAuth oauth `json:"claudeAiOauth"`
 }
@@ -93,7 +95,7 @@ func Probe(includeHTTP bool) (remote.ProbeResult, error) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := defaultHTTPClient.Do(req)
 	if err != nil {
 		return remote.ProbeResult{}, err
 	}
@@ -190,7 +192,12 @@ func resolve(auth oauth) (oauth, error) {
 func refresh(auth oauth) (oauth, error) {
 	body := map[string]string{"grant_type": "refresh_token", "client_id": clientID, "refresh_token": auth.RefreshToken}
 	data, _ := json.Marshal(body)
-	resp, err := http.Post(refreshURL, "application/json", bytes.NewReader(data))
+	req, err := http.NewRequest(http.MethodPost, refreshURL, bytes.NewReader(data))
+	if err != nil {
+		return auth, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := defaultHTTPClient.Do(req)
 	if err != nil {
 		return auth, err
 	}

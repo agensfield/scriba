@@ -292,12 +292,35 @@ func TestRefreshNowIsSingleFlight(t *testing.T) {
 		errs <- err
 	}()
 	<-started
+	health, err := srv.Health(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.Status == HealthDegraded && health.FailureKind == "interrupted" {
+		t.Fatalf("active refresh reported interrupted: %#v", health)
+	}
 	if _, err := srv.RefreshNow(ctx); err != ErrRefreshInProgress {
 		t.Fatalf("expected in-progress error, got %v", err)
 	}
 	close(release)
 	if err := <-errs; err != nil {
 		t.Fatalf("first refresh failed: %v", err)
+	}
+}
+
+func TestHealthMarksExpiredAttemptInterrupted(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	if err := st.SetSetting(ctx, SettingPollAttemptAt, time.Now().Add(-DefaultRefreshTimeout-time.Second).UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, nil, nil, Config{})
+	health, err := srv.Health(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.Status != HealthDegraded || health.FailureKind != "interrupted" {
+		t.Fatalf("unexpected health: %#v", health)
 	}
 }
 

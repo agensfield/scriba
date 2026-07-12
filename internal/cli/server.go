@@ -115,16 +115,36 @@ func runServerRun(cfg config.Config, opts options) error {
 			return err
 		}
 		srv.SetNotifier(tg)
-		go func() {
-			if err := srv.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				fmt.Fprintln(os.Stderr, err)
-				stop()
-			}
-		}()
-		tg.Start(ctx)
-		return nil
+		return supervise(ctx, srv.Run, func(ctx context.Context) error { tg.Start(ctx); return nil })
 	}
 	return srv.Run(ctx)
+}
+
+func supervise(ctx context.Context, children ...func(context.Context) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errs := make(chan error, len(children))
+	for _, child := range children {
+		child := child
+		go func() { errs <- child(ctx) }()
+	}
+	first := <-errs
+	var result error
+	if first != nil && !errors.Is(first, context.Canceled) {
+		result = first
+	} else if ctx.Err() == nil {
+		result = errors.New("resident service child exited unexpectedly")
+	}
+	cancel()
+	for i := 1; i < len(children); i++ {
+		if err := <-errs; result == nil && err != nil && !errors.Is(err, context.Canceled) {
+			result = err
+		}
+	}
+	if ctx.Err() != nil && result == nil {
+		return nil
+	}
+	return result
 }
 
 func runServerStatus(cfg config.Config, opts options) error {
@@ -352,6 +372,7 @@ func healthPayload(health servercore.Health) map[string]any {
 		"pollInterval":             servercore.FormatDuration(health.PollInterval),
 		"observationRetentionDays": health.ObservationRetentionDays,
 		"lastSuccessAt":            health.LastSuccessAt,
+		"lastAttemptAt":            health.LastAttemptAt,
 		"lastFailureAt":            health.LastFailureAt,
 		"lastError":                health.LastError,
 		"failureKind":              health.FailureKind,

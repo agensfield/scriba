@@ -21,6 +21,8 @@ var (
 	profileURL            = "https://chatgpt.com/backend-api/wham/profiles/me"
 )
 
+var defaultHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 type usageResponse struct {
 	PlanType             string       `json:"plan_type"`
 	RateLimit            *rateLimit   `json:"rate_limit"`
@@ -195,7 +197,7 @@ func ProbeContext(ctx context.Context, includeHTTP bool) (remote.ProbeResult, er
 	if !includeHTTP {
 		return remote.ProbeResult{ProviderID: "codex", AuthState: auth}, nil
 	}
-	result, err := FetchLimits(ctx, http.DefaultClient)
+	result, err := FetchLimits(ctx, defaultHTTPClient)
 	if err != nil {
 		return remote.ProbeResult{}, err
 	}
@@ -204,7 +206,7 @@ func ProbeContext(ctx context.Context, includeHTTP bool) (remote.ProbeResult, er
 
 func FetchProfile(ctx context.Context, client *http.Client) (ProfileResult, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultHTTPClient
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	auth, err := loadAuth(ctx, client, false)
@@ -238,7 +240,7 @@ func FetchProfile(ctx context.Context, client *http.Client) (ProfileResult, erro
 
 func FetchLimits(ctx context.Context, client *http.Client) (remote.ProbeResult, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultHTTPClient
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	auth, err := loadAuth(ctx, client, false)
