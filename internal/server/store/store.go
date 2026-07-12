@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 10
+const SchemaVersion = 11
 
 const deliverySendLease = 10 * time.Minute
 
@@ -30,6 +30,7 @@ type Store struct {
 	path                  string
 	applyCodexPollFault   func(string) error
 	loadPolicyReplayFault func(string) error
+	profileMigrationFault func(string) error
 }
 
 type Delivery struct {
@@ -228,7 +229,10 @@ on conflict(version) do nothing`, 6, formatTime(time.Now()))
 	if err := s.migratePolicy(ctx); err != nil {
 		return err
 	}
-	return s.migratePolicyEventReplay(ctx)
+	if err := s.migratePolicyEventReplay(ctx); err != nil {
+		return err
+	}
+	return s.migrateProfiles(ctx)
 }
 
 func (s *Store) migrateNotificationDeliveries(ctx context.Context) error {
