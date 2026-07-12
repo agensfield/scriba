@@ -38,6 +38,9 @@ func TestApplyCodexPollBootstrapThenEmitOnce(t *testing.T) {
 		t.Fatalf("second events=%v err=%v", events, err)
 	}
 	assertPollCounts(t, s, 2, 1, 1)
+	if count, high := replayStats(t, s); count != 1 || high != 1 {
+		t.Fatalf("successful poll replay mapping count=%d high=%d", count, high)
+	}
 	wantCreated := formatTime(second.ObservedAt.Add(time.Second))
 	for _, table := range []string{"limit_warning_events", "policy_events", "notification_outbox"} {
 		var created string
@@ -51,6 +54,9 @@ func TestApplyCodexPollBootstrapThenEmitOnce(t *testing.T) {
 		t.Fatalf("repeat events=%v err=%v", events, err)
 	}
 	assertPollCounts(t, s, 2, 1, 1)
+	if count, high := replayStats(t, s); count != 1 || high != 1 {
+		t.Fatalf("exact replay advanced mapping count=%d high=%d", count, high)
+	}
 }
 
 func TestApplyCodexPollTransitionFixturesPersistExactPolicyAndOutbox(t *testing.T) {
@@ -405,6 +411,7 @@ func TestApplyCodexPollFaultRollsBackEverything(t *testing.T) {
 	if _, err := s.ApplyCodexPoll(ctx, pollInput(codexPollObservation(base, 70), "telegram:42")); err != nil {
 		t.Fatal(err)
 	}
+	beforeCount, beforeHigh := replayStats(t, s)
 	s.applyCodexPollFault = func(stage string) error { return fmt.Errorf("injected at %s", stage) }
 	_, err := s.ApplyCodexPoll(ctx, pollInput(codexPollObservation(base.Add(time.Minute), 81), "telegram:42"))
 	if err == nil {
@@ -412,6 +419,9 @@ func TestApplyCodexPollFaultRollsBackEverything(t *testing.T) {
 	}
 	s.applyCodexPollFault = nil
 	assertPollCounts(t, s, 1, 0, 0)
+	if count, high := replayStats(t, s); count != beforeCount || high != beforeHigh {
+		t.Fatalf("rollback changed replay count/high %d/%d -> %d/%d", beforeCount, beforeHigh, count, high)
+	}
 	var used float64
 	if err = s.db.QueryRow(`select used_percent from observed_windows`).Scan(&used); err != nil || used != 70 {
 		t.Fatalf("used=%v err=%v", used, err)
@@ -502,6 +512,9 @@ func TestApplyCodexPollTwoHandlesSerializeEmission(t *testing.T) {
 		t.Fatalf("emitted %d events, want 1", total)
 	}
 	assertPollCounts(t, a, 2, 1, 1)
+	if count, high := replayStats(t, a); count != 1 || high != 1 {
+		t.Fatalf("concurrent emission mapping count=%d high=%d", count, high)
+	}
 }
 
 func openPollStore(t *testing.T) *Store {
@@ -537,4 +550,12 @@ func assertPollCounts(t *testing.T, s *Store, observations, events, outbox int) 
 			t.Fatalf("%s got=%d want=%d err=%v", q.q, got, q.want, err)
 		}
 	}
+}
+
+func replayStats(t *testing.T, s *Store) (count, high int) {
+	t.Helper()
+	if err := s.db.QueryRow(`select count(*),coalesce((select seq from sqlite_sequence where name='policy_event_replay'),0) from policy_event_replay`).Scan(&count, &high); err != nil {
+		t.Fatal(err)
+	}
+	return count, high
 }

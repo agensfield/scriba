@@ -19,16 +19,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 8
+const SchemaVersion = 9
 
 const deliverySendLease = 10 * time.Minute
 
 const maxOpenConnections = 4
 
 type Store struct {
-	db                  *sql.DB
-	path                string
-	applyCodexPollFault func(string) error
+	db                    *sql.DB
+	path                  string
+	applyCodexPollFault   func(string) error
+	loadPolicyReplayFault func(string) error
 }
 
 type Delivery struct {
@@ -224,7 +225,10 @@ on conflict(version) do nothing`, 6, formatTime(time.Now()))
 	if err := s.migrateNotificationOutbox(ctx); err != nil {
 		return err
 	}
-	return s.migratePolicy(ctx)
+	if err := s.migratePolicy(ctx); err != nil {
+		return err
+	}
+	return s.migratePolicyEventReplay(ctx)
 }
 
 func (s *Store) migrateNotificationDeliveries(ctx context.Context) error {

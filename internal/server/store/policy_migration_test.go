@@ -70,7 +70,7 @@ insert into server_settings(key,value,updated_at) values('policy-migration-proof
 	if err := s.db.QueryRowContext(ctx, `select value from server_settings where key='policy-migration-proof'`).Scan(&proof); err != nil {
 		t.Fatal(err)
 	}
-	if version != PolicySchemaVersion || versions != 1 || states != 0 || events != 0 || resets != 1 || deliveries != 1 || outbox != 1 || proof != "preserved" {
+	if version != SchemaVersion || versions != 1 || states != 0 || events != 0 || resets != 1 || deliveries != 1 || outbox != 1 || proof != "preserved" {
 		t.Fatalf("version=%d versions=%d states=%d events=%d resets=%d deliveries=%d outbox=%d proof=%q", version, versions, states, events, resets, deliveries, outbox, proof)
 	}
 	assertSQLiteIntegrity(t, s)
@@ -79,7 +79,7 @@ insert into server_settings(key,value,updated_at) values('policy-migration-proof
 func TestPolicyMigrationConcurrentCallsRecordOneVersion(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	if _, err := s.db.ExecContext(ctx, `delete from schema_migrations where version=8; drop table policy_events; drop table policy_states;`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `drop trigger policy_events_replay_after_insert; drop table policy_event_replay; delete from schema_migrations where version>=8; drop table policy_events; drop table policy_states;`); err != nil {
 		t.Fatal(err)
 	}
 	const workers = 8
