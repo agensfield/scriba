@@ -2,8 +2,9 @@
 
 This document records the Wave 2.1 budget and policy boundary. Schema v8 and
 atomic policy evaluation are live on the devbox at commit `c32d885`; read-only
-policy inspection CLI surfaces and the remaining Wave 2 release gates are not
-complete yet.
+policy inspection CLI surfaces are implemented in the current worktree. Exact
+fixture-transition and Telegram retry proof still keep the Wave 2 release gate
+open.
 
 ## Budget Surfaces
 
@@ -72,6 +73,31 @@ first policy evaluation establishes state and emits nothing, including for an
 account already known to the older polling path. The cutover did not run dual
 evaluation or replay historical alerts.
 
+## Read-only Inspection
+
+The operator surfaces do not evaluate policies, claim outbox messages, or
+mutate SQLite:
+
+- `policy validate <file>` strictly validates a supplied config and emits
+  `scriba.policy-validate.v1`;
+- `policy list [--config <file>]` lists the built-in `current` preset or a
+  validated supplied config and emits `scriba.policy-list.v1`;
+- `policy explain` reads persisted state/evaluation explanations with exact
+  provider, account, and rule filters and emits `scriba.policy-explain.v1`;
+- `outbox list` reads delivery envelopes with exact id, status, and target
+  filters and emits `scriba.outbox-list.v1` without leasing work.
+
+The two state-backed commands accept a bounded 1..1000 result limit and support
+field-aware `--redact` output for identifiers, stored JSON bodies, delivery
+payloads, lease/provider metadata, and errors. Their Draft 2020-12 schemas are
+checked in under [`schemas/`](../schemas/).
+
+An invalid JSON-mode validation exits nonzero after emitting a typed
+`valid: false` result. Read-only state access preserves the main database,
+schema, rows, attempts, and leases; SQLite's own live-WAL coordination may
+touch transient sidecar bookkeeping.
+
 The live migration and deployment evidence is recorded in
-[`schema-v8-migration.md`](schema-v8-migration.md). Policy `validate`, `list`,
-`explain`, and outbox inspection commands remain pending.
+[`schema-v8-migration.md`](schema-v8-migration.md). Exact fixture-transition
+events and Telegram retry-through-outbox behavior remain the open Wave 2
+release proof.

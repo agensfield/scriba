@@ -54,5 +54,7 @@ startup heartbeat and its `startup_heartbeat_at` state, not policy delivery.
 The Telegram Bot API returned `true`, and all 11 commands were registered.
 
 The schema-v8 policy runtime cutover is therefore complete. Read-only policy
-`validate`, `list`, `explain`, and outbox inspection CLI surfaces remain future
-work and are not implied by this receipt.
+`validate`, `list`, `explain`, and outbox-list CLI surfaces were implemented
+after this deployment receipt; they do not alter the migration evidence above.
+Exact fixture-transition events and Telegram retry-through-outbox proof remain
+open for the Wave 2 release gate.

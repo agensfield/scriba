@@ -23,6 +23,11 @@ scriba cache status
 scriba cache reset
 scriba cache prune
 scriba cache vacuum
+scriba policy validate policy.json
+scriba policy list
+scriba policy list --config policy.json --json
+scriba policy explain --provider codex --account <ref> --rule <id> --limit 100
+scriba outbox list --status leased --limit 100
 scriba update --check
 scriba update
 scriba telegram alerts
@@ -151,6 +156,42 @@ machine-readable contract is `scriba.budget.v1`, validated by
 [`schemas/budget.schema.json`](../schemas/budget.schema.json). See
 [`budget-and-policy.md`](budget-and-policy.md) for the full checkpoint and its
 current runtime boundary.
+
+## Policy and Outbox Inspection
+
+The Wave 2 inspection commands are read-only:
+
+- `scriba policy validate <file>` strictly parses an operator-supplied policy
+  file without opening server state. Its JSON schema version is
+  `scriba.policy-validate.v1`.
+- `scriba policy list` renders the built-in `current` preset; `--config <file>`
+  instead parses and lists that file. Its JSON schema version is
+  `scriba.policy-list.v1`.
+- `scriba policy explain` opens server SQLite read-only and lists persisted
+  evaluations, filterable by exact `--provider`, `--account`, and `--rule`
+  values. Its JSON schema version is `scriba.policy-explain.v1`.
+- `scriba outbox list` opens server SQLite read-only without claiming messages
+  and filters by exact `--id`, `--status`, and `--target` values. Its JSON
+  schema version is `scriba.outbox-list.v1`.
+
+The state-backed commands accept `--state-path`, `--env`, and a `--limit` from
+1 to 1000. `--redact` on `policy explain` removes subject/account/config
+identifiers and persisted state/evaluation bodies. On `outbox list` it removes
+profile/account/target identifiers, delivery payloads, lease/provider message
+identifiers, and last errors. The checked-in Draft 2020-12 schemas are
+[`policy-validate.schema.json`](../schemas/policy-validate.schema.json),
+[`policy-list.schema.json`](../schemas/policy-list.schema.json),
+[`policy-explain.schema.json`](../schemas/policy-explain.schema.json), and
+[`outbox-list.schema.json`](../schemas/outbox-list.schema.json).
+
+Invalid `policy validate --json` input still exits nonzero but writes a typed
+`valid: false` envelope to stdout. State inspection uses SQLite `mode=ro`: it
+does not change the main database, schema, business rows, delivery attempts, or
+leases. SQLite may still coordinate a live WAL reader through transient
+`-shm`/`-wal` bookkeeping; this is not presented as byte-immutable sidecar
+behavior.
+
+## Server Notifications
 
 The resident server stores every available reset credit from the read-only
 metadata endpoint when present. Telegram grant-expiry warnings are deduped by
