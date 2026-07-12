@@ -82,8 +82,10 @@ Claude Code and Codex usage tracker.
   `policy_event_replay` maps every policy event to a transactional,
   never-reused monotonic ordinal through an insert trigger. Replay pages use a
   single read snapshot and a captured high-water mark, so later/backdated
-  inserts cannot be skipped or leak across a page boundary. Profiles move to
-  server schema v10. Live devbox remains schema 8 until copied-live migration,
+  inserts cannot be skipped or leak across a page boundary. Commit `8b6272e`
+  adds schema v10 tombstones plus strict `scriba.events.v1` cursor paging;
+  `fc663de` adds the reviewed Unix socket ownership primitive. Profiles move to
+  server schema v11. Live devbox remains schema 8 until copied-live migration,
   previous-binary restore-copy, and deployment gates pass.
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and

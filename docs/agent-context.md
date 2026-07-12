@@ -72,3 +72,10 @@ existing events backfill once in deterministic order. The sequence replaces
 unsafe timestamp/hash ordering, but it is not itself an available public API:
 the versioned cursor, expiry semantics, SSE adapter, and MCP event tool still
 need their shared contract and deployment proof.
+
+Commit `8b6272e` now defines that shared page contract as `scriba.events.v1`.
+Its account-free fixed-width cursors support explicit replay, latest-page
+inspection, and capture-current tailing. Schema v10 preserves tombstones and
+durable high-water state across retention, while malformed rows consume only a
+bounded scan slot and never leak raw payloads. The Unix listener primitive at
+`fc663de` is also implemented, but HTTP/SSE routes and MCP tools remain absent.
