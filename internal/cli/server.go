@@ -42,6 +42,8 @@ func runServer(command string, opts options) error {
 		return runServerStatus(cfg, opts)
 	case "health":
 		return runServerHealth(cfg, opts)
+	case "profiles":
+		return runServerProfiles(cfg, opts)
 	case "stats":
 		return runServerStats(cfg, opts)
 	case "refresh":
@@ -272,6 +274,24 @@ func runServerHealth(cfg config.Config, opts options) error {
 	return output(opts, healthPayload(health), renderServerHealth(health))
 }
 
+func runServerProfiles(cfg config.Config, opts options) error {
+	st, err := store.OpenReadOnly(resolveServerStatePath(cfg.Server.StatePath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	srv := servercore.New(st, nil, nil, servercore.Config{
+		Profiles: runtimeServerProfiles(cfg), AccountLabel: cfg.Server.AccountLabel, JokeTone: cfg.Telegram.ResetJokeTone,
+		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
+	})
+	health, err := srv.Health(context.Background())
+	if err != nil {
+		return err
+	}
+	payload := profileHealthPayload(health)
+	return output(opts, payload, renderServerProfiles(payload))
+}
+
 func runServerStats(cfg config.Config, opts options) error {
 	st, err := store.Open(resolveServerStatePath(cfg.Server.StatePath))
 	if err != nil {
@@ -438,6 +458,8 @@ func serverRefreshPayload(result servercore.PollResult) map[string]any {
 		})
 	}
 	return map[string]any{
+		"profileId":     result.Profile.Ref,
+		"profileLabel":  result.Profile.Label,
 		"baseline":      result.Baseline,
 		"inserted":      result.Inserted,
 		"account":       result.Observation.Account,
@@ -480,7 +502,45 @@ func healthPayload(health servercore.Health) map[string]any {
 		"queueReason":              health.QueueReason,
 		"outbox":                   health.Outbox,
 		"telegramInbox":            health.TelegramInbox,
+		"profiles":                 profileHealthPayload(health),
 	}
+}
+
+type profilesHealthOutput struct {
+	SchemaVersion    string                `json:"schemaVersion"`
+	DefaultProfileID string                `json:"defaultProfileId"`
+	Profiles         []profileHealthOutput `json:"profiles"`
+}
+
+type profileHealthOutput struct {
+	ProfileID           string                  `json:"profileId"`
+	Label               string                  `json:"label"`
+	IsDefault           bool                    `json:"isDefault"`
+	Status              servercore.HealthStatus `json:"status"`
+	LastSuccessAt       *time.Time              `json:"lastSuccessAt,omitempty"`
+	LastAttemptAt       *time.Time              `json:"lastAttemptAt,omitempty"`
+	LastFailureAt       *time.Time              `json:"lastFailureAt,omitempty"`
+	FailureKind         string                  `json:"failureKind,omitempty"`
+	LastErrorCode       string                  `json:"lastErrorCode,omitempty"`
+	ConsecutiveFailures int                     `json:"consecutiveFailures"`
+	NextPollEstimateAt  *time.Time              `json:"nextPollEstimateAt,omitempty"`
+	IsStale             bool                    `json:"isStale"`
+}
+
+func profileHealthPayload(health servercore.Health) profilesHealthOutput {
+	payload := profilesHealthOutput{SchemaVersion: "scriba.profiles.v1", Profiles: make([]profileHealthOutput, 0, len(health.Profiles))}
+	for _, profile := range health.Profiles {
+		if profile.IsDefault {
+			payload.DefaultProfileID = profile.Profile.Ref
+		}
+		payload.Profiles = append(payload.Profiles, profileHealthOutput{
+			ProfileID: profile.Profile.Ref, Label: profile.Profile.Label, IsDefault: profile.IsDefault, Status: profile.Status,
+			LastSuccessAt: profile.LastSuccessAt, LastAttemptAt: profile.LastAttemptAt, LastFailureAt: profile.LastFailureAt,
+			FailureKind: profile.FailureKind, LastErrorCode: profile.LastErrorCode, ConsecutiveFailures: profile.ConsecutiveFailures,
+			NextPollEstimateAt: profile.NextPollEstimateAt, IsStale: profile.IsStale,
+		})
+	}
+	return payload
 }
 
 func renderServerStats(stats servercore.Stats, environment string, telegramEnabled bool) string {
@@ -496,6 +556,7 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 	})
 	b.WriteString("\nHealth\n")
 	writeHealthRows(&b, stats.Health)
+	writeProfileHealthRows(&b, stats.Health.Profiles)
 	b.WriteString("\nOutbox\n")
 	writeQueueRows(&b, stats.Store.Outbox)
 	b.WriteString("\nTelegram inbox\n")
@@ -569,6 +630,23 @@ func renderServerHealth(health servercore.Health) string {
 	var b strings.Builder
 	b.WriteString("Scriba health\n")
 	writeHealthRows(&b, health)
+	writeProfileHealthRows(&b, health.Profiles)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderServerProfiles(payload profilesHealthOutput) string {
+	var b strings.Builder
+	b.WriteString("Scriba profiles\n")
+	profiles := make([]servercore.ProfileHealth, 0, len(payload.Profiles))
+	for _, profile := range payload.Profiles {
+		profiles = append(profiles, servercore.ProfileHealth{
+			Profile: servercore.ProfileIdentity{Ref: profile.ProfileID, Label: profile.Label}, IsDefault: profile.IsDefault,
+			Status: profile.Status, LastSuccessAt: profile.LastSuccessAt, LastAttemptAt: profile.LastAttemptAt,
+			LastFailureAt: profile.LastFailureAt, FailureKind: profile.FailureKind, LastErrorCode: profile.LastErrorCode,
+			ConsecutiveFailures: profile.ConsecutiveFailures, NextPollEstimateAt: profile.NextPollEstimateAt, IsStale: profile.IsStale,
+		})
+	}
+	writeProfileRows(&b, profiles)
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -579,6 +657,12 @@ func renderServerRefresh(result servercore.PollResult) string {
 	b.WriteString("\n")
 	if !obs.ObservedAt.IsZero() {
 		fmt.Fprintf(&b, "%s\n", cliMuted("observed "+formatCLIStatsTime(obs.ObservedAt)))
+	}
+	if result.Profile.Ref != "" {
+		b.WriteString("\n")
+		b.WriteString(cliBold("Profile"))
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "%s · %s\n", result.Profile.Ref, result.Profile.Label)
 	}
 	if obs.Account.Email != "" || obs.Account.Plan != "" || obs.Account.Label != "" {
 		b.WriteString("\n")
@@ -744,6 +828,30 @@ func writeHealthRows(b *strings.Builder, health servercore.Health) {
 		rows = append(rows, fmt.Sprintf("%-13s %s", "queue", health.QueueReason))
 	}
 	writeRows(b, rows)
+}
+
+func writeProfileHealthRows(b *strings.Builder, profiles []servercore.ProfileHealth) {
+	if len(profiles) == 0 {
+		return
+	}
+	b.WriteString("\nProfiles\n")
+	writeProfileRows(b, profiles)
+}
+
+func writeProfileRows(b *strings.Builder, profiles []servercore.ProfileHealth) {
+	for _, profile := range profiles {
+		name := profile.Profile.Ref
+		if profile.IsDefault {
+			name = truncateCLI(name, 11) + " *"
+		} else {
+			name = truncateCLI(name, 13)
+		}
+		fmt.Fprintf(b, "%-13s %s · %s · failures %d", name, profile.Profile.Label, profile.Status, profile.ConsecutiveFailures)
+		if profile.FailureKind != "" {
+			fmt.Fprintf(b, " · %s/%s", profile.FailureKind, profile.LastErrorCode)
+		}
+		b.WriteString("\n")
+	}
 }
 
 func writeQueueRows(b *strings.Builder, q store.QueueStats) {

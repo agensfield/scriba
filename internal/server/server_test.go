@@ -421,6 +421,57 @@ func TestHealthMarksExpiredAttemptInterrupted(t *testing.T) {
 	}
 }
 
+func TestHealthPreservesConfiguredProfileOrderAndMissingDefault(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	if err := st.SyncProfiles(ctx, []store.ProfileSpec{
+		{ProfileRef: "personal", Label: "Stored Personal", ProviderID: "codex", Enabled: true, IsDefault: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, nil, nil, Config{Profiles: []Profile{
+		{Ref: "personal", Label: "Personal"},
+		{Ref: "work", Label: "Work", Default: true},
+	}})
+	health, err := srv.Health(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(health.Profiles) != 2 {
+		t.Fatalf("profiles=%+v", health.Profiles)
+	}
+	if health.Profiles[0].Profile.Ref != "personal" || health.Profiles[0].Profile.Label != "Stored Personal" || health.Profiles[0].IsDefault {
+		t.Fatalf("first profile=%+v", health.Profiles[0])
+	}
+	missing := health.Profiles[1]
+	if missing.Profile.Ref != "work" || missing.Profile.Label != "Work" || !missing.IsDefault || missing.Status != HealthUnknown {
+		t.Fatalf("missing profile=%+v", missing)
+	}
+	if health.Status != HealthUnknown {
+		t.Fatalf("health status=%s", health.Status)
+	}
+}
+
+func TestHealthReportsConfiguredProfileUnknownWhenDurableRowIsDisabled(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	if err := st.SyncProfiles(ctx, []store.ProfileSpec{
+		{ProfileRef: "personal", Label: "Old Personal", ProviderID: "codex", Enabled: false},
+		{ProfileRef: "work", Label: "Work", ProviderID: "codex", Enabled: true, IsDefault: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	health, err := New(st, nil, nil, Config{Profiles: []Profile{
+		{Ref: "personal", Label: "Personal", Default: true},
+	}}).Health(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(health.Profiles) != 1 || health.Profiles[0].Profile.Ref != "personal" || health.Profiles[0].Profile.Label != "Personal" || !health.Profiles[0].IsDefault || health.Profiles[0].Status != HealthUnknown {
+		t.Fatalf("profiles=%+v", health.Profiles)
+	}
+}
+
 func TestHealthDegradesForQueueWithoutOverwritingPollFailure(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)

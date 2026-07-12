@@ -191,6 +191,7 @@ type Health struct {
 
 type ProfileHealth struct {
 	Profile             ProfileIdentity `json:"profile"`
+	IsDefault           bool            `json:"isDefault"`
 	Status              HealthStatus    `json:"status"`
 	LastSuccessAt       *time.Time      `json:"lastSuccessAt,omitempty"`
 	LastAttemptAt       *time.Time      `json:"lastAttemptAt,omitempty"`
@@ -402,16 +403,17 @@ func (s *Server) Health(ctx context.Context) (Health, error) {
 		}
 		for _, configured := range s.cfg.Profiles {
 			row, exists := rowsByRef[configured.Ref]
-			if !exists {
-				continue
-			}
-			if !row.Enabled {
+			if !exists || !row.Enabled {
+				profile := ProfileHealth{Profile: ProfileIdentity{Ref: configured.Ref, Label: configured.Label}, IsDefault: configured.Default, Status: HealthUnknown}
+				health.Profiles = append(health.Profiles, profile)
+				health.Status = worseHealth(health.Status, profile.Status)
 				continue
 			}
 			profile := profileHealthFromStore(row, interval, health.StaleAfter, time.Now().UTC())
+			profile.IsDefault = configured.Default
 			health.Profiles = append(health.Profiles, profile)
 			health.Status = worseHealth(health.Status, profile.Status)
-			if row.IsDefault {
+			if configured.Default {
 				health.LastSuccessAt = profile.LastSuccessAt
 				health.LastAttemptAt = profile.LastAttemptAt
 				health.LastFailureAt = profile.LastFailureAt

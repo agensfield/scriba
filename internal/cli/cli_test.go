@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	"github.com/agensfield/scriba/internal/resetwatch"
 	servercore "github.com/agensfield/scriba/internal/server"
 	"github.com/agensfield/scriba/internal/server/store"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestCodexLimitsFromSnapshotFiltersRemoteLimitLines(t *testing.T) {
@@ -73,6 +76,61 @@ func TestServerStatsRendersQueueObservability(t *testing.T) {
 	payload := serverStatsPayload(stats, "test", true)
 	if payload["store"].(store.Stats).Outbox.DeadLetter != 3 {
 		t.Fatalf("payload: %#v", payload)
+	}
+}
+
+func TestServerHealthProfilesAreOrderedSafeAndRendered(t *testing.T) {
+	now := time.Date(2026, 7, 13, 1, 0, 0, 0, time.UTC)
+	health := servercore.Health{Status: servercore.HealthDegraded, Profiles: []servercore.ProfileHealth{
+		{Profile: servercore.ProfileIdentity{Ref: "personal", Label: "Personal"}, IsDefault: true, Status: servercore.HealthOK, LastAttemptAt: &now, LastSuccessAt: &now},
+		{Profile: servercore.ProfileIdentity{Ref: "work", Label: "Work"}, Status: servercore.HealthDegraded, LastAttemptAt: &now, LastFailureAt: &now, FailureKind: "network", LastErrorCode: "timeout", ConsecutiveFailures: 2},
+	}}
+	payload := healthPayload(health)
+	profiles, ok := payload["profiles"].(profilesHealthOutput)
+	if !ok || profiles.SchemaVersion != "scriba.profiles.v1" || profiles.DefaultProfileID != "personal" || len(profiles.Profiles) != 2 || profiles.Profiles[0].ProfileID != "personal" || profiles.Profiles[1].LastErrorCode != "timeout" {
+		t.Fatalf("profiles=%#v", payload["profiles"])
+	}
+	raw, err := json.Marshal(payload["profiles"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"accountRef", "auth", "token", "source", "/secret/"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("forbidden %q in %s", forbidden, raw)
+		}
+	}
+	var document, instance any
+	schemaRaw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "profiles.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(schemaRaw, &document); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &instance); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://agensfield.dev/scriba/schemas/profiles.schema.json"
+	if err := compiler.AddResource(schemaURL, document); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(schemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(instance); err != nil {
+		t.Fatalf("generated profile payload does not match public schema: %v\n%s", err, raw)
+	}
+	text := renderServerHealth(health)
+	for _, want := range []string{"Profiles", "personal *", "Personal · ok", "work", "network/timeout"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q:\n%s", want, text)
+		}
+	}
+	longDefault := renderServerProfiles(profilesHealthOutput{Profiles: []profileHealthOutput{{ProfileID: "long-default-profile", Label: "Long", IsDefault: true}}})
+	if !strings.Contains(longDefault, "*") {
+		t.Fatalf("long default marker was truncated:\n%s", longDefault)
 	}
 }
 
@@ -330,6 +388,7 @@ func TestRenderServerRefreshAvoidsTelegramMarkup(t *testing.T) {
 	expires := time.Date(2026, 7, 12, 1, 20, 0, 0, time.UTC)
 	count := 1
 	text := stripANSI(renderServerRefresh(servercore.PollResult{
+		Profile: servercore.ProfileIdentity{Ref: "work", Label: "Work"},
 		Observation: resetwatch.Observation{
 			Account:    resetwatch.Account{Email: "arda@example.com", Plan: "pro"},
 			ObservedAt: time.Date(2026, 6, 29, 1, 20, 0, 0, time.UTC),
@@ -346,7 +405,7 @@ func TestRenderServerRefreshAvoidsTelegramMarkup(t *testing.T) {
 	}))
 	localExpiry := expires.Local().Format("2006-01-02 15:04 MST")
 
-	for _, want := range []string{"Codex limits", "Weekly", "15% used", "Reset grants", localExpiry} {
+	for _, want := range []string{"Codex limits", "Profile", "work · Work", "Weekly", "15% used", "Reset grants", localExpiry} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("server refresh missing %q:\n%s", want, text)
 		}

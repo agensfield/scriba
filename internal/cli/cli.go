@@ -1674,6 +1674,7 @@ Commands:
   scriba server run
   scriba server status
   scriba server health
+  scriba server profiles
   scriba server stats
   scriba server refresh
   scriba server radar
@@ -1683,6 +1684,7 @@ Commands:
 Examples:
   scriba server run --env prod
   scriba server health --env prod
+  scriba server profiles --env prod --json
   scriba server refresh --env prod --json
   scriba server backup --env prod --retention 14 --json`
 	case "mcp":

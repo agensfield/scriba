@@ -15,6 +15,7 @@ import (
 func profileHealthFromStore(row store.ProfileHealth, interval, staleAfter time.Duration, now time.Time) ProfileHealth {
 	health := ProfileHealth{
 		Profile:             ProfileIdentity{Ref: row.ProfileRef, Label: row.Label},
+		IsDefault:           row.IsDefault,
 		Status:              HealthUnknown,
 		LastSuccessAt:       row.LastSuccessAt,
 		LastAttemptAt:       row.LastAttemptAt,
