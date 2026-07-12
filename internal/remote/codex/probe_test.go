@@ -41,6 +41,43 @@ func TestLinesFromUsageResponseUsesAdditionalSparkLimits(t *testing.T) {
 	assertAmount(t, lines, "Reset grants", 1, "available")
 }
 
+func TestLinesFromUsageResponseSupportsTemporaryNoFiveHourShape(t *testing.T) {
+	payload := []byte(`{
+		"rate_limit": {
+			"primary_window": {"used_percent": 0, "reset_at": 1784492145, "limit_window_seconds": 604800},
+			"secondary_window": null
+		},
+		"additional_rate_limits": [{
+			"limit_name": "GPT-5.3-Codex-Spark",
+			"metered_feature": "codex_bengalfox",
+			"rate_limit": {
+				"primary_window": {"used_percent": 0, "reset_at": 1784492395, "limit_window_seconds": 604800},
+				"secondary_window": null
+			}
+		}]
+	}`)
+	var parsed usageResponse
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("unmarshal usage response: %v", err)
+	}
+
+	t.Run("enabled by default", func(t *testing.T) {
+		t.Setenv(temporaryNoFiveHourFeature, "")
+		lines := linesFromUsageResponse(parsed, resetCreditsResponse{}, false)
+		assertProgress(t, lines, "Weekly limit", 0, "2026-07-19T20:15:45Z")
+		assertProgress(t, lines, "Spark weekly", 0, "2026-07-19T20:19:55Z")
+		assertNoProgress(t, lines, "5h limit")
+		assertNoProgress(t, lines, "Spark 5h")
+	})
+
+	t.Run("kill switch restores positional behavior", func(t *testing.T) {
+		t.Setenv(temporaryNoFiveHourFeature, "false")
+		lines := linesFromUsageResponse(parsed, resetCreditsResponse{}, false)
+		assertProgress(t, lines, "5h limit", 0, "2026-07-19T20:15:45Z")
+		assertProgress(t, lines, "Spark 5h", 0, "2026-07-19T20:19:55Z")
+	})
+}
+
 func TestLinesFromUsageResponseShowsResetCreditExpiry(t *testing.T) {
 	parsed := usageResponse{}
 	parsed.RateLimitResetCredits = &struct {
@@ -135,6 +172,15 @@ func assertProgress(t *testing.T, lines []model.MetricLine, label string, used f
 		return
 	}
 	t.Fatalf("missing progress line %q in %#v", label, lines)
+}
+
+func assertNoProgress(t *testing.T, lines []model.MetricLine, label string) {
+	t.Helper()
+	for _, line := range lines {
+		if line.Type == "progress" && line.Label == label {
+			t.Fatalf("unexpected progress line %q: %#v", label, line)
+		}
+	}
 }
 
 func assertAmount(t *testing.T, lines []model.MetricLine, label string, value float64, suffix string) {

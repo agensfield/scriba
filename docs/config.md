@@ -47,6 +47,13 @@ same-user Unix socket (`0600`); TCP is not enabled by this setting. Start the
 resident process with `scriba server run` and query it with, for example,
 `curl --unix-socket ~/.local/state/scriba/context.sock http://localhost/v1/health`.
 
+Scriba temporarily enables compatibility with OpenAI's July 2026 removal of
+the Codex five-hour bucket. When the backend returns a lone seven-day
+`primary_window`, Scriba reports it as weekly instead of fabricating a five-hour
+window. Set `SCRIBA_FEATURE_CODEX_TEMPORARY_NO_FIVE_HOUR=false` to disable this
+interpretation immediately if the upstream experiment changes unexpectedly.
+Normal primary-five-hour plus secondary-weekly responses are unaffected.
+
 Configure Telegram from the CLI:
 
 ```sh

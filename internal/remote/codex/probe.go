@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,8 @@ var (
 )
 
 var defaultHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+const temporaryNoFiveHourFeature = "SCRIBA_FEATURE_CODEX_TEMPORARY_NO_FIVE_HOUR"
 
 type usageResponse struct {
 	PlanType             string       `json:"plan_type"`
@@ -402,12 +405,25 @@ func appendRateLimitLines(lines []model.MetricLine, prefix string, limit *rateLi
 		return lines
 	}
 	if limit.PrimaryWindow != nil {
-		lines = append(lines, progressLine(limitLabel(prefix, "5h limit"), *limit.PrimaryWindow))
+		label := "5h limit"
+		if temporaryNoFiveHourEnabled() && limit.SecondaryWindow == nil && limit.PrimaryWindow.LimitWindowSeconds == 7*24*60*60 {
+			label = "Weekly limit"
+		}
+		lines = append(lines, progressLine(limitLabel(prefix, label), *limit.PrimaryWindow))
 	}
 	if limit.SecondaryWindow != nil {
 		lines = append(lines, progressLine(limitLabel(prefix, "Weekly limit"), *limit.SecondaryWindow))
 	}
 	return lines
+}
+
+func temporaryNoFiveHourEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(temporaryNoFiveHourFeature))) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func additionalLimitLabel(limit namedLimit) string {
