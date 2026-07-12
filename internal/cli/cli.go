@@ -63,6 +63,12 @@ type options struct {
 	env             string
 	backupDir       string
 	retention       int
+	limit           int
+	account         string
+	rule            string
+	id              string
+	status          string
+	target          string
 }
 
 func Run(args []string) int {
@@ -189,6 +195,10 @@ func dispatch(args []string) error {
 			return err
 		}
 		return runConfig(args[1], opts)
+	case "policy":
+		return dispatchPolicy(args[1:])
+	case "outbox":
+		return dispatchOutbox(args[1:])
 	case "cache":
 		if len(args) < 2 || isHelpArg(args[1]) {
 			fmt.Println(groupHelp("cache"))
@@ -317,10 +327,16 @@ var flagHelp = map[string]flagMeta{
 	"env":               {Name: "env", Value: "name", Usage: "server environment"},
 	"backup-dir":        {Name: "backup-dir", Value: "dir", Usage: "backup destination directory"},
 	"retention":         {Name: "retention", Value: "count", Usage: "number of Scriba backups to retain", Default: "14"},
+	"limit":             {Name: "limit", Value: "count", Usage: "maximum rows to return", Default: "100"},
+	"account":           {Name: "account", Value: "ref", Usage: "provider account reference"},
+	"rule":              {Name: "rule", Value: "id", Usage: "policy rule id"},
+	"id":                {Name: "id", Value: "id", Usage: "outbox message id"},
+	"status":            {Name: "status", Value: "status", Usage: "outbox status"},
+	"target":            {Name: "target", Value: "target", Usage: "delivery target"},
 }
 
 func parse(args []string, spec flagSpec) (options, []string, error) {
-	opts := options{provider: "all"}
+	opts := options{provider: "all", limit: 100}
 	fs := flag.NewFlagSet("scriba", flag.ContinueOnError)
 	for _, name := range spec.Flags {
 		switch name {
@@ -386,6 +402,18 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.StringVar(&opts.backupDir, name, "", flagHelp[name].Usage)
 		case "retention":
 			fs.IntVar(&opts.retention, name, 14, flagHelp[name].Usage)
+		case "limit":
+			fs.IntVar(&opts.limit, name, 100, flagHelp[name].Usage)
+		case "account":
+			fs.StringVar(&opts.account, name, "", flagHelp[name].Usage)
+		case "rule":
+			fs.StringVar(&opts.rule, name, "", flagHelp[name].Usage)
+		case "id":
+			fs.StringVar(&opts.id, name, "", flagHelp[name].Usage)
+		case "status":
+			fs.StringVar(&opts.status, name, "", flagHelp[name].Usage)
+		case "target":
+			fs.StringVar(&opts.target, name, "", flagHelp[name].Usage)
 		}
 	}
 	fs.SetOutput(os.Stdout)
@@ -1486,10 +1514,12 @@ func title(value string) string {
 
 func commands() map[string][]string {
 	return map[string][]string{
-		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "cache", "bench", "telegram", "server", "update", "version"},
+		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "policy", "outbox", "cache", "bench", "telegram", "server", "update", "version"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks", "budget"},
 		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "profile", "budget"},
 		"config":   {"path", "show", "init", "telegram"},
+		"policy":   {"validate", "list", "explain"},
+		"outbox":   {"list"},
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
 		"telegram": {"alerts", "reset"},
@@ -1564,6 +1594,27 @@ Commands:
 Examples:
   scriba config init
   scriba config telegram --enable --chat-id "$TELEGRAM_CHAT_ID" --bot-token-env SCRIBA_TELEGRAM_BOT_TOKEN`
+	case "policy":
+		return `scriba policy - Inspect and validate policy configuration.
+
+Commands:
+  scriba policy validate <file> [--json]
+  scriba policy list [--config <file>] [--json]
+  scriba policy explain [--provider name] [--account ref] [--rule id]
+
+Examples:
+  scriba policy validate policy.json
+  scriba policy list --config policy.json --json
+  scriba policy explain --provider codex --json`
+	case "outbox":
+		return `scriba outbox - Inspect notification delivery state without claiming messages.
+
+Commands:
+  scriba outbox list [--id id] [--status status] [--target target] [--limit count]
+
+Examples:
+  scriba outbox list --status leased
+  scriba outbox list --target telegram:123 --json`
 	case "cache":
 		return `scriba cache - Inspect and maintain the local derived cache.
 
@@ -1624,6 +1675,8 @@ Commands:
   server            resident Codex watcher and Telegram bot
   update            check or install the latest tagged release
   config            config file and Telegram settings
+  policy            inspect and validate policy configuration
+  outbox            inspect notification delivery state
   cache             derived cache maintenance
   telegram          legacy one-shot Telegram helpers
   bench             comparison helpers

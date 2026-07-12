@@ -1,0 +1,9 @@
+{
+  "preset": "custom",
+  "rules": [
+    {
+      "id": "custom.grant.available",
+      "kind": "grant_available"
+    }
+  ]
+}

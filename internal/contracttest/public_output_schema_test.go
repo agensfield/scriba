@@ -9,11 +9,15 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
+var publicOutputSchemaNames = []string{
+	"status", "codex-limits", "codex-profile", "codex-reset-grants", "budget",
+	"policy-validate", "policy-list", "policy-explain", "outbox-list",
+}
+
 func TestPublicOutputSchemas(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..")
-	cases := []string{"status", "codex-limits", "codex-profile", "codex-reset-grants", "budget"}
-	for _, name := range cases {
+	for _, name := range publicOutputSchemaNames {
 		name := name
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -52,6 +56,7 @@ func TestPublicOutputSchemasAllowOptionalOmissions(t *testing.T) {
 		"codex-limits":       map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "status-cache", "mode": "fast", "lines": []any{}},
 		"codex-profile":      map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-profile-backend", "profile": map[string]any{}, "stats": map[string]any{}, "metadata": map[string]any{}, "authState": map[string]any{"ok": false}},
 		"codex-reset-grants": map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-backend", "mode": "live", "authState": map[string]any{"ok": false}, "resetCredits": []any{}, "summary": map[string]any{"available": 0}},
+		"policy-validate":    map[string]any{"schemaVersion": "scriba.policy-validate.v1", "valid": false, "file": "invalid.json", "rules": []any{}, "errors": []any{"invalid policy"}},
 	}
 	for name, payload := range cases {
 		schema, err := publicOutputCompiler(t, root).Compile("https://agensfield.dev/scriba/schemas/" + name + ".schema.json")
@@ -67,7 +72,7 @@ func TestPublicOutputSchemasAllowOptionalOmissions(t *testing.T) {
 func publicOutputCompiler(t *testing.T, schemaDir string) *jsonschema.Compiler {
 	t.Helper()
 	compiler := jsonschema.NewCompiler()
-	for _, name := range []string{"status", "codex-limits", "codex-profile", "codex-reset-grants", "budget"} {
+	for _, name := range publicOutputSchemaNames {
 		data, err := os.ReadFile(filepath.Join(schemaDir, name+".schema.json"))
 		if err != nil {
 			t.Fatal(err)

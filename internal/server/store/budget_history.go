@@ -13,7 +13,9 @@ import (
 	"github.com/agensfield/scriba/internal/resetwatch"
 )
 
-// OpenReadOnly opens an existing database without migrations or filesystem writes.
+// OpenReadOnly opens an existing database without migrations, main-database
+// writes, or business-state mutations. SQLite may coordinate a live WAL reader
+// through transient sidecar bookkeeping.
 func OpenReadOnly(path string) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("store path is required")
