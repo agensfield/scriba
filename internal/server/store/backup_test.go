@@ -77,6 +77,9 @@ func TestOpenExistingDoesNotCreateOrMigrate(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	st, err := OpenExisting(path)
 	if err != nil {
@@ -93,6 +96,10 @@ func TestOpenExistingDoesNotCreateOrMigrate(t *testing.T) {
 	}
 	if hasAccounts != 0 {
 		t.Fatal("OpenExisting migrated the database")
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("OpenExisting changed source mode: %v, %v", info, err)
 	}
 }
 

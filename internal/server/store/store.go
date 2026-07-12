@@ -23,6 +23,8 @@ const SchemaVersion = 6
 
 const deliverySendLease = 10 * time.Minute
 
+const maxOpenConnections = 4
+
 type Store struct {
 	db   *sql.DB
 	path string
@@ -58,16 +60,43 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	if err := secureSQLiteFile(path); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", sqliteDSN(path, ""))
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(maxOpenConnections)
+	db.SetMaxIdleConns(maxOpenConnections)
 	store := &Store{db: db, path: path}
 	if err := store.Migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return store, nil
+}
+
+func sqliteDSN(path, extraQuery string) string {
+	u := &url.URL{Scheme: "file", Path: path}
+	query := u.Query()
+	query.Add("_pragma", "busy_timeout(5000)")
+	query.Add("_pragma", "foreign_keys(1)")
+	query.Set("_txlock", "immediate")
+	if extraQuery != "" {
+		extra, _ := url.ParseQuery(extraQuery)
+		for key, values := range extra {
+			for _, value := range values {
+				query.Add(key, value)
+			}
+		}
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
 }
 
 // OpenExisting opens an existing server database without creating directories
@@ -83,16 +112,30 @@ func OpenExisting(path string) (*Store, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("store path is not a regular file: %s", path)
 	}
-	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?mode=rw"
+	dsn := sqliteDSN(path, "mode=rw")
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(maxOpenConnections)
+	db.SetMaxIdleConns(maxOpenConnections)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return &Store{db: db, path: path}, nil
+}
+
+func secureSQLiteFile(path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- caller-selected local state path.
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func (s *Store) Close() error {
@@ -104,13 +147,13 @@ func (s *Store) Path() string {
 }
 
 func (s *Store) Migrate(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `pragma busy_timeout = 5000;`); err != nil {
-		return err
+	var journalMode string
+	if err := s.db.QueryRowContext(ctx, `pragma journal_mode = wal;`).Scan(&journalMode); err != nil {
+		return fmt.Errorf("enable WAL: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `pragma foreign_keys = on;`); err != nil {
-		return err
+	if !strings.EqualFold(journalMode, "wal") {
+		return fmt.Errorf("enable WAL: journal mode is %q", journalMode)
 	}
-	_, _ = s.db.ExecContext(ctx, `pragma journal_mode = wal;`)
 	_, err := s.db.ExecContext(ctx, schemaSQL)
 	if err != nil {
 		return err
@@ -1069,6 +1112,11 @@ on conflict(key) do update set value = excluded.value, updated_at = excluded.upd
 	return err
 }
 
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, `delete from server_settings where key = ?`, key)
+	return err
+}
+
 func (s *Store) GetTelegramOffset(ctx context.Context, botRef string) (int64, bool, error) {
 	var value int64
 	err := s.db.QueryRowContext(ctx, `select last_update_id from telegram_offsets where bot_ref = ?`, botRef).Scan(&value)
@@ -1082,7 +1130,8 @@ func (s *Store) SetTelegramOffset(ctx context.Context, botRef string, updateID i
 	_, err := s.db.ExecContext(ctx, `
 insert into telegram_offsets (bot_ref, last_update_id, updated_at)
 values (?, ?, ?)
-on conflict(bot_ref) do update set last_update_id = excluded.last_update_id, updated_at = excluded.updated_at`, botRef, updateID, formatTime(time.Now()))
+	on conflict(bot_ref) do update set last_update_id = excluded.last_update_id, updated_at = excluded.updated_at
+	where excluded.last_update_id > telegram_offsets.last_update_id`, botRef, updateID, formatTime(time.Now()))
 	return err
 }
 

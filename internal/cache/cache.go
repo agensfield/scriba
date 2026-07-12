@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -77,10 +79,29 @@ func Open(configured string) (*Cache, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "scriba.sqlite"))
+	dbPath := filepath.Join(dir, "scriba.sqlite")
+	f, err := os.OpenFile(dbPath, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- cache path is locally configured.
 	if err != nil {
 		return nil, err
 	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	u := &url.URL{Scheme: "file", Path: dbPath}
+	query := u.Query()
+	query.Add("_pragma", "busy_timeout(5000)")
+	query.Add("_pragma", "foreign_keys(1)")
+	u.RawQuery = query.Encode()
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	cache := &Cache{dir: dir, db: db}
 	if err := cache.init(); err != nil {
 		_ = db.Close()
@@ -107,10 +128,13 @@ func (c *Cache) DatabasePath() string {
 }
 
 func (c *Cache) init() error {
-	if _, err := c.db.Exec(`pragma busy_timeout = 5000;`); err != nil {
-		return err
+	var journalMode string
+	if err := c.db.QueryRow(`pragma journal_mode = wal;`).Scan(&journalMode); err != nil {
+		return fmt.Errorf("enable WAL: %w", err)
 	}
-	_, _ = c.db.Exec(`pragma journal_mode = wal;`)
+	if journalMode != "wal" {
+		return fmt.Errorf("enable WAL: journal mode is %q", journalMode)
+	}
 	_, err := c.db.Exec(`
 create table if not exists snapshots (
   name text primary key,

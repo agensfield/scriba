@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +12,73 @@ import (
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
 )
+
+func TestSQLiteConnectionPragmasWALPoolAndFileMode(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "scriba-server.sqlite")
+	if err := os.WriteFile(path, nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if got := store.db.Stats().MaxOpenConnections; got != 4 {
+		t.Fatalf("max connections = %d", got)
+	}
+	connections := make([]*sql.Conn, 0, 4)
+	for i := 0; i < 4; i++ {
+		conn, err := store.db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("connection %d: %v", i, err)
+		}
+		connections = append(connections, conn)
+		var busy, foreign int
+		if err := conn.QueryRowContext(ctx, `pragma busy_timeout`).Scan(&busy); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, `pragma foreign_keys`).Scan(&foreign); err != nil {
+			t.Fatal(err)
+		}
+		if busy != 5000 || foreign != 1 {
+			t.Fatalf("connection %d pragmas: busy=%d foreign=%d", i, busy, foreign)
+		}
+	}
+	for _, conn := range connections {
+		_ = conn.Close()
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode = %o", got)
+	}
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if sidecarInfo, err := os.Stat(sidecar); err == nil && sidecarInfo.Mode().Perm()&0o077 != 0 {
+			t.Fatalf("sidecar %s mode = %o", sidecar, sidecarInfo.Mode().Perm())
+		}
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	var mode string
+	if err := reopened.db.QueryRow(`pragma journal_mode`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "wal" {
+		t.Fatalf("journal mode = %q", mode)
+	}
+}
 
 func TestMigrationsAreIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "scriba-server.sqlite")
@@ -186,6 +255,34 @@ func TestDeliveriesSettingsAndTelegramOffset(t *testing.T) {
 	offset, ok, err := store.GetTelegramOffset(ctx, "codexusagebot")
 	if err != nil || !ok || offset != 42 {
 		t.Fatalf("unexpected offset=%d ok=%v err=%v", offset, ok, err)
+	}
+	var updatedAt string
+	if err := store.db.QueryRowContext(ctx, `select updated_at from telegram_offsets where bot_ref = ?`, "codexusagebot").Scan(&updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetTelegramOffset(ctx, "codexusagebot", 41); err != nil {
+		t.Fatal(err)
+	}
+	var unchanged string
+	if err := store.db.QueryRowContext(ctx, `select updated_at from telegram_offsets where bot_ref = ?`, "codexusagebot").Scan(&unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if unchanged != updatedAt {
+		t.Fatalf("updated_at changed on regression: %q != %q", unchanged, updatedAt)
+	}
+	if err := store.SetTelegramOffset(ctx, "codexusagebot", 43); err != nil {
+		t.Fatal(err)
+	}
+	offset, _, err = store.GetTelegramOffset(ctx, "codexusagebot")
+	if err != nil || offset != 43 {
+		t.Fatalf("advanced offset=%d err=%v", offset, err)
+	}
+	var advanced string
+	if err := store.db.QueryRowContext(ctx, `select updated_at from telegram_offsets where bot_ref = ?`, "codexusagebot").Scan(&advanced); err != nil {
+		t.Fatal(err)
+	}
+	if advanced == unchanged {
+		t.Fatalf("updated_at did not change on advance: %q", advanced)
 	}
 }
 
