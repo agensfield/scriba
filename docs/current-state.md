@@ -26,6 +26,17 @@ Claude Code and Codex usage tracker.
   zone.
 - The Codex parsed-event cache key is versioned with scanner semantics, so an
   upgrade cannot silently reuse incompatible historical events.
+- Codex token payloads decode integers exactly beyond JavaScript's safe-integer
+  boundary and reject fractional/overflow counters. Claude counters are clamped
+  nonnegative without conflating cache-read tokens with uncached input.
+- Both provider parser caches use explicit semantic namespaces. Frozen corpus
+  fixtures, cumulative-reset properties, and native fuzzers guard parsing.
+- Stable `scriba.v1` status, Codex limits, profile, and reset-grant JSON outputs
+  have checked-in Draft 2020-12 schemas and canonical validation goldens.
+- Pricing is embedded from a hash-bound reviewed offline catalog. Maintainer
+  refresh writes a candidate only; CI validates provenance, aliases, rates,
+  tier thresholds, boundary goldens, and deterministic generation without
+  network access.
 - The macOS app resolves a system `scriba` when same/newer than the bundled
   helper, otherwise it uses the bundled native Go helper.
 - The macOS app exposes used/remaining display mode, menu bar text mode, and

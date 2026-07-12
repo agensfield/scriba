@@ -300,3 +300,12 @@ No product implementation was started before this plan was reconciled.
   healthy empty queues, two clean additional polls, integrity checks, Bot API
   command registration, and a clean journal scan. Interactive `/health`
   durable-inbox smoke remains pending user input.
+- 2026-07-12: Wave 1.3 contract laboratory completed through `3aade5a`.
+  Codex integers are exact beyond 2^53 with explicit invalid-number rejection;
+  model precedence is deterministic; Codex and Claude parser caches have
+  semantic namespaces; corpus-seeded fuzz/property tests cover both parsers;
+  four existing `scriba.v1` outputs have compiled Draft 2020-12 schemas and
+  canonical goldens; GPT-5.6 pricing is loaded from a hash-bound reviewed
+  offline catalog with a candidate-only refresh/check workflow; and pinned
+  ccusage/openusage projections cover every 271999/272000/272001 GPT-5.6
+  boundary. Full Go security/lint gates and all 18 Swift tests passed locally.
