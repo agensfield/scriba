@@ -34,13 +34,12 @@ Claude Code and Codex usage tracker.
 - Stable `scriba.v1` status, Codex limits, profile, and reset-grant JSON outputs,
   plus `scriba.budget.v1` reports, have checked-in Draft 2020-12 schemas and
   canonical validation goldens.
-- Wave 3.1 shared agent context CLI is deployed through commit `e3cd9b2`.
+- Wave 3.1 shared agent context CLI is deployed.
   `scriba context --json` emits the allowlisted `scriba.context.v1` projection
   from read-only cache/store inputs, with independent freshness and absence per
   source, the `default` profile, and minimized durable policy events. The
-  owner-only Unix HTTP/SSE API and two-tool stdio MCP adapter are implemented
-  and cross-surface parity-tested through `e659570`, but remain undeployed until
-  the copied-live schema-v8 to v10 migration and rollback gate passes.
+  owner-only Unix HTTP/SSE API and two-tool stdio MCP adapter are deployed and
+  cross-surface parity-tested.
 - `scriba codex budget` and `scriba claude budget` derive provider-neutral quota
   pacing from fresh provider windows. They use percentage points rather than
   local token counts and intentionally have no `--fast` mode. Codex may use up
@@ -104,6 +103,11 @@ Claude Code and Codex usage tracker.
   `SCRIBA_FEATURE_CODEX_TEMPORARY_NO_FIVE_HOUR=false` as the kill switch.
   Weekly-only responses do not fabricate five-hour resets, warnings, budgets,
   or agent context, and the last durable five-hour state is preserved.
+- Wave 3.2 profile support is deployed on schema 11 at `538d557`. Config v1
+  remains one implicit `default` profile; config v2 supports stable explicit
+  profiles and disjoint auth paths. Polling, health, stats, refresh, CLI,
+  Unix HTTP/SSE, MCP, and Telegram selection all preserve profile isolation.
+  See [`schema-v11-migration.md`](schema-v11-migration.md).
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and
   `grant_expiry_checkpoint`. Its `current` preset preserves the existing
@@ -212,12 +216,13 @@ apps/macos/Scripts/package_zip.sh release
 
 ## Open Follow-Ups
 
-- Execute the accepted local usage control-plane program in
+- Continue the accepted local usage control-plane program in
   [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
   migration safety, the canonical outbox, budget surfaces, and the schema-v8
-  policy runtime, deployed inspection CLI surfaces, the Wave 3.1 context CLI,
-  and local API/SSE/MCP parity are completed checkpoints. Agent-transport
-  deployment, profiles, and remaining surface parity remain.
+  policy runtime, inspection CLI surfaces, Wave 3.1 agent transports, and Wave
+  3.2 profiles are completed checkpoints. Delivery adapters, full Telegram
+  inline parity, operations, and release evidence remain. The two-real-account
+  live profile proof is externally gated by a second Codex auth file.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.
 - Decide whether ad-hoc signed zip distribution is enough before

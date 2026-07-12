@@ -277,6 +277,12 @@ runs as one implicit profile; v10-to-v11 migration/rollback and account
 rotation are proven; no raw auth path, account ref, auth source, or credentials
 leak. Live release proof still needs two independent real Codex auth files.
 
+Current gate status: implementation, composed two-fixture isolation, schema-v11
+migration/rollback, compatibility-profile deployment, and all public-surface
+smokes passed through `538d557`. The devbox has only one real Codex auth file,
+so the explicitly separate two-real-account live proof remains externally
+gated. See [`schema-v11-migration.md`](schema-v11-migration.md).
+
 ### 3.3 Delivery adapters and Telegram parity
 
 - Add signed JSON webhooks and a narrow ntfy adapter over the canonical
