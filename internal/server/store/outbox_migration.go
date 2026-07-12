@@ -77,6 +77,7 @@ func (s *Store) migrateNotificationOutbox(ctx context.Context) (retErr error) {
 		if err = conn.QueryRowContext(ctx, fmt.Sprintf(`select count(*) from %s`, x.table)).Scan(&expected); err != nil {
 			return err
 		}
+		// #nosec G201 -- every interpolated identifier and SQL projection comes from the closed literal list above.
 		q := fmt.Sprintf(`insert into notification_outbox(id,event_kind,source,account_ref,event_id,target,payload_version,payload_json,status,attempts,available_at,delivered_at,provider_message_id,last_error,dead_lettered_at,created_at,updated_at)
 select 'legacy:'||d.id,?,'legacy-v6',%s,d.%s,d.target,1,%s,case when d.status='delivered' then 'delivered' when d.attempts>=? then 'dead_letter' else 'pending' end,d.attempts,coalesce(d.next_attempt_at,d.created_at),d.delivered_at,d.provider_message_id,d.last_error,case when d.status!='delivered' and d.attempts>=? then d.updated_at end,d.created_at,d.updated_at from %s d join %s e on e.id=d.%s on conflict(event_kind,event_id,target) do nothing`, x.account, x.id, x.payload, x.table, x.event, x.id)
 		if _, err = conn.ExecContext(ctx, q, x.kind, OutboxMaxAttempts, OutboxMaxAttempts); err != nil {
