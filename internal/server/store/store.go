@@ -26,8 +26,9 @@ const deliverySendLease = 10 * time.Minute
 const maxOpenConnections = 4
 
 type Store struct {
-	db   *sql.DB
-	path string
+	db                  *sql.DB
+	path                string
+	applyCodexPollFault func(string) error
 }
 
 type Delivery struct {
