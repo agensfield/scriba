@@ -80,7 +80,8 @@ Claude Code and Codex usage tracker.
   replay or events, and subsequent polls evaluate state and enqueue any new
   semantic events atomically through the canonical outbox.
 - Read-only `policy validate`, `policy list`, `policy explain`, and `outbox
-  list` inspection surfaces are implemented. State-backed queries use a
+  list` inspection surfaces are deployed on the devbox at commit `a168e34`.
+  State-backed queries use a
   read-only SQLite open, support bounded exact filters, offer field-aware
   redaction, and publish the typed `scriba.policy-validate.v1`,
   `scriba.policy-list.v1`, `scriba.policy-explain.v1`, and
@@ -169,9 +170,9 @@ apps/macos/Scripts/package_zip.sh release
 - Execute the accepted local usage control-plane program in
   [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
   migration safety, the canonical outbox, budget surfaces, and the schema-v8
-  policy runtime and inspection CLI surfaces are completed checkpoints. Exact
-  fixture-transition and Telegram-retry release proof, agent interfaces,
-  profiles, and surface parity remain.
+  policy runtime and deployed inspection CLI surfaces are completed
+  checkpoints. Exact fixture-transition and Telegram-retry release proof,
+  agent interfaces, profiles, and surface parity remain.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.
 - Decide whether ad-hoc signed zip distribution is enough before

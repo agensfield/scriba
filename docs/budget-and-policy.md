@@ -1,8 +1,8 @@
 # Budget and Policy Checkpoint
 
 This document records the Wave 2.1 budget and policy boundary. Schema v8 and
-atomic policy evaluation are live on the devbox at commit `c32d885`; read-only
-policy inspection CLI surfaces are implemented in the current worktree. Exact
+atomic policy evaluation are live on the devbox. The read-only policy
+inspection CLI surfaces were deployed at commit `a168e34`. Exact
 fixture-transition and Telegram retry proof still keep the Wave 2 release gate
 open.
 

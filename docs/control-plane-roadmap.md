@@ -171,8 +171,8 @@ Status: live runtime cutover completed at commit `c32d885`. Schema v8, atomic
 policy persistence/event production, bootstrap without replay, copied-live
 migration proof, and the devbox deployment receipt are complete. Read-only
 policy validation/list/explanation and outbox-list inspection surfaces are also
-implemented with typed JSON schemas and read-only store access. The remaining
-Wave 2 release gate stays open.
+deployed at commit `a168e34`, with typed JSON schemas and read-only store
+access. The remaining Wave 2 release gate stays open.
 
 - Normalize stable provider budget keys before policy evaluation.
 - Support closed rule kinds for remaining checkpoints, reset transitions,

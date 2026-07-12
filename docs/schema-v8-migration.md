@@ -53,8 +53,25 @@ The expected direct Telegram send at startup was traced to the configured
 startup heartbeat and its `startup_heartbeat_at` state, not policy delivery.
 The Telegram Bot API returned `true`, and all 11 commands were registered.
 
-The schema-v8 policy runtime cutover is therefore complete. Read-only policy
-`validate`, `list`, `explain`, and outbox-list CLI surfaces were implemented
-after this deployment receipt; they do not alter the migration evidence above.
-Exact fixture-transition events and Telegram retry-through-outbox proof remain
-open for the Wave 2 release gate.
+The schema-v8 policy runtime cutover is therefore complete.
+
+## Policy inspection deployment receipt
+
+Commit `a168e34` was installed on the devbox after the migration cutover. The
+installed binary SHA-256 was
+`f464fe73c89a4eda3fa990c5bc3905880199cd4a774324eaca897d31395e8741`.
+After restart, `scriba server health --env prod --json` reported the same
+commit, `status=ok`, zero consecutive failures, and a fresh successful poll.
+`scriba server status --env prod --json` reported schema 8.
+
+The installed `policy explain` and `outbox list` commands read 15 persisted
+policy evaluations and 40 delivered outbox messages. Before and after the
+candidate smoke, policy event and outbox aggregates remained at zero policy
+events, 40 delivered messages, and 41 delivery attempts. Redacted explanation
+output removed account references. The service journal contained no startup or
+SQLite error, and all pending, leased, expired, and dead-letter queue counts
+remained zero.
+
+This inspection deployment does not alter the migration evidence above. Exact
+fixture-transition events and Telegram retry-through-outbox proof remain open
+for the Wave 2 release gate.
