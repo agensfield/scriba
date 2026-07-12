@@ -10,13 +10,19 @@ import (
 
 	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/budgetadapter"
+	"github.com/agensfield/scriba/internal/privacy"
 	"github.com/agensfield/scriba/internal/remote"
 	remoteclaude "github.com/agensfield/scriba/internal/remote/claude"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
-func runBudget(providerID string, opts options) error {
+func runBudget(providerID string, opts options) (err error) {
+	defer func() {
+		if err != nil && opts.redact {
+			err = redactBudgetError(err)
+		}
+	}()
 	cfg, err := load(opts)
 	if err != nil {
 		return err
@@ -40,7 +46,7 @@ func runBudget(providerID string, opts options) error {
 		return fmt.Errorf("%s auth unavailable", providerID)
 	}
 	now := time.Now().UTC()
-	observedAt := probeObservedAt(result, now)
+	observedAt := now
 	observation := budgetadapter.FromMetricLines(providerID, observedAt, result.Lines)
 	history, historyState, err := budgetHistory(context.Background(), providerID, result.AuthState, cfg.Server.StatePath, opts.statePath, observedAt)
 	if err != nil {
@@ -50,13 +56,8 @@ func runBudget(providerID string, opts options) error {
 	return output(opts, report, renderBudget(report))
 }
 
-func probeObservedAt(result remote.ProbeResult, fallback time.Time) time.Time {
-	for i := len(result.Provenance) - 1; i >= 0; i-- {
-		if parsed, err := time.Parse(time.RFC3339Nano, result.Provenance[i].FetchedAt); err == nil {
-			return parsed.UTC()
-		}
-	}
-	return fallback
+func redactBudgetError(err error) error {
+	return errors.New(fmt.Sprint(privacy.Redact(err.Error())))
 }
 
 func budgetHistory(ctx context.Context, providerID string, auth remote.AuthState, configured, override string, observedAt time.Time) ([]budget.Observation, budget.HistoryState, error) {

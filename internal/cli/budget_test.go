@@ -2,15 +2,22 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/agensfield/scriba/internal/budget"
-	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/remote"
 )
+
+func TestBudgetErrorRedaction(t *testing.T) {
+	got := redactBudgetError(errors.New("open /Users/arda/private.sqlite: nope")).Error()
+	if strings.Contains(got, "/Users/arda") || !strings.Contains(got, "/Users/[redacted]") {
+		t.Fatalf("error was not redacted: %q", got)
+	}
+}
 
 func TestBudgetHistoryIsUnavailableWithoutStateDatabase(t *testing.T) {
 	history, state, err := budgetHistory(context.Background(), "codex", remote.AuthState{AccountID: "acct"}, filepath.Join(t.TempDir(), "missing.sqlite"), "", time.Now())
@@ -26,14 +33,6 @@ func TestClaudeBudgetHistoryIsExplicitlyUnavailable(t *testing.T) {
 	history, state, err := budgetHistory(context.Background(), "claude", remote.AuthState{}, "", "", time.Now())
 	if err != nil || history != nil || state != budget.HistoryUnavailable {
 		t.Fatalf("history=%#v state=%q err=%v", history, state, err)
-	}
-}
-
-func TestProbeObservedAtUsesProviderProvenance(t *testing.T) {
-	want := time.Date(2026, 7, 12, 2, 3, 4, 0, time.UTC)
-	got := probeObservedAt(remote.ProbeResult{Provenance: []model.SourceProvenance{{FetchedAt: want.Format(time.RFC3339Nano)}}}, want.Add(time.Hour))
-	if !got.Equal(want) {
-		t.Fatalf("observed at = %s, want %s", got, want)
 	}
 }
 
