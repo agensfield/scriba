@@ -8,8 +8,9 @@ ChatGPT/Codex subscription usage backend when your local Codex auth is
 available, and keeps enough SQLite state to send useful reset and limit
 notifications without becoming the source of truth.
 
-The macOS menu bar app still exists under `apps/macos`, but the mainline
-product surface is now the CLI plus the resident `scriba server` process.
+The macOS menu bar app remains archived in place under `apps/macos`, but it is
+outside the active product roadmap. The maintained product surfaces are the
+CLI, resident server, Telegram, Unix HTTP/SSE API, and stdio MCP.
 
 ## Features
 

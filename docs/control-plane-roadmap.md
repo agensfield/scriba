@@ -252,14 +252,30 @@ last state. See [`schema-v10-migration.md`](schema-v10-migration.md).
 
 - Use server schema v11 for profile/account mappings and isolated poll health;
   schemas v9 and v10 are the earlier replay-sequence and tombstone migrations.
-- Add backward-compatible config schema v2 with stable profile IDs, labels,
-  explicit auth paths, enabled state, and a default profile.
-- Poll profiles sequentially and isolate health/failure state. One failed
-  account cannot stop healthy accounts or global radar evaluation.
-- Add profile-aware CLI, server stats/health, Telegram commands, and JSON.
+- Config v2 owns stable bounded profile IDs, labels, enabled state, one enabled
+  default, and explicit absolute disjoint Codex auth paths. It never consults
+  ambient `CODEX_HOME`. Config v1 still loads as one in-memory implicit
+  `default` profile using its existing account label and auth discovery, without
+  rewriting the file.
+- Profile identity comes from config; provider account identity is observed.
+  Schema v11 stores safe profile metadata, historical/current account mappings,
+  and sanitized per-profile poll health. It never stores auth paths. A newly
+  observed mapping is committed atomically with its account poll, policy events,
+  and outbox intents; one provider account cannot silently belong to two
+  profiles.
+- Poll enabled profiles sequentially in config order with bounded per-profile
+  work. One failed account cannot stop healthy accounts, global Radar
+  evaluation, or global pruning. Aggregate health is derived from isolated
+  profile health; backoff applies only when every enabled profile fails.
+- Add safe profile-aware CLI and typed JSON, server refresh/stats/health,
+  agent-context selection across CLI/Unix HTTP/SSE/MCP, and minimal Telegram
+  `/profiles` plus profile arguments. Full Telegram inline navigation remains
+  in 3.3.
 
 Gate: two independent fixture auth files remain isolated; config v1 still
-runs as one implicit profile; no raw auth path or credentials leak.
+runs as one implicit profile; v10-to-v11 migration/rollback and account
+rotation are proven; no raw auth path, account ref, auth source, or credentials
+leak. Live release proof still needs two independent real Codex auth files.
 
 ### 3.3 Delivery adapters and Telegram parity
 
@@ -268,24 +284,23 @@ runs as one implicit profile; no raw auth path or credentials leak.
 - Add Telegram account navigation, explicit profile callbacks, stable inline
   navigation, group-user allowlisting, bounded HTML pagination, and robust
   callback handling.
-- Keep desktop notifications inside the macOS app; remote desktop delivery is
-  ntfy's responsibility.
+- Remote desktop delivery is ntfy's responsibility.
 
 Gate: adapter retries and terminal/retryable HTTP classes are deterministic;
 Telegram content remains below platform limits and all auth paths share tests.
 
-### 3.4 macOS and operational parity
+### 3.4 Operational and release parity
 
-- Add profile selection, grants/profile visibility, truthful stale/degraded
-  state, local notification dedupe, and `SMAppService` launch at login.
 - Add bounded retention for events/deliveries, scheduled verified backups,
   systemd hardening/linger guidance, reproducible tagged CLI releases,
   checksums, attestations, and security documentation.
-- Notarized macOS artifacts require Apple credentials and final bundle
-  ownership. Sparkle waits until notarization is stable.
 
-Gate: deterministic Swift previews/tests, packaged helper parity, devbox reboot
-and restore drills, clean journal inspection, and release artifact verification.
+Gate: devbox reboot and restore drills, clean journal inspection, and
+reproducible CLI/server release artifact verification.
+
+The existing macOS menu app is preserved but explicitly outside this program.
+No menu-app UI parity, packaging, launch-at-login, notarization, or Sparkle work
+is required for completion.
 
 ## Commit and Release Discipline
 
@@ -308,8 +323,8 @@ Pause a phase and report a blocker when any of these is true:
 - migration cannot preserve or safely classify existing delivery state;
 - rollback with the previous binary is unproven;
 - a new dependency cannot pass a maintenance/security/size review;
-- live validation requires unavailable independent accounts, Apple signing
-  credentials, or external infrastructure.
+- live validation requires unavailable independent accounts or external
+  infrastructure.
 
 ## Known Blockers
 
@@ -322,8 +337,6 @@ Pause a phase and report a blocker when any of these is true:
   required.
 - Off-host backup destination/retention is not defined. Verified local backups
   are recoverability, not disaster recovery.
-- Notarized macOS release requires Developer ID/notary credentials and final
-  bundle ownership.
 - Homebrew updates remain manual until the automated CLI release path has
   proven stable.
 
@@ -337,6 +350,15 @@ one canonical outbox migration in Wave 1 and makes all later policy/adapters
 reuse it.
 
 No product implementation was started before this plan was reconciled.
+
+Wave 3.2 was re-reconciled on 2026-07-12 after Wave 3.1 deployment. The binding
+sequence is config-v2 compatibility and explicit auth routing, schema-v11
+durable identity, isolated sequential polling, typed CLI/server JSON, agent
+transport selection, minimal Telegram profile arguments, then composed
+two-auth isolation proof. Stable profile identity must come from durable
+mappings rather than being painted onto account-scoped history. The same scope
+review removed all macOS menu-app development from the program while retaining
+CLI/server operational and release work.
 
 ## Execution Receipts
 

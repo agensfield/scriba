@@ -9,8 +9,8 @@ Claude Code and Codex usage tracker.
 
 - Go CLI at `cmd/scriba`.
 - Implementation under `internal/`.
-- Swift/AppKit/SwiftUI menu bar app under `apps/macos`, currently
-  de-emphasized for mainline while the CLI/server product is polished.
+- The existing Swift/AppKit/SwiftUI menu bar app remains under `apps/macos` but
+  is outside the active roadmap and will not receive parity or packaging work.
 - SQLite derived cache under `~/.cache/scriba` by default.
 - JSON status snapshot supports `scriba status --fast`.
 - Codex local reports preserve full traffic while exposing effective tokens
