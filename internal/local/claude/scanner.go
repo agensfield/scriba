@@ -90,7 +90,10 @@ func ParseFile(projectsDir, filePath string) ([]model.LocalUsageEvent, model.Sca
 			modelName = "unknown"
 		}
 		usage := rec.Message.Usage
-		cacheRead := usage.CacheReadInputTokens
+		input := max(usage.InputTokens, 0)
+		output := max(usage.OutputTokens, 0)
+		cacheCreation := max(usage.CacheCreationInputTokens, 0)
+		cacheRead := max(usage.CacheReadInputTokens, 0)
 		events = append(events, model.LocalUsageEvent{
 			ProviderID:            "claude",
 			SessionID:             sessionID,
@@ -98,13 +101,13 @@ func ParseFile(projectsDir, filePath string) ([]model.LocalUsageEvent, model.Sca
 			Model:                 modelName,
 			Project:               projectFromPath(projectsDir, filePath),
 			ProjectPath:           rec.Cwd,
-			InputTokens:           usage.InputTokens,
-			OutputTokens:          usage.OutputTokens,
-			CacheCreationTokens:   usage.CacheCreationInputTokens,
+			InputTokens:           input,
+			OutputTokens:          output,
+			CacheCreationTokens:   cacheCreation,
 			CacheReadTokens:       cacheRead,
 			CachedInputTokens:     cacheRead,
 			ReasoningOutputTokens: 0,
-			TotalTokens:           usage.InputTokens + usage.OutputTokens + usage.CacheCreationInputTokens + cacheRead,
+			TotalTokens:           input + output + cacheCreation + cacheRead,
 			CostUSD:               rec.CostUSD,
 			UniqueKey:             uniqueKey,
 			SourcePath:            filePath,
