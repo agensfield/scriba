@@ -286,3 +286,14 @@ one canonical outbox migration in Wave 1 and makes all later policy/adapters
 reuse it.
 
 No product implementation was started before this plan was reconciled.
+
+## Execution Receipts
+
+- 2026-07-12: schema-v7 canonical outbox, durable Telegram inbox, atomic
+  five-kind producer enqueue, target-filtered fenced dispatch, and queue
+  health/stats activated at `6d4e8e2`. Full local race/lint/security gates
+  passed. A verified live-v6 backup containing all five legacy ledgers migrated
+  on a disposable copy with exact 38-row reconciliation, clean integrity
+  checks, idempotent reopen, schema-v7 backup proof, and previous-binary
+  rollback-copy proof. See `docs/schema-v7-migration.md`. Live deployment is
+  intentionally pending the fresh predeploy backup and soak sequence.

@@ -105,9 +105,45 @@ rm /tmp/scriba-restore-drill.sqlite
 systemctl --user start scriba.service
 ```
 
-The status command currently opens and migrates its target, so use it only on
-the disposable drill copy. Automated destructive restore is intentionally not
+The status command opens and migrates its target, so use it only on the
+disposable drill copy. Automated destructive restore is intentionally not
 implemented.
+
+### Schema upgrade and rollback drill
+
+For any schema-changing deploy, do not let the new binary touch the live state
+until the old binary has produced a verified backup and the new binary has
+migrated a copy of that exact backup successfully.
+
+```sh
+# 1. While the old service is healthy, create a verified online backup.
+scriba server backup --env prod --json
+
+# 2. Copy that immutable backup to a disposable path and run the new binary
+# against only the copy. Verify schema, integrity, and queue reconciliation.
+cp ~/.local/state/scriba/backups/<backup>.sqlite /tmp/scriba-upgrade-drill.sqlite
+<new-scriba> server status --state-path /tmp/scriba-upgrade-drill.sqlite --json
+sqlite3 -readonly /tmp/scriba-upgrade-drill.sqlite \
+  'PRAGMA quick_check; PRAGMA foreign_key_check; SELECT max(version) FROM schema_migrations;'
+
+# 3. Prove the previous binary can open a fresh copy of the untouched backup.
+cp ~/.local/state/scriba/backups/<backup>.sqlite /tmp/scriba-rollback-drill.sqlite
+<previous-scriba> server status --state-path /tmp/scriba-rollback-drill.sqlite --json
+
+# 4. Stop, install, start, and inspect. The first live open performs migration.
+systemctl --user stop scriba.service
+install -m 0755 <new-scriba> ~/.local/bin/scriba
+systemctl --user start scriba.service
+scriba server health --env prod --json
+scriba server stats --env prod --json
+journalctl --user -u scriba.service -n 100 --no-pager
+```
+
+Rollback restores the verified pre-upgrade backup before starting the previous
+binary. Never point a previous binary at a database already migrated by a newer
+binary. Preserve the failed/new database separately for diagnosis.
+
+The schema-v7 proof receipt is in `docs/schema-v7-migration.md`.
 
 ## Notifications
 

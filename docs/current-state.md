@@ -48,9 +48,15 @@ Claude Code and Codex usage tracker.
 - Telegram `/grants` and its dedicated inline keyboard button render every
   available reset grant from the latest durable server observation, including
   title, type, status, granted time, expiry, remaining lifetime, and full id.
-- Telegram delivery rows are leased as `sending` before network sends, so the
-  retry loop cannot concurrently resend an in-flight notification. Send
-  timeouts are treated as ambiguous and do not trigger HTML-to-plain fallback.
+- Schema v7 stores reset, limit-warning, grant-warning, reset-grant, and Radar
+  notification intents in one canonical outbox, atomically with their typed
+  business events. Telegram claims one target-filtered row at a time with a
+  fenced lease; legacy delivery tables remain read-only migration evidence.
+- Telegram `getUpdates` batches are durably staged as exact raw JSON before the
+  polling dependency can advance its cursor. Pending updates replay after a
+  crash, while malformed updates dead-letter visibly.
+- Server stats and health expose outbox/inbox backlog, due work, attempts,
+  oldest pending age, expired leases, and dead letters.
 - `scriba codex summary` appends live Codex limit/reset-grant metadata unless
   `--no-remote` is passed.
 - `scriba codex reset-grants` shows every available reset grant and each
