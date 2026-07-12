@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -745,18 +743,7 @@ func (NoopNotifier) NotifyHealth(context.Context, HealthNotice) error {
 }
 
 func accountRef(auth remote.AuthState) string {
-	if auth.AccountID != "" {
-		return auth.AccountID
-	}
-	stable := auth.Email
-	if stable == "" {
-		stable = auth.Source
-	}
-	if stable == "" {
-		stable = "unknown"
-	}
-	sum := sha256.Sum256([]byte(stable))
-	return "acct_" + hex.EncodeToString(sum[:8])
+	return remote.AccountRef(auth)
 }
 
 func planFromLines(lines []model.MetricLine) string {

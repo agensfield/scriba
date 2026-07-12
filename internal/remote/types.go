@@ -1,6 +1,11 @@
 package remote
 
-import "github.com/agensfield/scriba/internal/model"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+
+	"github.com/agensfield/scriba/internal/model"
+)
 
 type AuthState struct {
 	OK          bool   `json:"ok"`
@@ -9,6 +14,21 @@ type AuthState struct {
 	Email       string `json:"email,omitempty"`
 	AccessToken string `json:"-"`
 	AccountID   string `json:"-"`
+}
+
+func AccountRef(auth AuthState) string {
+	if auth.AccountID != "" {
+		return auth.AccountID
+	}
+	stable := auth.Email
+	if stable == "" {
+		stable = auth.Source
+	}
+	if stable == "" {
+		stable = "unknown"
+	}
+	sum := sha256.Sum256([]byte(stable))
+	return "acct_" + hex.EncodeToString(sum[:8])
 }
 
 type ProbeResult struct {

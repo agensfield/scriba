@@ -118,6 +118,19 @@ func dispatch(args []string) error {
 			}
 			return runCodexLimits(opts)
 		}
+		if args[1] == "budget" {
+			opts, rest, err := parse(args[2:], flagSpec{
+				Use:   fmt.Sprintf("scriba %s budget [flags]", args[0]),
+				Flags: []string{"json", "config", "state-path", "redact"},
+			})
+			if err != nil {
+				return err
+			}
+			if len(rest) > 0 {
+				return fmt.Errorf("scriba %s budget does not accept positional arguments", args[0])
+			}
+			return runBudget(args[0], opts)
+		}
 		if args[0] == "codex" && (args[1] == "profile" || args[1] == "profile-stats") {
 			opts, _, err := parse(args[2:], flagSpec{
 				Use:   "scriba codex profile [flags]",
@@ -1474,8 +1487,8 @@ func title(value string) string {
 func commands() map[string][]string {
 	return map[string][]string{
 		"root":     {"doctor", "status", "claude", "codex", "schema", "config", "cache", "bench", "telegram", "server", "update", "version"},
-		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks"},
-		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "profile"},
+		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks", "budget"},
+		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "profile", "budget"},
 		"config":   {"path", "show", "init", "telegram"},
 		"cache":    {"status", "reset", "prune", "vacuum"},
 		"bench":    {"ccusage"},
@@ -1496,6 +1509,7 @@ Commands:
   scriba claude monthly
   scriba claude sessions
   scriba claude blocks
+  scriba claude budget
 
 Common flags:
   --since time       start date or timestamp
@@ -1518,11 +1532,13 @@ Commands:
   scriba codex limits
   scriba codex reset-grants
   scriba codex profile
+  scriba codex budget
 
 Live commands:
   limits           fetch current Codex windows from ChatGPT/Codex auth
   reset-grants     show available reset grants and their expirations
   profile          show ChatGPT/Codex profile token activity
+  budget           derive quota pacing and exhaustion risk from live limits
 
 Common flags:
   --since time       start date or timestamp
@@ -1533,6 +1549,7 @@ Common flags:
 Examples:
   scriba codex summary
   scriba codex limits --json
+  scriba codex budget
   scriba codex reset-grants
   scriba codex profile`
 	case "config":
