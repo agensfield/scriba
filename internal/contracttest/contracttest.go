@@ -24,7 +24,7 @@ type Case struct {
 }
 
 func LoadManifest(root string) (Manifest, error) {
-	data, err := os.ReadFile(filepath.Join(root, "manifest.json"))
+	data, err := os.ReadFile(filepath.Join(root, "manifest.json")) // #nosec G304 -- root is a checked-in test fixture directory.
 	if err != nil {
 		return Manifest{}, err
 	}
