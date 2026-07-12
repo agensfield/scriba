@@ -258,6 +258,9 @@ func (s *Server) Run(ctx context.Context) error {
 	backoff := DefaultBackoff
 	for {
 		if _, err := s.RefreshNow(ctx); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			s.logger.Warn("scriba server poll failed", "error", err)
 			if !sleep(ctx, backoff) {
 				return ctx.Err()

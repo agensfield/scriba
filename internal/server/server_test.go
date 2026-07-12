@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -405,6 +407,29 @@ func TestRefreshNowIsSingleFlight(t *testing.T) {
 	close(release)
 	if err := <-errs; err != nil {
 		t.Fatalf("first refresh failed: %v", err)
+	}
+}
+
+func TestRunDoesNotLogShutdownCancellationAsPollFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	fetcher := fakeFetcherFunc(func(ctx context.Context) (remote.ProbeResult, error) {
+		close(started)
+		<-ctx.Done()
+		return remote.ProbeResult{}, ctx.Err()
+	})
+	srv := New(openStore(t), fetcher, nil, Config{})
+	var logs bytes.Buffer
+	srv.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	done := make(chan error, 1)
+	go func() { done <- srv.Run(ctx) }()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("run err=%v", err)
+	}
+	if strings.Contains(logs.String(), "poll failed") || strings.Contains(logs.String(), "context canceled") {
+		t.Fatalf("shutdown cancellation logged as failure: %s", logs.String())
 	}
 }
 
