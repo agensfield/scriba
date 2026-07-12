@@ -5,8 +5,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/agensfield/scriba/internal/resetwatch"
 )
 
 func TestLoadAgentEventsBoundedAndDeterministic(t *testing.T) {
@@ -15,13 +18,14 @@ func TestLoadAgentEventsBoundedAndDeterministic(t *testing.T) {
 	if _, err := s.db.ExecContext(ctx, `insert into accounts(provider_id,account_ref,label,email,plan,updated_at) values('codex','acct','','','','2026-07-12T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
+	payload := agentWarningPayload(t)
 	for i := 0; i < 105; i++ {
 		id := fmt.Sprintf("event-%03d", i)
 		at := "2026-07-12T00:00:00Z"
 		if i < 103 {
 			at = time.Date(2026, 7, 11, 0, 0, i, 0, time.UTC).Format(time.RFC3339Nano)
 		}
-		_, err := s.db.ExecContext(ctx, `insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, id, "limit_warning", id, "rule", "subject", "remaining_checkpoint", "codex", "acct", "rev", "hash", 1, `{"remaining":10}`, at, at)
+		_, err := s.db.ExecContext(ctx, `insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, id, "limit_warning", id, "rule", "subject", "remaining_checkpoint", "codex", "acct", "rev", "hash", 1, payload, at, at)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,12 +41,12 @@ func TestLoadAgentEventsBoundedAndDeterministic(t *testing.T) {
 	if events[0].ID != "event-104" || events[1].ID != "event-103" {
 		t.Fatalf("unstable newest tie ordering: %q, %q", events[0].ID, events[1].ID)
 	}
-	if got := events[0]; got.EventKind != "limit_warning" || got.ProviderID != "codex" || got.PayloadJSON != `{"remaining":10}` {
+	if got := events[0]; got.Kind != "remaining_checkpoint" || got.ProviderID != "codex" || got.WindowKey != "primary.five_hour" || got.Checkpoint != 20 || got.UsedPercent == nil || *got.UsedPercent != 81 || got.RemainingPercentPoints == nil || *got.RemainingPercentPoints != 19 {
 		t.Fatalf("unexpected event mapping: %#v", got)
 	}
 
 	one, err := s.LoadAgentEvents(ctx, 1)
-	if err != nil || len(one) != 1 || one[0] != events[0] {
+	if err != nil || len(one) != 1 || !reflect.DeepEqual(one[0], events[0]) {
 		t.Fatalf("repeat read differs: events=%#v err=%v", one, err)
 	}
 }
@@ -50,7 +54,10 @@ func TestLoadAgentEventsBoundedAndDeterministic(t *testing.T) {
 func TestLoadAgentEventsThroughReadOnlyStoreDoesNotMutateFilesOrDatabase(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	if _, err := s.db.ExecContext(ctx, `insert into accounts(provider_id,account_ref,label,email,plan,updated_at) values('codex','acct','','','','2026-07-12T00:00:00Z'); insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values('event','event','limit_warning','event','rule','subject','remaining_checkpoint','codex','acct','rev','hash',1,'{}','2026-07-12T00:00:00Z','2026-07-12T00:00:00Z')`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `insert into accounts(provider_id,account_ref,label,email,plan,updated_at) values('codex','acct','','','','2026-07-12T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values('event','event','limit_warning','event','rule','subject','remaining_checkpoint','codex','acct','rev','hash',1,?,'2026-07-12T00:00:00Z','2026-07-12T00:00:00Z')`, agentWarningPayload(t)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.ExecContext(ctx, `pragma wal_checkpoint(truncate)`); err != nil {
@@ -99,6 +106,24 @@ func TestLoadAgentEventsThroughReadOnlyStoreDoesNotMutateFilesOrDatabase(t *test
 	if mainAfter != mainBefore {
 		t.Fatalf("read-only open changed main database: before=%v after=%v", mainBefore, mainAfter)
 	}
+}
+
+func agentWarningPayload(t *testing.T) string {
+	t.Helper()
+	payload, err := EncodeOutboxPayload("limit_warning", resetwatch.WarningEvent{
+		Account:            resetwatch.Account{Label: "PRIVATE_LABEL", Email: "PRIVATE_EMAIL", Plan: "PRIVATE_PLAN"},
+		Label:              resetwatch.LabelFiveHour,
+		ThresholdRemaining: 20,
+		UsedPercent:        81,
+		RemainingPercent:   19,
+		ResetAt:            time.Date(2026, 7, 12, 13, 0, 0, 0, time.UTC),
+		SnapshotJSON:       []byte(`{"secret":"PRIVATE_SNAPSHOT"}`),
+		DetectedAt:         time.Date(2026, 7, 12, 8, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
 
 type storeFileSnapshot struct {
