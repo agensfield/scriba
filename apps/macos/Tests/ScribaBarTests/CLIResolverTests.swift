@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import ScribaBar
 
-@Suite("CLI resolver")
+@Suite("CLI resolver", .serialized)
 struct CLIResolverTests {
     @Test("semantic versions compare prereleases below stable")
     func semanticVersionComparison() throws {
