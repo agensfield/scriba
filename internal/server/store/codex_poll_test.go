@@ -59,6 +59,56 @@ func TestApplyCodexPollBootstrapThenEmitOnce(t *testing.T) {
 	}
 }
 
+func TestApplyCodexPollTreatsTemporaryFiveHourDisappearanceAsAbsence(t *testing.T) {
+	s := openPollStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 12, 20, 0, 0, 0, time.UTC)
+	fivePeriod := int64((5 * time.Hour) / time.Millisecond)
+	weekPeriod := int64((7 * 24 * time.Hour) / time.Millisecond)
+	fiveUsed, weekUsed := 81.0, 20.0
+	fiveReset, weekReset := base.Add(5*time.Hour), base.Add(7*24*time.Hour)
+	bootstrap := resetwatch.Observation{
+		ProviderID:   resetwatch.ProviderCodex,
+		Account:      resetwatch.Account{Ref: "acct", Label: "Test"},
+		ObservedAt:   base,
+		SnapshotJSON: []byte(`{"shape":"dual"}`),
+		Windows: []resetwatch.Window{
+			{Label: resetwatch.LabelFiveHour, UsedPercent: &fiveUsed, ResetAt: fiveReset, PeriodDurationMs: &fivePeriod},
+			{Label: resetwatch.LabelWeeklyLimit, UsedPercent: &weekUsed, ResetAt: weekReset, PeriodDurationMs: &weekPeriod},
+		},
+	}
+	if got, err := s.ApplyCodexPoll(ctx, pollInput(bootstrap, "telegram:42")); err != nil || len(got.PolicyEvents) != 0 {
+		t.Fatalf("bootstrap=%+v err=%v", got, err)
+	}
+
+	at := base.Add(time.Minute)
+	weekUsed = 0
+	weeklyOnly := resetwatch.Observation{
+		ProviderID:   resetwatch.ProviderCodex,
+		Account:      bootstrap.Account,
+		ObservedAt:   at,
+		SnapshotJSON: []byte(`{"shape":"weekly-only"}`),
+		Windows: []resetwatch.Window{
+			{Label: resetwatch.LabelWeeklyLimit, UsedPercent: &weekUsed, ResetAt: weekReset, PeriodDurationMs: &weekPeriod},
+		},
+	}
+	got, err := s.ApplyCodexPoll(ctx, pollInput(weeklyOnly, "telegram:42"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.PolicyEvents) != 0 || len(got.ResetEvents) != 0 || len(got.WarningEvents) != 0 {
+		t.Fatalf("five-hour disappearance emitted events: %+v", got)
+	}
+	assertPollCounts(t, s, 2, 0, 0)
+	var stableReset, lastObserved string
+	if err = s.db.QueryRow(`select stable_reset_at,last_observed_at from limit_windows where account_ref=? and label=?`, bootstrap.Account.Ref, resetwatch.LabelFiveHour).Scan(&stableReset, &lastObserved); err != nil {
+		t.Fatal(err)
+	}
+	if stableReset != formatTime(fiveReset) || lastObserved != formatTime(base) {
+		t.Fatalf("missing five-hour state mutated: stable=%s observed=%s", stableReset, lastObserved)
+	}
+}
+
 func TestApplyCodexPollTransitionFixturesPersistExactPolicyAndOutbox(t *testing.T) {
 	s := openPollStore(t)
 	ctx := context.Background()
