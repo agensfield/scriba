@@ -15,7 +15,7 @@ The service was stopped before the authoritative schema-v7 backup was taken:
 - SHA-256: `e92458e196c0ad163538b93989f835f80b6f46f605f266b101c1d7f0a5547703`
 - evidence directory: `/home/arda/.local/state/scriba/cutovers/v8-20260712T060027Z`
 
-This immutable backup is the rollback artifact. Schema downgrade remains
+This retained, checksum-verified backup is the rollback artifact. Schema downgrade remains
 restore-only: an older binary must open a restored pre-v8 copy, never the live
 v8 database.
 
@@ -27,8 +27,8 @@ A copy of the stopped-service backup passed the complete v8 rehearsal:
 - a second open was idempotent;
 - `quick_check` returned `ok`;
 - `foreign_key_check` returned zero rows;
-- existing accounts, observations, business events, notification outbox rows,
-  attempts, and delivery state were preserved;
+- existing business-event identities were preserved, while aggregate
+  notification outbox row and attempt counts remained unchanged;
 - the previous `b999204` binary successfully opened a separate rollback copy
   restored from the untouched schema-v7 backup.
 

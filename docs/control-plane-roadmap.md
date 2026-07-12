@@ -320,8 +320,9 @@ No product implementation was started before this plan was reconciled.
   boundary. Full Go security/lint gates and all 18 Swift tests passed locally.
 - 2026-07-12: Wave 2.2 schema-v8 policy runtime deployed at `c32d885`.
   A stopped-service schema-v7 backup with SHA-256 `e92458e196c0ad163538b93989f835f80b6f46f605f266b101c1d7f0a5547703`
-  passed copied-live migration, idempotence, integrity, exact legacy/outbox
-  preservation, and `b999204` rollback-copy proof. Devbox is healthy on schema
+  passed copied-live migration, idempotence, integrity, business-event identity
+  and aggregate outbox-count preservation, and `b999204` rollback-copy proof.
+  Devbox is healthy on schema
   8 with 15 policy states, zero bootstrap events, 40 delivered outbox rows and
   41 preserved attempts, two clean explicit refreshes, and all 11 Telegram
   commands registered. See `docs/schema-v8-migration.md`.
