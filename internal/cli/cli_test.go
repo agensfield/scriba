@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/agensfield/scriba/internal/cache"
+	"github.com/agensfield/scriba/internal/config"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/remote"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	servercore "github.com/agensfield/scriba/internal/server"
+	"github.com/agensfield/scriba/internal/server/store"
 )
 
 func TestCodexLimitsFromSnapshotFiltersRemoteLimitLines(t *testing.T) {
@@ -49,6 +51,43 @@ func TestCodexLimitsFromSnapshotFiltersRemoteLimitLines(t *testing.T) {
 	}
 	if payload.Lines[0].Label != "Plan" || payload.Lines[1].Label != "5h limit" || payload.Lines[2].Label != "Reset grants" {
 		t.Fatalf("unexpected labels: %#v", payload.Lines)
+	}
+}
+
+func TestServerStatsRendersQueueObservability(t *testing.T) {
+	old := time.Now().Add(-time.Hour)
+	stats := servercore.Stats{Store: store.Stats{
+		Counts:        map[string]int64{},
+		Outbox:        store.QueueStats{Pending: 2, DuePending: 1, DeadLetter: 3, Attempts: 5, OldestPendingAt: &old, OldestPendingAge: time.Hour},
+		TelegramInbox: store.InboxStats{Pending: 4, Due: 2, Dead: 1, Attempts: 6, OldestPendingAt: &old, OldestPendingAge: time.Hour},
+	}}
+	text := renderServerStats(stats, "test", true)
+	for _, want := range []string{"Outbox", "dead letter   3", "Telegram inbox", "attempts      6", "oldest"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q:\n%s", want, text)
+		}
+	}
+	payload := serverStatsPayload(stats, "test", true)
+	if payload["store"].(store.Stats).Outbox.DeadLetter != 3 {
+		t.Fatalf("payload: %#v", payload)
+	}
+}
+
+func TestTelegramDeliveryTarget(t *testing.T) {
+	disabledID, disabledTarget, err := telegramDeliveryTarget(config.Config{})
+	if err != nil || disabledID != 0 || disabledTarget != "" {
+		t.Fatalf("disabled: id=%d target=%q err=%v", disabledID, disabledTarget, err)
+	}
+	cfg := config.Config{}
+	cfg.Telegram.Enabled = true
+	cfg.Telegram.ChatID = "123"
+	chatID, target, err := telegramDeliveryTarget(cfg)
+	if err != nil || chatID != 123 || target != "telegram:123" {
+		t.Fatalf("enabled: id=%d target=%q err=%v", chatID, target, err)
+	}
+	cfg.Telegram.ChatID = "bad"
+	if _, _, err = telegramDeliveryTarget(cfg); err == nil {
+		t.Fatal("expected invalid chat id error")
 	}
 }
 

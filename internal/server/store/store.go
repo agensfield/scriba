@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 6
+const SchemaVersion = 7
 
 const deliverySendLease = 10 * time.Minute
 
@@ -164,8 +164,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 	_, err = s.db.ExecContext(ctx, `
 insert into schema_migrations (version, applied_at)
 values (?, ?)
-on conflict(version) do nothing`, SchemaVersion, formatTime(time.Now()))
-	return err
+on conflict(version) do nothing`, 6, formatTime(time.Now()))
+	if err != nil {
+		return err
+	}
+	return s.migrateNotificationOutbox(ctx)
 }
 
 func (s *Store) migrateNotificationDeliveries(ctx context.Context) error {
@@ -216,7 +219,8 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 	return version, err
 }
 
-func (s *Store) ApplyDecision(ctx context.Context, obs resetwatch.Observation, decision resetwatch.Decision) (int, error) {
+func (s *Store) ApplyDecision(ctx context.Context, obs resetwatch.Observation, decision resetwatch.Decision, targets ...string) (int, error) {
+	target := firstTarget(targets)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -232,7 +236,7 @@ func (s *Store) ApplyDecision(ctx context.Context, obs resetwatch.Observation, d
 	if err := upsertWindowStates(ctx, tx, decision.States); err != nil {
 		return 0, err
 	}
-	inserted, err := insertResetEvents(ctx, tx, decision.Events)
+	inserted, err := insertResetEvents(ctx, tx, decision.Events, target)
 	if err != nil {
 		return 0, err
 	}
@@ -268,13 +272,14 @@ where account_ref = ?`, accountRef)
 	return states, rows.Err()
 }
 
-func (s *Store) InsertResetEvents(ctx context.Context, events []resetwatch.Event) (int, error) {
+func (s *Store) InsertResetEvents(ctx context.Context, events []resetwatch.Event, targets ...string) (int, error) {
+	target := firstTarget(targets)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	inserted, err := insertResetEvents(ctx, tx, events)
+	inserted, err := insertResetEvents(ctx, tx, events, target)
 	if err != nil {
 		return 0, err
 	}
@@ -284,7 +289,8 @@ func (s *Store) InsertResetEvents(ctx context.Context, events []resetwatch.Event
 	return inserted, nil
 }
 
-func (s *Store) InsertWarningEvents(ctx context.Context, warnings []resetwatch.WarningEvent) ([]resetwatch.WarningEvent, error) {
+func (s *Store) InsertWarningEvents(ctx context.Context, warnings []resetwatch.WarningEvent, targets ...string) ([]resetwatch.WarningEvent, error) {
+	target := firstTarget(targets)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -309,6 +315,9 @@ on conflict(id) do nothing`,
 			return nil, err
 		}
 		if affected, _ := result.RowsAffected(); affected > 0 {
+			if err := enqueueEvent(ctx, tx, "limit_warning", warning.ID, warning.Account.Ref, target, warning); err != nil {
+				return nil, err
+			}
 			inserted = append(inserted, warning)
 		}
 	}
@@ -343,7 +352,8 @@ where id = ?`, id).Scan(
 	return warning, true, nil
 }
 
-func (s *Store) InsertGrantExpiryWarningEvents(ctx context.Context, warnings []resetwatch.GrantExpiryWarning) ([]resetwatch.GrantExpiryWarning, error) {
+func (s *Store) InsertGrantExpiryWarningEvents(ctx context.Context, warnings []resetwatch.GrantExpiryWarning, targets ...string) ([]resetwatch.GrantExpiryWarning, error) {
+	target := firstTarget(targets)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -367,6 +377,9 @@ on conflict(id) do nothing`,
 			return nil, err
 		}
 		if affected, _ := result.RowsAffected(); affected > 0 {
+			if err := enqueueEvent(ctx, tx, "reset_grant_warning", warning.ID, warning.Account.Ref, target, warning); err != nil {
+				return nil, err
+			}
 			inserted = append(inserted, warning)
 		}
 	}
@@ -399,7 +412,8 @@ where id = ?`, id).Scan(
 	return warning, true, nil
 }
 
-func (s *Store) InsertResetGrantEvents(ctx context.Context, obs resetwatch.Observation, events []resetwatch.ResetGrantEvent) ([]resetwatch.ResetGrantEvent, error) {
+func (s *Store) InsertResetGrantEvents(ctx context.Context, obs resetwatch.Observation, events []resetwatch.ResetGrantEvent, targets ...string) ([]resetwatch.ResetGrantEvent, error) {
+	target := firstTarget(targets)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -434,6 +448,9 @@ on conflict(id) do nothing`,
 			return nil, err
 		}
 		if affected, _ := result.RowsAffected(); affected > 0 && trackExisting && availableCount > previousCount {
+			if err := enqueueEvent(ctx, tx, "reset_grant", event.ID, event.Account.Ref, target, event); err != nil {
+				return nil, err
+			}
 			inserted = append(inserted, event)
 		}
 	}
@@ -472,9 +489,15 @@ where id = ?`, id).Scan(
 	return event, true, nil
 }
 
-func (s *Store) InsertRadarAlertEvent(ctx context.Context, alert radar.ProbabilityAlert) (bool, error) {
+func (s *Store) InsertRadarAlertEvent(ctx context.Context, alert radar.ProbabilityAlert, targets ...string) (bool, error) {
+	target := firstTarget(targets)
 	now := formatTime(time.Now())
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `
 insert into radar_alert_events (
   id, milestone, probability_24h, probability_48h, level, expected_window,
   reasoning_summary, checked_at, detected_at, snapshot_json, created_at
@@ -486,6 +509,14 @@ on conflict(id) do nothing`,
 		return false, err
 	}
 	affected, _ := result.RowsAffected()
+	if affected > 0 {
+		if err := enqueueEvent(ctx, tx, "radar_alert", alert.ID, "", target, alert); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
 	return affected > 0, nil
 }
 
@@ -1284,7 +1315,7 @@ on conflict(account_ref, label) do update set
 	return nil
 }
 
-func insertResetEvents(ctx context.Context, tx *sql.Tx, events []resetwatch.Event) (int, error) {
+func insertResetEvents(ctx context.Context, tx *sql.Tx, events []resetwatch.Event, target string) (int, error) {
 	now := formatTime(time.Now())
 	inserted := 0
 	for _, event := range events {
@@ -1311,6 +1342,9 @@ on conflict(id) do nothing`,
 			return inserted, err
 		}
 		if affected, _ := result.RowsAffected(); affected > 0 {
+			if err := enqueueEvent(ctx, tx, "reset", event.ID, event.Account.Ref, target, event); err != nil {
+				return inserted, err
+			}
 			inserted++
 		}
 	}

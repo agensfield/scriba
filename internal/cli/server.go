@@ -87,7 +87,12 @@ func runServerRun(cfg config.Config, opts options) error {
 	if err != nil {
 		return err
 	}
+	chatID, notificationTarget, err := telegramDeliveryTarget(cfg)
+	if err != nil {
+		return err
+	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
+		NotificationTarget:       notificationTarget,
 		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		StartupHeartbeat:         heartbeat,
@@ -101,10 +106,6 @@ func runServerRun(cfg config.Config, opts options) error {
 		}
 		if token == "" {
 			return fmt.Errorf("missing Telegram bot token; set telegram.botToken or env %s", cfg.Telegram.BotTokenEnv)
-		}
-		chatID, err := strconv.ParseInt(cfg.Telegram.ChatID, 10, 64)
-		if err != nil || chatID == 0 {
-			return fmt.Errorf("invalid telegram.chatId: %q", cfg.Telegram.ChatID)
 		}
 		tg, err := telegram.NewBotService(telegram.BotConfig{
 			Token:          token,
@@ -224,7 +225,12 @@ func runServerRefresh(cfg config.Config, opts options) error {
 		return err
 	}
 	defer func() { _ = st.Close() }()
+	_, notificationTarget, err := telegramDeliveryTarget(cfg)
+	if err != nil {
+		return err
+	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
+		NotificationTarget:       notificationTarget,
 		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
@@ -234,6 +240,17 @@ func runServerRefresh(cfg config.Config, opts options) error {
 		return err
 	}
 	return output(opts, serverRefreshPayload(result), renderServerRefresh(result))
+}
+
+func telegramDeliveryTarget(cfg config.Config) (int64, string, error) {
+	if !cfg.Telegram.Enabled {
+		return 0, "", nil
+	}
+	chatID, err := strconv.ParseInt(cfg.Telegram.ChatID, 10, 64)
+	if err != nil || chatID == 0 {
+		return 0, "", fmt.Errorf("invalid telegram.chatId: %q", cfg.Telegram.ChatID)
+	}
+	return chatID, fmt.Sprintf("telegram:%d", chatID), nil
 }
 
 func runServerPrune(cfg config.Config, opts options) error {
@@ -380,6 +397,9 @@ func healthPayload(health servercore.Health) map[string]any {
 		"nextPollEstimateAt":       health.NextPollEstimateAt,
 		"staleAfter":               servercore.FormatDuration(health.StaleAfter),
 		"isStale":                  health.IsStale,
+		"queueReason":              health.QueueReason,
+		"outbox":                   health.Outbox,
+		"telegramInbox":            health.TelegramInbox,
 	}
 }
 
@@ -396,6 +416,10 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 	})
 	b.WriteString("\nHealth\n")
 	writeHealthRows(&b, stats.Health)
+	b.WriteString("\nOutbox\n")
+	writeQueueRows(&b, stats.Store.Outbox)
+	b.WriteString("\nTelegram inbox\n")
+	writeInboxRows(&b, stats.Store.TelegramInbox)
 	if stats.Store.LatestObservation != nil {
 		latest := stats.Store.LatestObservation
 		b.WriteString("\nObservation\n")
@@ -636,7 +660,34 @@ func writeHealthRows(b *strings.Builder, health servercore.Health) {
 	if health.LastError != "" {
 		rows = append(rows, fmt.Sprintf("%-13s %s", "error", truncateCLI(health.LastError, 160)))
 	}
+	if health.QueueReason != "" {
+		rows = append(rows, fmt.Sprintf("%-13s %s", "queue", health.QueueReason))
+	}
 	writeRows(b, rows)
+}
+
+func writeQueueRows(b *strings.Builder, q store.QueueStats) {
+	writeRows(b, []string{
+		fmt.Sprintf("%-13s %d", "pending", q.Pending), fmt.Sprintf("%-13s %d", "due", q.DuePending),
+		fmt.Sprintf("%-13s %d", "leased", q.Leased), fmt.Sprintf("%-13s %d", "expired", q.ExpiredLeases),
+		fmt.Sprintf("%-13s %d", "delivered", q.Delivered), fmt.Sprintf("%-13s %d", "dead letter", q.DeadLetter),
+		fmt.Sprintf("%-13s %d", "attempts", q.Attempts), fmt.Sprintf("%-13s %s", "oldest", formatQueueAge(q.OldestPendingAt, q.OldestPendingAge)),
+	})
+}
+
+func writeInboxRows(b *strings.Builder, q store.InboxStats) {
+	writeRows(b, []string{
+		fmt.Sprintf("%-13s %d", "pending", q.Pending), fmt.Sprintf("%-13s %d", "due", q.Due),
+		fmt.Sprintf("%-13s %d", "processed", q.Processed), fmt.Sprintf("%-13s %d", "dead", q.Dead),
+		fmt.Sprintf("%-13s %d", "attempts", q.Attempts), fmt.Sprintf("%-13s %s", "oldest", formatQueueAge(q.OldestPendingAt, q.OldestPendingAge)),
+	})
+}
+
+func formatQueueAge(at *time.Time, age time.Duration) string {
+	if at == nil {
+		return "none"
+	}
+	return servercore.FormatDuration(age) + " · " + at.Local().Format("Mon 15:04:05")
 }
 
 func writeDeliveryRows(b *strings.Builder, counts map[string]store.DeliveryCounts) {

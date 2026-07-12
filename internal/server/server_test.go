@@ -324,6 +324,31 @@ func TestHealthMarksExpiredAttemptInterrupted(t *testing.T) {
 	}
 }
 
+func TestHealthDegradesForQueueWithoutOverwritingPollFailure(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	now := time.Now().UTC()
+	if err := st.StageTelegramUpdates(ctx, "bot", []store.TelegramUpdateInput{{UpdateID: 1, RawJSON: `{}`}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.MarkTelegramUpdateDead(ctx, "bot", 1, "bad update", now); err != nil || !ok {
+		t.Fatalf("dead ok=%v err=%v", ok, err)
+	}
+	if err := st.SetSetting(ctx, SettingPollFailureError, "401 auth exploded"); err != nil {
+		t.Fatal(err)
+	}
+	health, err := New(st, nil, nil, Config{}).Health(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.Status != HealthDegraded || health.QueueReason != "dead_letters" || health.TelegramInbox.Dead != 1 {
+		t.Fatalf("health: %#v", health)
+	}
+	if health.FailureKind != "auth" || health.LastError != "401 auth exploded" {
+		t.Fatalf("poll failure overwritten: %#v", health)
+	}
+}
+
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "scriba-server.sqlite"))

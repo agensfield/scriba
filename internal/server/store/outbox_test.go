@@ -219,14 +219,14 @@ func TestOutboxClaimValidation(t *testing.T) {
 	}
 }
 
-func TestOutboxDormantUntilExplicitMigration(t *testing.T) {
+func TestOutboxActivatedByNormalMigration(t *testing.T) {
 	s := openTestStore(t)
 	var v int
 	if err := s.db.QueryRow(`select max(version) from schema_migrations`).Scan(&v); err != nil || v != SchemaVersion {
 		t.Fatalf("version=%d err=%v", v, err)
 	}
 	var n int
-	if err := s.db.QueryRow(`select count(*) from sqlite_master where name='notification_outbox'`).Scan(&n); err != nil || n != 0 {
+	if err := s.db.QueryRow(`select count(*) from sqlite_master where name='notification_outbox'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("outbox active=%d err=%v", n, err)
 	}
 }

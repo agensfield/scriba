@@ -54,31 +54,9 @@ type UpdateStore interface {
 }
 
 type DeliveryStore interface {
-	EnsureDelivery(context.Context, string, string) (store.Delivery, error)
-	MarkDeliverySending(context.Context, string, string) error
-	MarkDeliveryAttempt(context.Context, string, string, bool, string, string) error
-	PendingDeliveries(context.Context, string, int) ([]store.Delivery, error)
-	LoadResetEvent(context.Context, string) (resetwatch.Event, bool, error)
-	EnsureWarningDelivery(context.Context, string, string) (store.Delivery, error)
-	MarkWarningDeliverySending(context.Context, string, string) error
-	MarkWarningDeliveryAttempt(context.Context, string, string, bool, string, string) error
-	PendingWarningDeliveries(context.Context, string, int) ([]store.Delivery, error)
-	LoadWarningEvent(context.Context, string) (resetwatch.WarningEvent, bool, error)
-	EnsureGrantExpiryWarningDelivery(context.Context, string, string) (store.Delivery, error)
-	MarkGrantExpiryWarningDeliverySending(context.Context, string, string) error
-	MarkGrantExpiryWarningDeliveryAttempt(context.Context, string, string, bool, string, string) error
-	PendingGrantExpiryWarningDeliveries(context.Context, string, int) ([]store.Delivery, error)
-	LoadGrantExpiryWarningEvent(context.Context, string) (resetwatch.GrantExpiryWarning, bool, error)
-	EnsureResetGrantDelivery(context.Context, string, string) (store.Delivery, error)
-	MarkResetGrantDeliverySending(context.Context, string, string) error
-	MarkResetGrantDeliveryAttempt(context.Context, string, string, bool, string, string) error
-	PendingResetGrantDeliveries(context.Context, string, int) ([]store.Delivery, error)
-	LoadResetGrantEvent(context.Context, string) (resetwatch.ResetGrantEvent, bool, error)
-	EnsureRadarAlertDelivery(context.Context, string, string) (store.Delivery, error)
-	MarkRadarAlertDeliverySending(context.Context, string, string) error
-	MarkRadarAlertDeliveryAttempt(context.Context, string, string, bool, string, string) error
-	PendingRadarAlertDeliveries(context.Context, string, int) ([]store.Delivery, error)
-	LoadRadarAlertEvent(context.Context, string) (radar.ProbabilityAlert, bool, error)
+	ClaimOutboxForTarget(context.Context, string, time.Time, time.Duration, int) ([]store.OutboxMessage, error)
+	FinishOutboxSuccess(context.Context, string, string, string, time.Time) (bool, error)
+	FinishOutboxFailure(context.Context, store.OutboxMessage, string, time.Time) (bool, error)
 }
 
 type Service struct {
@@ -95,6 +73,7 @@ type Service struct {
 	apiTimeout        time.Duration
 	updates           UpdateStore
 	updateWake        chan struct{}
+	outboxWake        chan struct{}
 	startBot          func(context.Context)
 	retryLoop         func(context.Context)
 	inboxLoop         func(context.Context)
@@ -117,7 +96,7 @@ func newBotService(cfg BotConfig, controller Controller, offsets OffsetStore, de
 	if cfg.ChatID == 0 {
 		return nil, errors.New("telegram chat id is required")
 	}
-	svc := &Service{cfg: cfg, controller: controller, offsets: offsets, deliveries: deliveries, radar: radarClient, botRef: "default", logger: slog.Default(), apiTimeout: telegramAPITimeout, updateWake: make(chan struct{}, 1)}
+	svc := &Service{cfg: cfg, controller: controller, offsets: offsets, deliveries: deliveries, radar: radarClient, botRef: "default", logger: slog.Default(), apiTimeout: telegramAPITimeout, updateWake: make(chan struct{}, 1), outboxWake: make(chan struct{}, 1)}
 	if inbox, ok := offsets.(UpdateStore); ok {
 		svc.updates = inbox
 	}
@@ -199,128 +178,28 @@ func (s *Service) NotifyBaseline(ctx context.Context, notice server.BaselineNoti
 }
 
 func (s *Service) NotifyReset(ctx context.Context, event resetwatch.Event) error {
-	target := s.target()
-	if s.deliveries != nil {
-		if _, err := s.deliveries.EnsureDelivery(ctx, event.ID, target); err != nil {
-			return err
-		}
-		if err := s.deliveries.MarkDeliverySending(ctx, event.ID, target); err != nil {
-			return err
-		}
-	}
-	message, err := s.send(ctx, RenderReset(event), nil)
-	if s.deliveries == nil {
-		return err
-	}
-	if err != nil {
-		_ = s.deliveries.MarkDeliveryAttempt(ctx, event.ID, target, false, err.Error(), "")
-		return err
-	}
-	messageID := ""
-	if message != nil {
-		messageID = strconv.Itoa(message.ID)
-	}
-	return s.deliveries.MarkDeliveryAttempt(ctx, event.ID, target, true, "", messageID)
+	s.wakeOutbox()
+	return nil
 }
 
 func (s *Service) NotifyLimitWarning(ctx context.Context, warning resetwatch.WarningEvent) error {
-	target := s.target()
-	if s.deliveries != nil {
-		if _, err := s.deliveries.EnsureWarningDelivery(ctx, warning.ID, target); err != nil {
-			return err
-		}
-		if err := s.deliveries.MarkWarningDeliverySending(ctx, warning.ID, target); err != nil {
-			return err
-		}
-	}
-	message, err := s.send(ctx, RenderLimitWarning(warning), nil)
-	if s.deliveries == nil {
-		return err
-	}
-	if err != nil {
-		_ = s.deliveries.MarkWarningDeliveryAttempt(ctx, warning.ID, target, false, err.Error(), "")
-		return err
-	}
-	messageID := ""
-	if message != nil {
-		messageID = strconv.Itoa(message.ID)
-	}
-	return s.deliveries.MarkWarningDeliveryAttempt(ctx, warning.ID, target, true, "", messageID)
+	s.wakeOutbox()
+	return nil
 }
 
 func (s *Service) NotifyGrantExpiryWarning(ctx context.Context, warning resetwatch.GrantExpiryWarning) error {
-	target := s.target()
-	if s.deliveries != nil {
-		if _, err := s.deliveries.EnsureGrantExpiryWarningDelivery(ctx, warning.ID, target); err != nil {
-			return err
-		}
-		if err := s.deliveries.MarkGrantExpiryWarningDeliverySending(ctx, warning.ID, target); err != nil {
-			return err
-		}
-	}
-	message, err := s.send(ctx, RenderGrantExpiryWarning(warning), nil)
-	if s.deliveries == nil {
-		return err
-	}
-	if err != nil {
-		_ = s.deliveries.MarkGrantExpiryWarningDeliveryAttempt(ctx, warning.ID, target, false, err.Error(), "")
-		return err
-	}
-	messageID := ""
-	if message != nil {
-		messageID = strconv.Itoa(message.ID)
-	}
-	return s.deliveries.MarkGrantExpiryWarningDeliveryAttempt(ctx, warning.ID, target, true, "", messageID)
+	s.wakeOutbox()
+	return nil
 }
 
 func (s *Service) NotifyResetGrant(ctx context.Context, event resetwatch.ResetGrantEvent) error {
-	target := s.target()
-	if s.deliveries != nil {
-		if _, err := s.deliveries.EnsureResetGrantDelivery(ctx, event.ID, target); err != nil {
-			return err
-		}
-		if err := s.deliveries.MarkResetGrantDeliverySending(ctx, event.ID, target); err != nil {
-			return err
-		}
-	}
-	message, err := s.send(ctx, RenderResetGrant(event), nil)
-	if s.deliveries == nil {
-		return err
-	}
-	if err != nil {
-		_ = s.deliveries.MarkResetGrantDeliveryAttempt(ctx, event.ID, target, false, err.Error(), "")
-		return err
-	}
-	messageID := ""
-	if message != nil {
-		messageID = strconv.Itoa(message.ID)
-	}
-	return s.deliveries.MarkResetGrantDeliveryAttempt(ctx, event.ID, target, true, "", messageID)
+	s.wakeOutbox()
+	return nil
 }
 
 func (s *Service) NotifyRadarProbability(ctx context.Context, alert radar.ProbabilityAlert) error {
-	target := s.target()
-	if s.deliveries != nil {
-		if _, err := s.deliveries.EnsureRadarAlertDelivery(ctx, alert.ID, target); err != nil {
-			return err
-		}
-		if err := s.deliveries.MarkRadarAlertDeliverySending(ctx, alert.ID, target); err != nil {
-			return err
-		}
-	}
-	message, err := s.send(ctx, RenderRadarProbability(alert), mainKeyboard())
-	if s.deliveries == nil {
-		return err
-	}
-	if err != nil {
-		_ = s.deliveries.MarkRadarAlertDeliveryAttempt(ctx, alert.ID, target, false, err.Error(), "")
-		return err
-	}
-	messageID := ""
-	if message != nil {
-		messageID = strconv.Itoa(message.ID)
-	}
-	return s.deliveries.MarkRadarAlertDeliveryAttempt(ctx, alert.ID, target, true, "", messageID)
+	s.wakeOutbox()
+	return nil
 }
 
 func (s *Service) NotifyHealth(ctx context.Context, notice server.HealthNotice) error {
@@ -563,126 +442,68 @@ func (s *Service) retryDeliveries(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-s.outboxWake:
 		}
 	}
 }
 
 func (s *Service) retryDeliveriesOnce(ctx context.Context) {
 	target := s.target()
-	deliveries, err := s.deliveries.PendingDeliveries(ctx, target, 10)
-	if err != nil {
-		return
-	}
-	for _, delivery := range deliveries {
-		event, ok, err := s.deliveries.LoadResetEvent(ctx, delivery.EventID)
-		if err != nil || !ok {
-			continue
-		}
-		if err := s.deliveries.MarkDeliverySending(ctx, delivery.EventID, target); err != nil {
-			continue
-		}
-		message, err := s.send(ctx, RenderReset(event), nil)
+	for range 50 {
+		deliveries, err := s.deliveries.ClaimOutboxForTarget(ctx, target, time.Now(), time.Minute, 1)
 		if err != nil {
-			_ = s.deliveries.MarkDeliveryAttempt(ctx, delivery.EventID, target, false, err.Error(), "")
+			s.logger.Warn("telegram outbox claim failed", "target", target, "error", err)
+			return
+		}
+		if len(deliveries) == 0 {
+			return
+		}
+		delivery := deliveries[0]
+		payload, err := store.DecodeOutboxPayload(delivery)
+		var text string
+		var keyboard models.ReplyMarkup
+		if err == nil {
+			switch event := payload.(type) {
+			case resetwatch.Event:
+				text = RenderReset(event)
+			case resetwatch.WarningEvent:
+				text = RenderLimitWarning(event)
+			case resetwatch.GrantExpiryWarning:
+				text = RenderGrantExpiryWarning(event)
+			case resetwatch.ResetGrantEvent:
+				text = RenderResetGrant(event)
+			case radar.ProbabilityAlert:
+				text, keyboard = RenderRadarProbability(event), mainKeyboard()
+			default:
+				err = fmt.Errorf("unsupported outbox payload type %T", payload)
+			}
+		}
+		var message *models.Message
+		if err == nil {
+			message, err = s.send(ctx, text, keyboard)
+		}
+		if err != nil {
+			finished, finishErr := s.deliveries.FinishOutboxFailure(ctx, delivery, err.Error(), time.Now())
+			if finishErr != nil || !finished {
+				s.logger.Warn("telegram outbox failure fence rejected", "outbox_id", delivery.ID, "finished", finished, "error", finishErr)
+			}
 			continue
 		}
 		messageID := ""
 		if message != nil {
 			messageID = strconv.Itoa(message.ID)
 		}
-		_ = s.deliveries.MarkDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
+		finished, finishErr := s.deliveries.FinishOutboxSuccess(ctx, delivery.ID, delivery.LeaseToken, messageID, time.Now())
+		if finishErr != nil || !finished {
+			s.logger.Warn("telegram outbox success fence rejected", "outbox_id", delivery.ID, "finished", finished, "error", finishErr)
+		}
 	}
-	warningDeliveries, err := s.deliveries.PendingWarningDeliveries(ctx, target, 10)
-	if err != nil {
-		return
-	}
-	for _, delivery := range warningDeliveries {
-		warning, ok, err := s.deliveries.LoadWarningEvent(ctx, delivery.EventID)
-		if err != nil || !ok {
-			continue
-		}
-		if err := s.deliveries.MarkWarningDeliverySending(ctx, delivery.EventID, target); err != nil {
-			continue
-		}
-		message, err := s.send(ctx, RenderLimitWarning(warning), nil)
-		if err != nil {
-			_ = s.deliveries.MarkWarningDeliveryAttempt(ctx, delivery.EventID, target, false, err.Error(), "")
-			continue
-		}
-		messageID := ""
-		if message != nil {
-			messageID = strconv.Itoa(message.ID)
-		}
-		_ = s.deliveries.MarkWarningDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
-	}
-	grantWarningDeliveries, err := s.deliveries.PendingGrantExpiryWarningDeliveries(ctx, target, 10)
-	if err != nil {
-		return
-	}
-	for _, delivery := range grantWarningDeliveries {
-		warning, ok, err := s.deliveries.LoadGrantExpiryWarningEvent(ctx, delivery.EventID)
-		if err != nil || !ok {
-			continue
-		}
-		if err := s.deliveries.MarkGrantExpiryWarningDeliverySending(ctx, delivery.EventID, target); err != nil {
-			continue
-		}
-		message, err := s.send(ctx, RenderGrantExpiryWarning(warning), nil)
-		if err != nil {
-			_ = s.deliveries.MarkGrantExpiryWarningDeliveryAttempt(ctx, delivery.EventID, target, false, err.Error(), "")
-			continue
-		}
-		messageID := ""
-		if message != nil {
-			messageID = strconv.Itoa(message.ID)
-		}
-		_ = s.deliveries.MarkGrantExpiryWarningDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
-	}
-	resetGrantDeliveries, err := s.deliveries.PendingResetGrantDeliveries(ctx, target, 10)
-	if err != nil {
-		return
-	}
-	for _, delivery := range resetGrantDeliveries {
-		event, ok, err := s.deliveries.LoadResetGrantEvent(ctx, delivery.EventID)
-		if err != nil || !ok {
-			continue
-		}
-		if err := s.deliveries.MarkResetGrantDeliverySending(ctx, delivery.EventID, target); err != nil {
-			continue
-		}
-		message, err := s.send(ctx, RenderResetGrant(event), nil)
-		if err != nil {
-			_ = s.deliveries.MarkResetGrantDeliveryAttempt(ctx, delivery.EventID, target, false, err.Error(), "")
-			continue
-		}
-		messageID := ""
-		if message != nil {
-			messageID = strconv.Itoa(message.ID)
-		}
-		_ = s.deliveries.MarkResetGrantDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
-	}
-	radarDeliveries, err := s.deliveries.PendingRadarAlertDeliveries(ctx, target, 10)
-	if err != nil {
-		return
-	}
-	for _, delivery := range radarDeliveries {
-		alert, ok, err := s.deliveries.LoadRadarAlertEvent(ctx, delivery.EventID)
-		if err != nil || !ok {
-			continue
-		}
-		if err := s.deliveries.MarkRadarAlertDeliverySending(ctx, delivery.EventID, target); err != nil {
-			continue
-		}
-		message, err := s.send(ctx, RenderRadarProbability(alert), mainKeyboard())
-		if err != nil {
-			_ = s.deliveries.MarkRadarAlertDeliveryAttempt(ctx, delivery.EventID, target, false, err.Error(), "")
-			continue
-		}
-		messageID := ""
-		if message != nil {
-			messageID = strconv.Itoa(message.ID)
-		}
-		_ = s.deliveries.MarkRadarAlertDeliveryAttempt(ctx, delivery.EventID, target, true, "", messageID)
+}
+
+func (s *Service) wakeOutbox() {
+	select {
+	case s.outboxWake <- struct{}{}:
+	default:
 	}
 }
 

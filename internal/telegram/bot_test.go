@@ -260,6 +260,8 @@ func TestRenderStatsShowsStorageFreshnessAndDeliveries(t *testing.T) {
 	for _, want := range []string{
 		"<b>Scriba stats</b>",
 		"<b>Health</b>",
+		"<b>Outbox</b>",
+		"<b>Telegram inbox</b>",
 		"poll",
 		"5m",
 		"<b>Observation</b>",

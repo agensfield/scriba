@@ -6,8 +6,14 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
+
+	"github.com/agensfield/scriba/internal/radar"
+	"github.com/agensfield/scriba/internal/resetwatch"
 )
 
 const OutboxMaxAttempts = 8
@@ -74,6 +80,13 @@ values(?,?,?,?,?,?,?,?,?,'pending',0,?,?,?) on conflict(event_kind,event_id,targ
 }
 
 func (s *Store) ClaimOutbox(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]OutboxMessage, error) {
+	return s.ClaimOutboxForTarget(ctx, "telegram:1", now, lease, limit)
+}
+
+func (s *Store) ClaimOutboxForTarget(ctx context.Context, target string, now time.Time, lease time.Duration, limit int) ([]OutboxMessage, error) {
+	if target == "" {
+		return nil, errors.New("outbox target is required")
+	}
 	if lease <= 0 {
 		return nil, errors.New("outbox lease must be positive")
 	}
@@ -93,8 +106,8 @@ func (s *Store) ClaimOutbox(ctx context.Context, now time.Time, lease time.Durat
 		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx, `update notification_outbox set status='leased',attempts=attempts+1,lease_token=?,lease_expires_at=?,updated_at=? where id in
-(select id from notification_outbox where attempts < ? and ((status='pending' and available_at<=?) or (status='leased' and lease_expires_at<=?)) order by available_at,created_at,id limit ?)
-returning id,event_kind,source,coalesce(profile_ref,''),coalesce(account_ref,''),event_id,target,payload_version,payload_json,status,attempts,available_at,coalesce(lease_token,''),lease_expires_at,delivered_at,coalesce(provider_message_id,''),coalesce(last_error,''),dead_lettered_at,created_at,updated_at`, token, formatTime(now.Add(lease)), formatTime(now), OutboxMaxAttempts, formatTime(now), formatTime(now), limit)
+(select id from notification_outbox where target=? and attempts < ? and ((status='pending' and available_at<=?) or (status='leased' and lease_expires_at<=?)) order by available_at,created_at,id limit ?)
+returning id,event_kind,source,coalesce(profile_ref,''),coalesce(account_ref,''),event_id,target,payload_version,payload_json,status,attempts,available_at,coalesce(lease_token,''),lease_expires_at,delivered_at,coalesce(provider_message_id,''),coalesce(last_error,''),dead_lettered_at,created_at,updated_at`, token, formatTime(now.Add(lease)), formatTime(now), target, OutboxMaxAttempts, formatTime(now), formatTime(now), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -189,4 +202,128 @@ func changed(r sql.Result, e error) (bool, error) {
 	}
 	n, e := r.RowsAffected()
 	return n == 1, e
+}
+
+func enqueueEvent(ctx context.Context, tx *sql.Tx, kind, id, account, target string, event any) error {
+	if target == "" {
+		return nil
+	}
+	payload, err := EncodeOutboxPayload(kind, event)
+	if err != nil {
+		return err
+	}
+	return EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "scriba-v7", AccountRef: account, EventID: id, Target: target, PayloadVersion: 1, PayloadJSON: payload}, time.Now())
+}
+
+func firstTarget(targets []string) string {
+	if len(targets) == 0 {
+		return ""
+	}
+	return targets[0]
+}
+
+// EncodeOutboxPayload returns the stable v1 wire representation. Maps are used
+// deliberately: encoding/json sorts their keys, making retries byte-identical.
+func EncodeOutboxPayload(kind string, event any) (string, error) {
+	m := map[string]any{"version": 1, "kind": kind}
+	account := func(a resetwatch.Account) {
+		m["account_label"], m["account_email"], m["account_plan"] = a.Label, a.Email, a.Plan
+	}
+	raw := func(b []byte) (json.RawMessage, error) {
+		var v json.RawMessage
+		if !json.Valid(b) {
+			return nil, errors.New("invalid event snapshot JSON")
+		}
+		v = append(v, b...)
+		return v, nil
+	}
+	switch e := event.(type) {
+	case resetwatch.Event:
+		account(e.Account)
+		p, err := raw(e.PreviousSnapshotJSON)
+		if err != nil {
+			return "", err
+		}
+		c, err := raw(e.CurrentSnapshotJSON)
+		if err != nil {
+			return "", err
+		}
+		m["primary_trigger_label"], m["secondary_trigger_labels"], m["reset_kind"], m["previous_reset_at"], m["current_reset_at"], m["previous_snapshot"], m["current_snapshot"], m["joke_id"], m["detected_at"] = e.PrimaryTriggerLabel, e.SecondaryTriggerLabels, e.ResetKind, formatTime(e.PreviousResetAt), formatTime(e.CurrentResetAt), p, c, e.JokeID, formatTime(e.DetectedAt)
+	case resetwatch.WarningEvent:
+		account(e.Account)
+		s, err := raw(e.SnapshotJSON)
+		if err != nil {
+			return "", err
+		}
+		m["label"], m["threshold_remaining"], m["used_percent"], m["remaining_percent"], m["reset_at"], m["snapshot"], m["detected_at"] = e.Label, e.ThresholdRemaining, e.UsedPercent, e.RemainingPercent, formatTime(e.ResetAt), s, formatTime(e.DetectedAt)
+	case resetwatch.GrantExpiryWarning:
+		account(e.Account)
+		s, err := raw(e.SnapshotJSON)
+		if err != nil {
+			return "", err
+		}
+		m["credit_id"], m["credit_title"], m["threshold_days"], m["expires_at"], m["snapshot"], m["detected_at"] = e.CreditID, e.CreditTitle, e.ThresholdDays, formatTime(e.ExpiresAt), s, formatTime(e.DetectedAt)
+	case resetwatch.ResetGrantEvent:
+		account(e.Account)
+		s, err := raw(e.SnapshotJSON)
+		if err != nil {
+			return "", err
+		}
+		m["credit_id"], m["credit_title"], m["reset_type"], m["granted_at"], m["expires_at"], m["available_count"], m["snapshot"], m["detected_at"] = e.CreditID, e.CreditTitle, e.ResetType, formatTime(e.GrantedAt), formatTime(e.ExpiresAt), e.AvailableCount, s, formatTime(e.DetectedAt)
+	case radar.ProbabilityAlert:
+		s, err := raw(e.SnapshotJSON)
+		if err != nil {
+			return "", err
+		}
+		m["milestone"], m["probability_24h"], m["probability_48h"], m["level"], m["expected_window"], m["reasoning_summary"], m["checked_at"], m["detected_at"], m["snapshot"] = e.Milestone, e.Probability24H, e.Probability48H, e.Level, e.ExpectedWindow, e.ReasoningSummary, e.CheckedAt, formatTime(e.DetectedAt), s
+	default:
+		return "", fmt.Errorf("unsupported outbox payload %T", event)
+	}
+	b, err := json.Marshal(m)
+	return string(b), err
+}
+
+func DecodeOutboxPayload(message OutboxMessage) (any, error) {
+	if message.PayloadVersion != 1 {
+		return nil, errors.New("unsupported outbox payload version")
+	}
+	var v map[string]any
+	d := json.NewDecoder(strings.NewReader(message.PayloadJSON))
+	d.UseNumber()
+	if err := d.Decode(&v); err != nil {
+		return nil, err
+	}
+	if v["version"] != json.Number("1") {
+		return nil, errors.New("unsupported outbox payload version")
+	}
+	kind, ok := v["kind"].(string)
+	if !ok || kind == "" {
+		return nil, errors.New("invalid outbox payload kind")
+	}
+	if kind != message.EventKind {
+		return nil, errors.New("outbox payload kind mismatch")
+	}
+	str := func(k string) string { x, _ := v[k].(string); return x }
+	num := func(k string) float64 { x, _ := v[k].(json.Number); f, _ := x.Float64(); return f }
+	integer := func(k string) int { return int(num(k)) }
+	snapshot := func(k string) []byte { b, _ := json.Marshal(v[k]); return b }
+	account := resetwatch.Account{Label: str("account_label"), Email: str("account_email"), Plan: str("account_plan"), Ref: message.AccountRef}
+	switch kind {
+	case "reset":
+		var labels []string
+		if b, err := json.Marshal(v["secondary_trigger_labels"]); err == nil {
+			_ = json.Unmarshal(b, &labels)
+		}
+		return resetwatch.Event{ID: message.EventID, Account: account, PrimaryTriggerLabel: str("primary_trigger_label"), SecondaryTriggerLabels: labels, ResetKind: str("reset_kind"), PreviousResetAt: parseDBTime(str("previous_reset_at")), CurrentResetAt: parseDBTime(str("current_reset_at")), PreviousSnapshotJSON: snapshot("previous_snapshot"), CurrentSnapshotJSON: snapshot("current_snapshot"), JokeID: str("joke_id"), DetectedAt: parseDBTime(str("detected_at"))}, nil
+	case "limit_warning":
+		return resetwatch.WarningEvent{ID: message.EventID, Account: account, Label: str("label"), ThresholdRemaining: integer("threshold_remaining"), UsedPercent: num("used_percent"), RemainingPercent: num("remaining_percent"), ResetAt: parseDBTime(str("reset_at")), SnapshotJSON: snapshot("snapshot"), DetectedAt: parseDBTime(str("detected_at"))}, nil
+	case "reset_grant_warning":
+		return resetwatch.GrantExpiryWarning{ID: message.EventID, Account: account, CreditID: str("credit_id"), CreditTitle: str("credit_title"), ThresholdDays: integer("threshold_days"), ExpiresAt: parseDBTime(str("expires_at")), SnapshotJSON: snapshot("snapshot"), DetectedAt: parseDBTime(str("detected_at"))}, nil
+	case "reset_grant":
+		return resetwatch.ResetGrantEvent{ID: message.EventID, Account: account, CreditID: str("credit_id"), CreditTitle: str("credit_title"), ResetType: str("reset_type"), GrantedAt: parseDBTime(str("granted_at")), ExpiresAt: parseDBTime(str("expires_at")), AvailableCount: integer("available_count"), SnapshotJSON: snapshot("snapshot"), DetectedAt: parseDBTime(str("detected_at"))}, nil
+	case "radar_alert":
+		return radar.ProbabilityAlert{ID: message.EventID, Milestone: integer("milestone"), Probability24H: num("probability_24h"), Probability48H: num("probability_48h"), Level: str("level"), ExpectedWindow: str("expected_window"), ReasoningSummary: str("reasoning_summary"), CheckedAt: str("checked_at"), DetectedAt: parseDBTime(str("detected_at")), SnapshotJSON: snapshot("snapshot")}, nil
+	default:
+		return nil, fmt.Errorf("unsupported outbox event kind %q", kind)
+	}
 }

@@ -41,17 +41,17 @@ var ErrRefreshInProgress = errors.New("refresh already in progress")
 
 type Store interface {
 	LoadWindowStates(context.Context, string) (map[string]resetwatch.WindowState, error)
-	ApplyDecision(context.Context, resetwatch.Observation, resetwatch.Decision) (int, error)
+	ApplyDecision(context.Context, resetwatch.Observation, resetwatch.Decision, ...string) (int, error)
 	GetSetting(context.Context, string) (string, bool, error)
 	SetSetting(context.Context, string, string) error
 	DeleteSetting(context.Context, string) error
 	LoadLastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
 	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
-	InsertWarningEvents(context.Context, []resetwatch.WarningEvent) ([]resetwatch.WarningEvent, error)
-	InsertGrantExpiryWarningEvents(context.Context, []resetwatch.GrantExpiryWarning) ([]resetwatch.GrantExpiryWarning, error)
-	InsertResetGrantEvents(context.Context, resetwatch.Observation, []resetwatch.ResetGrantEvent) ([]resetwatch.ResetGrantEvent, error)
-	InsertRadarAlertEvent(context.Context, radar.ProbabilityAlert) (bool, error)
+	InsertWarningEvents(context.Context, []resetwatch.WarningEvent, ...string) ([]resetwatch.WarningEvent, error)
+	InsertGrantExpiryWarningEvents(context.Context, []resetwatch.GrantExpiryWarning, ...string) ([]resetwatch.GrantExpiryWarning, error)
+	InsertResetGrantEvents(context.Context, resetwatch.Observation, []resetwatch.ResetGrantEvent, ...string) ([]resetwatch.ResetGrantEvent, error)
+	InsertRadarAlertEvent(context.Context, radar.ProbabilityAlert, ...string) (bool, error)
 	Stats(context.Context) (store.Stats, error)
 }
 
@@ -74,6 +74,7 @@ type Notifier interface {
 }
 
 type Config struct {
+	NotificationTarget       string
 	AccountLabel             string
 	JokeTone                 string
 	StartupHeartbeat         bool
@@ -131,20 +132,23 @@ type Stats struct {
 }
 
 type Health struct {
-	Status                   HealthStatus  `json:"status"`
-	Version                  string        `json:"version"`
-	Commit                   string        `json:"commit"`
-	PollInterval             time.Duration `json:"pollInterval"`
-	ObservationRetentionDays int           `json:"observationRetentionDays"`
-	LastSuccessAt            *time.Time    `json:"lastSuccessAt,omitempty"`
-	LastAttemptAt            *time.Time    `json:"lastAttemptAt,omitempty"`
-	LastFailureAt            *time.Time    `json:"lastFailureAt,omitempty"`
-	LastError                string        `json:"lastError,omitempty"`
-	FailureKind              string        `json:"failureKind,omitempty"`
-	ConsecutiveFailures      int           `json:"consecutiveFailures"`
-	NextPollEstimateAt       *time.Time    `json:"nextPollEstimateAt,omitempty"`
-	StaleAfter               time.Duration `json:"staleAfter"`
-	IsStale                  bool          `json:"isStale"`
+	Status                   HealthStatus     `json:"status"`
+	Version                  string           `json:"version"`
+	Commit                   string           `json:"commit"`
+	PollInterval             time.Duration    `json:"pollInterval"`
+	ObservationRetentionDays int              `json:"observationRetentionDays"`
+	LastSuccessAt            *time.Time       `json:"lastSuccessAt,omitempty"`
+	LastAttemptAt            *time.Time       `json:"lastAttemptAt,omitempty"`
+	LastFailureAt            *time.Time       `json:"lastFailureAt,omitempty"`
+	LastError                string           `json:"lastError,omitempty"`
+	FailureKind              string           `json:"failureKind,omitempty"`
+	ConsecutiveFailures      int              `json:"consecutiveFailures"`
+	NextPollEstimateAt       *time.Time       `json:"nextPollEstimateAt,omitempty"`
+	StaleAfter               time.Duration    `json:"staleAfter"`
+	IsStale                  bool             `json:"isStale"`
+	QueueReason              string           `json:"queueReason,omitempty"`
+	Outbox                   store.QueueStats `json:"outbox"`
+	TelegramInbox            store.InboxStats `json:"telegramInbox"`
 }
 
 type HealthNotice struct {
@@ -327,6 +331,12 @@ func (s *Server) Health(ctx context.Context) (Health, error) {
 		ObservationRetentionDays: s.cfg.ObservationRetentionDays,
 		StaleAfter:               2 * interval,
 	}
+	queueStats, err := s.store.Stats(ctx)
+	if err != nil {
+		return health, err
+	}
+	health.Outbox = queueStats.Outbox
+	health.TelegramInbox = queueStats.TelegramInbox
 	success, ok, err := s.timeSetting(ctx, SettingPollSuccessAt)
 	if err != nil {
 		return health, err
@@ -367,13 +377,13 @@ func (s *Server) Health(ctx context.Context) (Health, error) {
 		health.Status = HealthDegraded
 		health.FailureKind = "interrupted"
 		health.LastError = "previous poll was interrupted before completion"
-		return health, nil
+		return applyQueueHealth(health), nil
 	}
 	if health.LastFailureAt != nil && (health.LastSuccessAt == nil || health.LastFailureAt.After(*health.LastSuccessAt)) && count > 0 {
 		health.Status = HealthDegraded
 		next := health.LastFailureAt.Add(pollBackoff(count))
 		health.NextPollEstimateAt = &next
-		return health, nil
+		return applyQueueHealth(health), nil
 	}
 	if health.LastSuccessAt != nil {
 		next := health.LastSuccessAt.Add(interval)
@@ -385,7 +395,19 @@ func (s *Server) Health(ctx context.Context) (Health, error) {
 			health.Status = HealthOK
 		}
 	}
-	return health, nil
+	return applyQueueHealth(health), nil
+}
+
+func applyQueueHealth(health Health) Health {
+	switch {
+	case health.Outbox.DeadLetter > 0 || health.TelegramInbox.Dead > 0:
+		health.Status = HealthDegraded
+		health.QueueReason = "dead_letters"
+	case health.Outbox.ExpiredLeases > 0:
+		health.Status = HealthDegraded
+		health.QueueReason = "expired_leases"
+	}
+	return health
 }
 
 func (s *Server) recordPollFailure(ctx context.Context, pollErr error) error {
@@ -482,7 +504,7 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 	decision := resetwatch.Decide(obs, states, resetwatch.Options{
 		JokeChooser: resetwatch.CatalogJokeChooser{Tone: s.cfg.JokeTone},
 	})
-	inserted, err := s.store.ApplyDecision(ctx, obs, decision)
+	inserted, err := s.store.ApplyDecision(ctx, obs, decision, s.cfg.NotificationTarget)
 	if err != nil {
 		return PollResult{}, err
 	}
@@ -495,15 +517,15 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 	if err := s.pruneIfDue(ctx); err != nil {
 		s.logger.Warn("scriba observation prune failed", "error", err)
 	}
-	warnings, err := s.store.InsertWarningEvents(ctx, resetwatch.WarningCandidates(obs))
+	warnings, err := s.store.InsertWarningEvents(ctx, resetwatch.WarningCandidates(obs), s.cfg.NotificationTarget)
 	if err != nil {
 		return PollResult{}, err
 	}
-	grantWarnings, err := s.store.InsertGrantExpiryWarningEvents(ctx, resetwatch.GrantExpiryWarningCandidates(obs))
+	grantWarnings, err := s.store.InsertGrantExpiryWarningEvents(ctx, resetwatch.GrantExpiryWarningCandidates(obs), s.cfg.NotificationTarget)
 	if err != nil {
 		return PollResult{}, err
 	}
-	resetGrants, err := s.store.InsertResetGrantEvents(ctx, obs, resetwatch.ResetGrantEventCandidates(obs))
+	resetGrants, err := s.store.InsertResetGrantEvents(ctx, obs, resetwatch.ResetGrantEventCandidates(obs), s.cfg.NotificationTarget)
 	if err != nil {
 		return PollResult{}, err
 	}
@@ -573,7 +595,7 @@ func (s *Server) pollRadar(ctx context.Context) ([]radar.ProbabilityAlert, error
 	if err != nil {
 		return nil, err
 	}
-	inserted, err := s.store.InsertRadarAlertEvent(ctx, alert)
+	inserted, err := s.store.InsertRadarAlertEvent(ctx, alert, s.cfg.NotificationTarget)
 	if err != nil {
 		return nil, err
 	}

@@ -18,11 +18,35 @@ type Stats struct {
 	GrantWarningDeliveries map[string]DeliveryCounts `json:"grantWarningDeliveries"`
 	GrantDeliveries        map[string]DeliveryCounts `json:"grantDeliveries"`
 	RadarDeliveries        map[string]DeliveryCounts `json:"radarDeliveries"`
+	Outbox                 QueueStats                `json:"outbox"`
+	TelegramInbox          InboxStats                `json:"telegramInbox"`
 	LatestObservation      *ObservationSummary       `json:"latestObservation,omitempty"`
 	LastReset              *ResetSummary             `json:"lastReset,omitempty"`
 	LastWarning            *WarningSummary           `json:"lastWarning,omitempty"`
 	LastGrantWarning       *GrantWarningSummary      `json:"lastGrantWarning,omitempty"`
 	LastGrant              *GrantSummary             `json:"lastGrant,omitempty"`
+}
+
+type QueueStats struct {
+	Pending          int64         `json:"pending"`
+	Leased           int64         `json:"leased"`
+	Delivered        int64         `json:"delivered"`
+	DeadLetter       int64         `json:"deadLetter"`
+	DuePending       int64         `json:"duePending"`
+	ExpiredLeases    int64         `json:"expiredLeases"`
+	Attempts         int64         `json:"attempts"`
+	OldestPendingAt  *time.Time    `json:"oldestPendingAt,omitempty"`
+	OldestPendingAge time.Duration `json:"oldestPendingAge"`
+}
+
+type InboxStats struct {
+	Pending          int64         `json:"pending"`
+	Processed        int64         `json:"processed"`
+	Dead             int64         `json:"dead"`
+	Due              int64         `json:"due"`
+	Attempts         int64         `json:"attempts"`
+	OldestPendingAt  *time.Time    `json:"oldestPendingAt,omitempty"`
+	OldestPendingAge time.Duration `json:"oldestPendingAge"`
 }
 
 type DBFileStats struct {
@@ -82,6 +106,7 @@ type GrantSummary struct {
 }
 
 func (s *Store) Stats(ctx context.Context) (Stats, error) {
+	now := time.Now().UTC()
 	stats := Stats{
 		Path:                   s.path,
 		Counts:                 map[string]int64{},
@@ -97,6 +122,18 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		return stats, err
 	}
 	stats.SchemaVersion = version
+	if err := s.db.QueryRowContext(ctx, `select count(*) filter(where status='pending'),count(*) filter(where status='leased'),count(*) filter(where status='delivered'),count(*) filter(where status='dead_letter'),count(*) filter(where status='pending' and available_at<=?),count(*) filter(where status='leased' and lease_expires_at<=?),coalesce(sum(attempts),0),min(created_at) filter(where status='pending') from notification_outbox`, formatTime(now), formatTime(now)).Scan(&stats.Outbox.Pending, &stats.Outbox.Leased, &stats.Outbox.Delivered, &stats.Outbox.DeadLetter, &stats.Outbox.DuePending, &stats.Outbox.ExpiredLeases, &stats.Outbox.Attempts, scanOptionalTime(&stats.Outbox.OldestPendingAt)); err != nil {
+		return stats, err
+	}
+	if stats.Outbox.OldestPendingAt != nil {
+		stats.Outbox.OldestPendingAge = max(now.Sub(*stats.Outbox.OldestPendingAt), 0)
+	}
+	if err := s.db.QueryRowContext(ctx, `select count(*) filter(where status='pending'),count(*) filter(where status='processed'),count(*) filter(where status='dead'),count(*) filter(where status='pending' and available_at<=?),coalesce(sum(attempts),0),min(created_at) filter(where status='pending') from telegram_updates`, formatTime(now)).Scan(&stats.TelegramInbox.Pending, &stats.TelegramInbox.Processed, &stats.TelegramInbox.Dead, &stats.TelegramInbox.Due, &stats.TelegramInbox.Attempts, scanOptionalTime(&stats.TelegramInbox.OldestPendingAt)); err != nil {
+		return stats, err
+	}
+	if stats.TelegramInbox.OldestPendingAt != nil {
+		stats.TelegramInbox.OldestPendingAge = max(now.Sub(*stats.TelegramInbox.OldestPendingAt), 0)
+	}
 	for _, table := range []string{
 		"accounts",
 		"limit_observations",
@@ -184,6 +221,25 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	}
 	return stats, nil
 }
+
+func scanOptionalTime(dst **time.Time) sql.Scanner {
+	return scannerFunc(func(src any) error {
+		if src == nil {
+			return nil
+		}
+		value, ok := src.(string)
+		if !ok {
+			return errors.New("unexpected timestamp type")
+		}
+		parsed := parseDBTime(value)
+		*dst = &parsed
+		return nil
+	})
+}
+
+type scannerFunc func(any) error
+
+func (f scannerFunc) Scan(src any) error { return f(src) }
 
 func (s *Store) countTable(ctx context.Context, table string) (int64, error) {
 	var count int64

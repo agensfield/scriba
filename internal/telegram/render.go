@@ -306,6 +306,10 @@ func RenderStats(stats server.Stats, environment string, telegramEnabled bool) s
 	b.WriteString(renderRuntimeStats(stats, environment, telegramEnabled))
 	b.WriteString("\n\n")
 	b.WriteString(renderHealthStats(stats.Health))
+	b.WriteString("\n\n")
+	b.WriteString(renderQueueStats("Outbox", stats.Store.Outbox))
+	b.WriteString("\n\n")
+	b.WriteString(renderInboxStats(stats.Store.TelegramInbox))
 	if stats.Store.LatestObservation != nil {
 		b.WriteString("\n\n")
 		b.WriteString(renderObservationStats(*stats.Store.LatestObservation))
@@ -377,7 +381,36 @@ func renderHealthStats(health server.Health) string {
 	if health.LastError != "" {
 		rows = append(rows, fmt.Sprintf("%-12s %s", "error", truncate(health.LastError, 120)))
 	}
+	if health.QueueReason != "" {
+		rows = append(rows, fmt.Sprintf("%-12s %s", "queue", health.QueueReason))
+	}
 	return "<b>Health</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func renderQueueStats(title string, q store.QueueStats) string {
+	rows := []string{
+		fmt.Sprintf("%-12s %d", "pending", q.Pending), fmt.Sprintf("%-12s %d", "due", q.DuePending),
+		fmt.Sprintf("%-12s %d", "leased", q.Leased), fmt.Sprintf("%-12s %d", "expired", q.ExpiredLeases),
+		fmt.Sprintf("%-12s %d", "delivered", q.Delivered), fmt.Sprintf("%-12s %d", "dead letter", q.DeadLetter),
+		fmt.Sprintf("%-12s %d", "attempts", q.Attempts), fmt.Sprintf("%-12s %s", "oldest", renderQueueAge(q.OldestPendingAt, q.OldestPendingAge)),
+	}
+	return "<b>" + html.EscapeString(title) + "</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func renderInboxStats(q store.InboxStats) string {
+	rows := []string{
+		fmt.Sprintf("%-12s %d", "pending", q.Pending), fmt.Sprintf("%-12s %d", "due", q.Due),
+		fmt.Sprintf("%-12s %d", "processed", q.Processed), fmt.Sprintf("%-12s %d", "dead", q.Dead),
+		fmt.Sprintf("%-12s %d", "attempts", q.Attempts), fmt.Sprintf("%-12s %s", "oldest", renderQueueAge(q.OldestPendingAt, q.OldestPendingAge)),
+	}
+	return "<b>Telegram inbox</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+}
+
+func renderQueueAge(at *time.Time, age time.Duration) string {
+	if at == nil {
+		return "none"
+	}
+	return server.FormatDuration(age) + " · " + formatFreshTime(*at)
 }
 
 func renderObservationStats(latest store.ObservationSummary) string {
