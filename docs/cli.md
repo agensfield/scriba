@@ -15,6 +15,7 @@ scriba status --fast
 scriba status --no-remote
 scriba status --redact --json
 scriba context --json
+scriba mcp
 scriba schema
 scriba config path
 scriba config show --json
@@ -61,7 +62,13 @@ Codex context. The current profile ID is `default`.
 The checked-in schema is
 [`context.schema.json`](../schemas/context.schema.json). See
 [`agent-context.md`](agent-context.md) for source precedence, privacy exclusions,
-partial-result behavior, and the current CLI-only surface boundary.
+partial-result behavior, Unix API/SSE cursors, and MCP parity.
+
+`scriba mcp` is a protocol-pure stdio server for local agent clients. It exposes
+only `scriba_get_context` and `scriba_list_events`; it cannot refresh providers,
+change config, send notifications, redeem grants, or select arbitrary accounts.
+Use `--config`, `--cache-dir`, and `--state-path` to select the same read sources
+as the context command. Normal stdin EOF and handled SIGTERM exit cleanly.
 
 ## Config
 

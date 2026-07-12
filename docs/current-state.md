@@ -34,11 +34,13 @@ Claude Code and Codex usage tracker.
 - Stable `scriba.v1` status, Codex limits, profile, and reset-grant JSON outputs,
   plus `scriba.budget.v1` reports, have checked-in Draft 2020-12 schemas and
   canonical validation goldens.
-- Wave 3.1 shared agent context is deployed through commit `e3cd9b2`.
+- Wave 3.1 shared agent context CLI is deployed through commit `e3cd9b2`.
   `scriba context --json` emits the allowlisted `scriba.context.v1` projection
   from read-only cache/store inputs, with independent freshness and absence per
-  source, the `default` profile, and minimized durable policy events. HTTP/SSE
-  and MCP parity remain future work.
+  source, the `default` profile, and minimized durable policy events. The
+  owner-only Unix HTTP/SSE API and two-tool stdio MCP adapter are implemented
+  and cross-surface parity-tested through `e659570`, but remain undeployed until
+  the copied-live schema-v8 to v10 migration and rollback gate passes.
 - `scriba codex budget` and `scriba claude budget` derive provider-neutral quota
   pacing from fresh provider windows. They use percentage points rather than
   local token counts and intentionally have no `--fast` mode. Codex may use up
@@ -84,9 +86,12 @@ Claude Code and Codex usage tracker.
   single read snapshot and a captured high-water mark, so later/backdated
   inserts cannot be skipped or leak across a page boundary. Commit `8b6272e`
   adds schema v10 tombstones plus strict `scriba.events.v1` cursor paging;
-  `fc663de` adds the reviewed Unix socket ownership primitive. Profiles move to
-  server schema v11. Live devbox remains schema 8 until copied-live migration,
-  previous-binary restore-copy, and deployment gates pass.
+  `fc663de` adds the reviewed Unix socket ownership primitive. Commits
+  `29fd69a` through `e659570` add the Unix HTTP/SSE and stdio MCP transports,
+  supervised CLI/server wiring, exact response contracts, and real lifecycle
+  and parity tests. Profiles move to server schema v11. Live devbox remains
+  schema 8 until copied-live migration, previous-binary restore-copy, and
+  deployment gates pass.
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and
   `grant_expiry_checkpoint`. Its `current` preset preserves the existing
@@ -195,9 +200,9 @@ apps/macos/Scripts/package_zip.sh release
 - Execute the accepted local usage control-plane program in
   [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
   migration safety, the canonical outbox, budget surfaces, and the schema-v8
-  policy runtime, deployed inspection CLI surfaces, and the Wave 3.1 context
-  CLI are completed checkpoints. API/SSE/MCP parity, profiles, and remaining
-  surface parity remain.
+  policy runtime, deployed inspection CLI surfaces, the Wave 3.1 context CLI,
+  and local API/SSE/MCP parity are completed checkpoints. Agent-transport
+  deployment, profiles, and remaining surface parity remain.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.
 - Decide whether ad-hoc signed zip distribution is enough before

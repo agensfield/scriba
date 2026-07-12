@@ -59,12 +59,28 @@ other live WAL readers, SQLite may perform transient `-wal`/`-shm`
 coordination, so the guarantee is semantic read-only behavior, not immutable
 sidecar bytes.
 
-## Current Surface Boundary
+## Agent Surfaces
 
-Wave 3.1 through `e3cd9b2` ships the CLI only. The planned Unix-socket
-HTTP/SSE API and stdio MCP adapter are not implemented yet. They must reuse the
-same service and prove semantic fixture parity before being described as
-available; no API, SSE, or MCP endpoint should be inferred from this contract.
+The same service is now exposed through three read-only surfaces:
+
+- `scriba context --json` returns `scriba.context.v1`.
+- An opt-in owner-only Unix API serves `GET /v1/health`, `GET /v1/context`,
+  and replayable SSE at `GET /v1/events`.
+- `scriba mcp` runs a stdio MCP server with exactly two tools:
+  `scriba_get_context` and `scriba_list_events`.
+
+The Unix API is disabled by default. Enable `server.contextAPI.enabled` in
+config, then run `scriba server run`. A missing explicit path resolves to
+`context.sock` beside the server database; explicit paths must be absolute.
+The socket parent is private (`0700`) and the socket is mode `0600`. This is a
+same-UID trust boundary, not isolation from malicious code already running as
+the same user. TCP and bearer-authenticated network serving remain absent.
+
+SSE clients reconnect with `Last-Event-ID` or `?cursor=`. New connections
+capture the current high-water and tail future events; cursor
+`v1.0000000000000000` requests retained history. Expired cursors return `410`,
+future or malformed cursors return `400`, and heartbeats never advance the
+cursor.
 
 Commit `6a6a163` establishes the undeployed schema-v9 replay foundation. Every
 future policy event receives a transactional monotonic replay sequence, and
@@ -73,9 +89,12 @@ unsafe timestamp/hash ordering, but it is not itself an available public API:
 the versioned cursor, expiry semantics, SSE adapter, and MCP event tool still
 need their shared contract and deployment proof.
 
-Commit `8b6272e` now defines that shared page contract as `scriba.events.v1`.
+Commit `8b6272e` defines the shared page contract as `scriba.events.v1`.
 Its account-free fixed-width cursors support explicit replay, latest-page
 inspection, and capture-current tailing. Schema v10 preserves tombstones and
 durable high-water state across retention, while malformed rows consume only a
-bounded scan slot and never leak raw payloads. The Unix listener primitive at
-`fc663de` is also implemented, but HTTP/SSE routes and MCP tools remain absent.
+bounded scan slot and never leak raw payloads. Commits `29fd69a`, `e157b66`,
+and `249991d` implement and expose the Unix API and stdio MCP adapters. A shared
+fixture proves context parity across CLI/HTTP/MCP and event/cursor parity across
+the service/SSE/MCP while preserving schema, business-row, and privacy bounds.
+Live deployment remains pending the schema-v8 to v10 migration gate.

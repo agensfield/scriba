@@ -18,6 +18,14 @@ and accepts an explicit JSON config via `--config`.
       "paths": []
     }
   },
+  "server": {
+    "enabled": false,
+    "statePath": "/Users/arda/.local/state/scriba/server.sqlite",
+    "contextAPI": {
+      "enabled": false,
+      "socketPath": "/Users/arda/.local/state/scriba/context.sock"
+    }
+  },
   "telegram": {
     "enabled": false,
     "botToken": "",
@@ -31,6 +39,13 @@ and accepts an explicit JSON config via `--config`.
   }
 }
 ```
+
+`server.contextAPI` is opt-in. When enabled without `socketPath`, Scriba places
+`context.sock` beside the resolved server database. An explicit socket path
+must be absolute. Scriba creates a trusted owner-only parent (`0700`) and a
+same-user Unix socket (`0600`); TCP is not enabled by this setting. Start the
+resident process with `scriba server run` and query it with, for example,
+`curl --unix-socket ~/.local/state/scriba/context.sock http://localhost/v1/health`.
 
 Configure Telegram from the CLI:
 

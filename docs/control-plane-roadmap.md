@@ -212,15 +212,19 @@ returned eight independently described sources, Codex on the `default` profile,
 zero events, and unavailable/missing Claude data without failing the envelope.
 Repeated reads preserved database hashes and schema/policy/outbox counts, and
 the privacy-forbidden grep was clean. Full Go race/check gates and all 18 Swift
-tests passed. The Unix-socket API/SSE and stdio MCP portions, including parity
-proof, have not started and are not implied by this checkpoint.
+tests passed.
 
 Durable replay sequencing began at `6a6a163` as schema v9. Commit `8b6272e`
 adds the public `scriba.events.v1` paging contract and schema v10 tombstones so
 retention cannot silently create replay holes. Versioned fixed-width cursors,
 captured high-water bounds, expiry errors, poison-row bounds, and account-pinned
 pages are covered. The hardened Unix-listener lifecycle primitive landed at
-`fc663de`. None of these changes are deployed yet; timestamp or hashed-event-ID
+`fc663de`. Commits `29fd69a`, `e157b66`, `9051ce9`, and `249991d` implement the
+owner-only Unix HTTP/SSE API, stdio MCP tools, response contracts, and CLI/server
+wiring. Commit `e659570` closes the real stdio lifecycle proof. A shared fixture
+proves context parity across direct service, CLI, Unix HTTP, and MCP, plus event
+and cursor parity across direct service, SSE, and MCP. None of the schema-v9/v10
+or agent-transport changes are deployed yet; timestamp or hashed-event-ID
 cursors remain forbidden.
 
 - Add one allowlisted `AgentContextService` over read-only cache/store opens.
@@ -236,9 +240,12 @@ Gate: CLI, API, and MCP are semantically identical for one fixture; read-only
 queries leave database hashes, mtimes, schemas, and row counts unchanged;
 forbidden identifiers never appear.
 
-Current gate status: partially passed. The CLI contract, read-only and privacy
-proofs, and deployment receipt are complete; API/SSE/MCP implementation and
-cross-surface semantic parity remain.
+Current gate status: local implementation and cross-surface parity passed;
+deployment remains. Before activation, a copied-live schema-v8 database must
+pass v10 migration, idempotence, integrity, replay/high-water, unchanged
+business-state, and previous-binary restore-copy checks. The live service then
+needs Unix socket ownership, HTTP/SSE reconnect, MCP, privacy, and read-only
+smokes.
 
 ### 3.2 Multi-account profiles
 
