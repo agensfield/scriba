@@ -76,6 +76,25 @@ func runServerBackup(cfg config.Config, opts options) error {
 	return output(opts, result, human)
 }
 
+func serverProfiles(cfg config.Config) ([]servercore.Profile, []store.ProfileSpec) {
+	runtime := make([]servercore.Profile, 0, len(cfg.Profiles))
+	specs := make([]store.ProfileSpec, 0, len(cfg.Profiles))
+	for _, profile := range cfg.Profiles {
+		isDefault := profile.ID == cfg.DefaultProfileID
+		specs = append(specs, store.ProfileSpec{ProfileRef: profile.ID, ProviderID: "codex", Label: profile.Label, Enabled: profile.Enabled, IsDefault: isDefault})
+		if !profile.Enabled {
+			continue
+		}
+		runtime = append(runtime, servercore.Profile{Ref: profile.ID, Label: profile.Label, AuthPaths: append([]string(nil), profile.CodexAuthPaths...), Default: isDefault})
+	}
+	return runtime, specs
+}
+
+func runtimeServerProfiles(cfg config.Config) []servercore.Profile {
+	profiles, _ := serverProfiles(cfg)
+	return profiles
+}
+
 func runServerRun(cfg config.Config, opts options) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -84,6 +103,10 @@ func runServerRun(cfg config.Config, opts options) error {
 		return err
 	}
 	defer func() { _ = st.Close() }()
+	profiles, specs := serverProfiles(cfg)
+	if err := st.SyncProfiles(ctx, specs); err != nil {
+		return fmt.Errorf("sync server profiles: %w", err)
+	}
 	heartbeat, err := shouldSendStartupHeartbeat(ctx, st, cfg.Server)
 	if err != nil {
 		return err
@@ -93,6 +116,7 @@ func runServerRun(cfg config.Config, opts options) error {
 		return err
 	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
+		Profiles:                 profiles,
 		NotificationTarget:       notificationTarget,
 		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
@@ -207,6 +231,7 @@ func runServerStatus(cfg config.Config, opts options) error {
 		return err
 	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
+		Profiles:                 runtimeServerProfiles(cfg),
 		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
@@ -235,6 +260,7 @@ func runServerHealth(cfg config.Config, opts options) error {
 	}
 	defer func() { _ = st.Close() }()
 	srv := servercore.New(st, nil, nil, servercore.Config{
+		Profiles:                 runtimeServerProfiles(cfg),
 		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
@@ -253,6 +279,7 @@ func runServerStats(cfg config.Config, opts options) error {
 	}
 	defer func() { _ = st.Close() }()
 	srv := servercore.New(st, nil, nil, servercore.Config{
+		Profiles:                 runtimeServerProfiles(cfg),
 		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
@@ -272,11 +299,16 @@ func runServerRefresh(cfg config.Config, opts options) error {
 		return err
 	}
 	defer func() { _ = st.Close() }()
+	profiles, specs := serverProfiles(cfg)
+	if err := st.SyncProfiles(context.Background(), specs); err != nil {
+		return fmt.Errorf("sync server profiles: %w", err)
+	}
 	_, notificationTarget, err := telegramDeliveryTarget(cfg)
 	if err != nil {
 		return err
 	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
+		Profiles:                 profiles,
 		NotificationTarget:       notificationTarget,
 		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
@@ -307,6 +339,7 @@ func runServerPrune(cfg config.Config, opts options) error {
 	}
 	defer func() { _ = st.Close() }()
 	srv := servercore.New(st, nil, nil, servercore.Config{
+		Profiles:                 runtimeServerProfiles(cfg),
 		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
