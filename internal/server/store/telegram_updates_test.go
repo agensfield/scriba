@@ -83,7 +83,7 @@ func TestTelegramUpdatesLifecycleAndStats(t *testing.T) {
 	}
 }
 
-func TestTelegramInboxSchemaIsDormantV7(t *testing.T) {
+func TestTelegramInboxSchemaRemainsAvailableAfterV8(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	v, err := s.SchemaVersion(ctx)
@@ -94,8 +94,8 @@ func TestTelegramInboxSchemaIsDormantV7(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, err = s.SchemaVersion(ctx)
-	if err != nil || v != OutboxSchemaVersion {
-		t.Fatalf("v7 version=%d err=%v", v, err)
+	if err != nil || v != SchemaVersion {
+		t.Fatalf("schema version=%d err=%v", v, err)
 	}
 	for _, column := range []string{"bot_ref", "update_id", "raw_json", "status", "attempts", "available_at", "processed_at", "dead_at"} {
 		cols, err := s.tableColumns(ctx, "telegram_updates")

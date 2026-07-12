@@ -132,7 +132,7 @@ func TestV6MigrationBackfillsOnlyDeliveryRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.db.Exec(`drop table if exists notification_outbox; delete from schema_migrations where version=7; insert or ignore into schema_migrations(version,applied_at) values(6,'2020-01-01T00:00:00Z')`); err != nil {
+	if _, err = s.db.Exec(`drop table if exists notification_outbox; delete from schema_migrations where version>=7; insert or ignore into schema_migrations(version,applied_at) values(6,'2020-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.db.Exec(`insert into radar_alert_events(id,milestone,probability_24h,probability_48h,level,expected_window,reasoning_summary,checked_at,detected_at,snapshot_json,created_at) values
@@ -177,7 +177,7 @@ func TestV6MigrationRollsBackSchemaAndVersionOnBadPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.db.Exec(`drop table if exists notification_outbox; delete from schema_migrations where version=7;
+	_, err = s.db.Exec(`drop table if exists notification_outbox; delete from schema_migrations where version>=7;
 insert or ignore into schema_migrations(version,applied_at) values(6,'2020-01-01T00:00:00Z');
 insert into radar_alert_events(id,milestone,probability_24h,probability_48h,level,expected_window,reasoning_summary,checked_at,detected_at,snapshot_json,created_at)
 values('e',1,0,0,'low','','','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z','not-json','2020-01-01T00:00:00Z');

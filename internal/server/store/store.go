@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 7
+const SchemaVersion = 8
 
 const deliverySendLease = 10 * time.Minute
 
@@ -209,7 +209,10 @@ on conflict(version) do nothing`, 6, formatTime(time.Now()))
 	if err != nil {
 		return err
 	}
-	return s.migrateNotificationOutbox(ctx)
+	if err := s.migrateNotificationOutbox(ctx); err != nil {
+		return err
+	}
+	return s.migratePolicy(ctx)
 }
 
 func (s *Store) migrateNotificationDeliveries(ctx context.Context) error {

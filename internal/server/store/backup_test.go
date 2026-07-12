@@ -118,7 +118,7 @@ func TestOpenVariantsRefuseNewerSchemaWithoutWrites(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := db.Exec(`create table schema_migrations (version integer primary key, applied_at text not null); insert into schema_migrations values (8, 'future')`); err != nil {
+			if _, err := db.Exec(`create table schema_migrations (version integer primary key, applied_at text not null); insert into schema_migrations values (?, 'future')`, SchemaVersion+1); err != nil {
 				t.Fatal(err)
 			}
 			if err := db.Close(); err != nil {
@@ -155,7 +155,7 @@ func TestMigrateRefusesNewerSchemaBeforeWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`create table schema_migrations (version integer primary key, applied_at text not null); insert into schema_migrations values (8, 'future')`); err != nil {
+	if _, err := db.Exec(`create table schema_migrations (version integer primary key, applied_at text not null); insert into schema_migrations values (?, 'future')`, SchemaVersion+1); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(path)
