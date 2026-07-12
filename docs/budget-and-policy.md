@@ -1,8 +1,9 @@
 # Budget and Policy Checkpoint
 
-This document records the committed Wave 2.1 code boundary. It does not claim
-that schema v8 or policy evaluation has been deployed, or that the resident
-server has cut over from the existing reset/warning path.
+This document records the Wave 2.1 budget and policy boundary. Schema v8 and
+atomic policy evaluation are live on the devbox at commit `c32d885`; read-only
+policy inspection CLI surfaces and the remaining Wave 2 release gates are not
+complete yet.
 
 ## Budget Surfaces
 
@@ -63,7 +64,14 @@ is a bootstrap: it establishes state and explanations without emitting policy
 events. Later evaluations use semantic identities so repeated evaluation is
 deterministic and deduplicable.
 
-At this checkpoint the evaluator and schema exist, but policy persistence and
-event production are not documented as the active runtime path. Runtime
-cutover, inspection commands, migration/deploy receipts, and live Wave 2 gates
-remain release work.
+The resident server now makes policy evaluation the active runtime path. A
+poll loads prior policy state, evaluates the `current` preset, and persists
+state, semantic events, legacy-compatible business events, and notification
+intents atomically. Account bootstrap and policy bootstrap are separate: a
+first policy evaluation establishes state and emits nothing, including for an
+account already known to the older polling path. The cutover did not run dual
+evaluation or replay historical alerts.
+
+The live migration and deployment evidence is recorded in
+[`schema-v8-migration.md`](schema-v8-migration.md). Policy `validate`, `list`,
+`explain`, and outbox inspection commands remain pending.

@@ -167,9 +167,10 @@ token counts on quota calculations.
 
 ### 2.2 Typed policy evaluation
 
-Status: policy-core/schema checkpoint only. Schema v8 and the closed-world pure
-evaluator are committed; resident-server cutover, policy CLI inspection
-surfaces, live migration/deploy proof, and the Wave 2 release gate remain.
+Status: live runtime cutover completed at commit `c32d885`. Schema v8, atomic
+policy persistence/event production, bootstrap without replay, copied-live
+migration proof, and the devbox deployment receipt are complete. Read-only
+policy CLI inspection surfaces and the remaining Wave 2 release gate stay open.
 
 - Normalize stable provider budget keys before policy evaluation.
 - Support closed rule kinds for remaining checkpoints, reset transitions,
@@ -317,3 +318,10 @@ No product implementation was started before this plan was reconciled.
   offline catalog with a candidate-only refresh/check workflow; and pinned
   ccusage/openusage projections cover every 271999/272000/272001 GPT-5.6
   boundary. Full Go security/lint gates and all 18 Swift tests passed locally.
+- 2026-07-12: Wave 2.2 schema-v8 policy runtime deployed at `c32d885`.
+  A stopped-service schema-v7 backup with SHA-256 `e92458e196c0ad163538b93989f835f80b6f46f605f266b101c1d7f0a5547703`
+  passed copied-live migration, idempotence, integrity, exact legacy/outbox
+  preservation, and `b999204` rollback-copy proof. Devbox is healthy on schema
+  8 with 15 policy states, zero bootstrap events, 40 delivered outbox rows and
+  41 preserved attempts, two clean explicit refreshes, and all 11 Telegram
+  commands registered. See `docs/schema-v8-migration.md`.
