@@ -53,6 +53,116 @@ func TestApplyCodexPollBootstrapThenEmitOnce(t *testing.T) {
 	assertPollCounts(t, s, 2, 1, 1)
 }
 
+func TestApplyCodexPollTransitionFixturesPersistExactPolicyAndOutbox(t *testing.T) {
+	s := openPollStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 12, 8, 0, 0, 0, time.UTC)
+	periodFive := int64((5 * time.Hour) / time.Millisecond)
+	periodWeek := int64((7 * 24 * time.Hour) / time.Millisecond)
+	oldFiveReset := base.Add(5 * time.Hour)
+	oldWeekReset := base.Add(24 * time.Hour)
+	usedFive, usedWeek := 70.0, 34.0
+	count := 1
+	firstGrant := resetwatch.ResetCredit{ID: "grant-old", Status: "available", Title: "Old", GrantedAt: base.Add(-time.Hour), ExpiresAt: base.Add(10 * 24 * time.Hour)}
+	bootstrap := resetwatch.Observation{
+		ProviderID: resetwatch.ProviderCodex,
+		Account:    resetwatch.Account{Ref: "acct", Label: "Fixture"},
+		ObservedAt: base,
+		Windows: []resetwatch.Window{
+			{Label: resetwatch.LabelFiveHour, UsedPercent: &usedFive, ResetAt: oldFiveReset, PeriodDurationMs: &periodFive},
+			{Label: resetwatch.LabelWeeklyLimit, UsedPercent: &usedWeek, ResetAt: oldWeekReset, PeriodDurationMs: &periodWeek},
+		},
+		ResetGrants:  resetwatch.ResetGrants{AvailableCount: &count, Credits: []resetwatch.ResetCredit{firstGrant}},
+		SnapshotJSON: []byte(`{"fixture":"bootstrap"}`),
+	}
+	if got, err := s.ApplyCodexPoll(ctx, pollInput(bootstrap, "telegram:42")); err != nil || len(got.PolicyEvents) != 0 {
+		t.Fatalf("bootstrap=%+v err=%v", got, err)
+	}
+
+	at := base.Add(time.Hour)
+	usedFive, usedWeek, count = 81, 40, 2
+	nextWeekReset := base.Add(7 * 24 * time.Hour)
+	newGrant := resetwatch.ResetCredit{ID: "grant-new", Status: "available", Title: "New", GrantedAt: at, ExpiresAt: at.Add(2 * 24 * time.Hour)}
+	transition := resetwatch.Observation{
+		ProviderID: resetwatch.ProviderCodex,
+		Account:    bootstrap.Account,
+		ObservedAt: at,
+		Windows: []resetwatch.Window{
+			{Label: resetwatch.LabelFiveHour, UsedPercent: &usedFive, ResetAt: oldFiveReset, PeriodDurationMs: &periodFive},
+			{Label: resetwatch.LabelWeeklyLimit, UsedPercent: &usedWeek, ResetAt: nextWeekReset, PeriodDurationMs: &periodWeek},
+		},
+		ResetGrants:  resetwatch.ResetGrants{AvailableCount: &count, Credits: []resetwatch.ResetCredit{firstGrant, newGrant}},
+		SnapshotJSON: []byte(`{"fixture":"transition"}`),
+	}
+	got, err := s.ApplyCodexPoll(ctx, pollInput(transition, "telegram:42"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		rule, subject string
+		kind          policy.EventKind
+		checkpoint    int
+	}{
+		{"current.remaining.primary", "primary.five_hour", policy.EventRemainingCheckpoint, 20},
+		{"current.reset.weekly", "primary.weekly", policy.EventResetTransition, 0},
+		{"current.grant.available", "grant-new", policy.EventGrantAvailable, 0},
+		{"current.grant.expiry", "grant-new", policy.EventGrantExpiryCheckpoint, 5},
+		{"current.grant.expiry", "grant-new", policy.EventGrantExpiryCheckpoint, 3},
+	}
+	if len(got.PolicyEvents) != len(want) {
+		t.Fatalf("policy events=%+v", got.PolicyEvents)
+	}
+	for i, event := range got.PolicyEvents {
+		if event.RuleID != want[i].rule || event.Subject != want[i].subject || event.Kind != want[i].kind || event.Checkpoint != want[i].checkpoint || event.DetectedAt != at {
+			t.Fatalf("event %d=%+v want=%+v", i, event, want[i])
+		}
+	}
+	if len(got.WarningEvents) != 1 || len(got.ResetEvents) != 1 || len(got.ResetGrantEvents) != 1 || len(got.GrantExpiryWarningEvents) != 2 {
+		t.Fatalf("typed legacy parity=%+v", got)
+	}
+
+	rows, err := s.db.Query(`select p.semantic_event_id,p.rule_id,p.subject_key,p.event_kind,p.payload_version,p.payload_json,o.id,o.target,o.payload_version,o.payload_json
+from policy_events p join notification_outbox o on o.event_kind=p.event_kind and o.event_id=p.semantic_event_id
+order by p.id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	byID := make(map[string]policy.Event, len(got.PolicyEvents))
+	for _, event := range got.PolicyEvents {
+		byID[event.ID] = event
+	}
+	rowCount := 0
+	for rows.Next() {
+		var eventID, rule, subject, kind, policyPayload, outboxID, target, outboxPayload string
+		var policyVersion, outboxVersion int
+		if err = rows.Scan(&eventID, &rule, &subject, &kind, &policyVersion, &policyPayload, &outboxID, &target, &outboxVersion, &outboxPayload); err != nil {
+			t.Fatal(err)
+		}
+		event, ok := byID[eventID]
+		if !ok {
+			t.Fatalf("unexpected persisted event %s", eventID)
+		}
+		persistedKind := map[policy.EventKind]string{
+			policy.EventRemainingCheckpoint:   "limit_warning",
+			policy.EventResetTransition:       "reset",
+			policy.EventGrantAvailable:        "reset_grant",
+			policy.EventGrantExpiryCheckpoint: "reset_grant_warning",
+		}[event.Kind]
+		if eventID != event.ID || rule != event.RuleID || subject != event.Subject || kind != persistedKind || policyVersion != 1 || outboxID != OutboxID(kind, eventID, "telegram:42") || target != "telegram:42" || outboxVersion != 1 || policyPayload != outboxPayload {
+			t.Fatalf("persisted event mismatch: id=%q rule=%q subject=%q kind=%q policyVersion=%d outboxID=%q target=%q outboxVersion=%d payloadEqual=%t", eventID, rule, subject, kind, policyVersion, outboxID, target, outboxVersion, policyPayload == outboxPayload)
+		}
+		delete(byID, eventID)
+		rowCount++
+	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != len(want) || len(byID) != 0 {
+		t.Fatalf("persisted rows=%d remaining=%v want=%d", rowCount, byID, len(want))
+	}
+}
+
 func TestApplyCodexPollTreatsLegacyHistoryAsBootstrap(t *testing.T) {
 	s := openPollStore(t)
 	ctx := context.Background()
