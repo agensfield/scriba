@@ -302,7 +302,7 @@ func writeFileAtomic(path string, raw map[string]json.RawMessage) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return err
 	}
-	dirFile, err := os.Open(dir)
+	dirFile, err := os.Open(dir) // #nosec G304 -- directory owns the resolved local Codex auth path.
 	if err != nil {
 		return err
 	}
