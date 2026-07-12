@@ -28,7 +28,8 @@ type CodexPollInput struct {
 }
 
 type CodexPollResult struct {
-	Bootstrap                bool
+	PolicyBootstrap          bool
+	AccountBaseline          bool
 	LegacyDecision           resetwatch.Decision
 	PolicyEvents             []policy.Event
 	ResetEvents              []resetwatch.Event
@@ -91,8 +92,9 @@ func (s *Store) ApplyCodexPoll(ctx context.Context, input CodexPollInput) (Codex
 	if err != nil {
 		return empty, err
 	}
-	bootstrap := len(previous) == 0
-	in := policyInput(obs, previous, bootstrap)
+	policyBootstrap := len(previous) == 0
+	accountBaseline := !ok && len(legacy) == 0
+	in := policyInput(obs, previous, policyBootstrap)
 	result, err := policy.Evaluate(cfg, in)
 	if err != nil {
 		return empty, err
@@ -134,7 +136,8 @@ func (s *Store) ApplyCodexPoll(ctx context.Context, input CodexPollInput) (Codex
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	inserted.Bootstrap = bootstrap
+	inserted.PolicyBootstrap = policyBootstrap
+	inserted.AccountBaseline = accountBaseline
 	inserted.LegacyDecision = decision
 	return inserted, nil
 }

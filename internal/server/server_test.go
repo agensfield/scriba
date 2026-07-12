@@ -59,6 +59,29 @@ func TestRefreshSeedsBaselineThenNotifiesResetOnce(t *testing.T) {
 	}
 }
 
+func TestRefreshMigrationPolicyBootstrapDoesNotNotifyAccountBaseline(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	legacyResult := probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")
+	legacyObservation := New(s, nil, nil, Config{AccountLabel: "personal"}).observation(legacyResult)
+	legacyDecision := resetwatch.Decide(legacyObservation, nil, resetwatch.DefaultOptions())
+	if _, err := s.ApplyDecision(ctx, legacyObservation, legacyDecision); err != nil {
+		t.Fatalf("seed legacy v7 history: %v", err)
+	}
+
+	notifier := &fakeNotifier{}
+	srv := New(s, &fakeFetcher{results: []remote.ProbeResult{
+		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:01:00Z"),
+	}}, notifier, Config{AccountLabel: "personal"})
+	result, err := srv.RefreshNow(ctx)
+	if err != nil {
+		t.Fatalf("migration refresh: %v", err)
+	}
+	if result.Baseline || len(notifier.baselines) != 0 {
+		t.Fatalf("migration policy bootstrap leaked account baseline: result=%#v notifications=%d", result, len(notifier.baselines))
+	}
+}
+
 func TestPollIntervalSetting(t *testing.T) {
 	ctx := context.Background()
 	srv := New(openStore(t), nil, nil, Config{})

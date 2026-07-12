@@ -23,6 +23,9 @@ func TestApplyCodexPollBootstrapThenEmitOnce(t *testing.T) {
 	if err != nil || len(events.PolicyEvents) != 0 {
 		t.Fatalf("bootstrap events=%v err=%v", events, err)
 	}
+	if !events.PolicyBootstrap || !events.AccountBaseline {
+		t.Fatalf("fresh account bootstrap flags=%#v", events)
+	}
 	assertPollCounts(t, s, 1, 0, 0)
 	var missingEvaluations int
 	if err = s.db.QueryRow(`select count(*) from policy_states where evaluation_json like '%no_match%'`).Scan(&missingEvaluations); err != nil || missingEvaluations == 0 {
@@ -63,6 +66,9 @@ func TestApplyCodexPollTreatsLegacyHistoryAsBootstrap(t *testing.T) {
 	events, err := s.ApplyCodexPoll(ctx, pollInput(codexPollObservation(base.Add(time.Minute), 96), "telegram:42"))
 	if err != nil || len(events.PolicyEvents) != 0 {
 		t.Fatalf("migration bootstrap events=%v err=%v", events, err)
+	}
+	if !events.PolicyBootstrap || events.AccountBaseline {
+		t.Fatalf("legacy migration bootstrap flags=%#v", events)
 	}
 	assertPollCounts(t, s, 2, 0, 0)
 }

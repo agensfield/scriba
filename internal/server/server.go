@@ -501,7 +501,7 @@ func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
 	if err != nil {
 		return PollResult{}, err
 	}
-	baseline := applied.Bootstrap
+	baseline := applied.AccountBaseline
 	decision := applied.LegacyDecision
 	inserted := len(applied.ResetEvents)
 	heartbeat := s.consumeStartupHeartbeat()
