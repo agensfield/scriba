@@ -3,12 +3,16 @@
   "cases": [
     {"id":"codex-cumulative-malformed-truncated","provider":"codex","fixture":"codex/cumulative-malformed-truncated.jsonl","tags":["cumulative","malformed-middle","truncated-tail"]},
     {"id":"codex-last-model-switch","provider":"codex","fixture":"codex/last-model-switch.jsonl","tags":["last","model-switch","model-conflict","compaction"]},
-    {"id":"codex-counter-reset","provider":"codex","fixture":"codex/counter-reset.jsonl","tags":["counter-reset"],"policy":"TODO: parser must treat reset snapshot as fresh usage; test remains skipped until fixed"},
+    {"id":"codex-counter-reset","provider":"codex","fixture":"codex/counter-reset.jsonl","tags":["counter-reset"]},
     {"id":"codex-numeric-boundary","provider":"codex","fixture":"codex/numeric-boundary.jsonl","tags":["numeric-boundary"]},
+    {"id":"codex-numeric-exact-2p53-plus-1","provider":"codex","fixture":"codex/numeric-exact-2p53-plus-1.jsonl","tags":["numeric-boundary","exact-integer"]},
+    {"id":"codex-numeric-invalid","provider":"codex","fixture":"codex/numeric-invalid.jsonl","tags":["fraction","overflow","reject"]},
+    {"id":"codex-model-conflict","provider":"codex","fixture":"codex/model-conflict.jsonl","tags":["model-conflict","precedence"]},
     {"id":"codex-long-context-271999","provider":"codex","fixture":"codex/long-context-271999.jsonl","tags":["long-context","271999"]},
     {"id":"codex-long-context-272000","provider":"codex","fixture":"codex/long-context-272000.jsonl","tags":["long-context","272000"]},
     {"id":"codex-long-context-272001","provider":"codex","fixture":"codex/long-context-272001.jsonl","tags":["long-context","272001"]},
     {"id":"claude-canonical-duplicate","provider":"claude","fixture":"claude/canonical-duplicate.jsonl","tags":["canonical","duplicate","cache-buckets"]},
+    {"id":"claude-numeric-boundary","provider":"claude","fixture":"claude/numeric-boundary.jsonl","tags":["numeric-boundary","exact-integer","overflow-reject"]},
     {"id":"claude-malformed-truncated","provider":"claude","fixture":"claude/malformed-truncated.jsonl","tags":["malformed-middle","truncated-tail"]},
     {"id":"claude-error","provider":"claude","fixture":"claude/error.jsonl","tags":["error"]},
     {"id":"report-timezones","provider":"reports","fixture":"reports/timezones.json","tags":["utc","istanbul","new-york","dst"]}

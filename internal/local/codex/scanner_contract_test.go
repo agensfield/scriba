@@ -59,6 +59,7 @@ func TestContractNumericAndLongContextBoundaries(t *testing.T) {
 		input int64
 	}{
 		{"numeric-boundary.jsonl", 9007199254740991},
+		{"numeric-exact-2p53-plus-1.jsonl", 9007199254740993},
 		{"long-context-271999.jsonl", 271999},
 		{"long-context-272000.jsonl", 272000},
 		{"long-context-272001.jsonl", 272001},
@@ -73,5 +74,27 @@ func TestContractNumericAndLongContextBoundaries(t *testing.T) {
 				t.Fatalf("events=%+v", events)
 			}
 		})
+	}
+}
+
+func TestContractRejectsFractionalAndOverflowTokenCounts(t *testing.T) {
+	events, stats, err := ParseFile(filepath.Dir(contractFixture("numeric-invalid.jsonl")), contractFixture("numeric-invalid.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 || stats.InvalidLines != 2 {
+		t.Fatalf("events=%+v stats=%+v", events, stats)
+	}
+}
+
+func TestContractModelPrecedenceIsDeterministic(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		events, _, err := ParseFile(filepath.Dir(contractFixture("model-conflict.jsonl")), contractFixture("model-conflict.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(events) != 1 || events[0].Model != "gpt-5.4" {
+			t.Fatalf("iteration %d events=%+v", i, events)
+		}
 	}
 }

@@ -42,3 +42,32 @@ func TestScanCodexIgnoresPreviousParserCacheVersion(t *testing.T) {
 		t.Fatalf("events = %+v", events)
 	}
 }
+
+func TestScanClaudeIgnoresPreviousParserCacheVersion(t *testing.T) {
+	root := t.TempDir()
+	session := filepath.Join(root, "session.jsonl")
+	data := `{"timestamp":"2026-07-10T10:00:00Z","sessionId":"fresh","requestId":"r1","message":{"id":"m1","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":2}}}` + "\n"
+	if err := os.WriteFile(session, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := cache.Open(filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	fingerprint, err := local.FileFingerprint(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := []model.LocalUsageEvent{{ProviderID: "claude", SessionID: "stale", TotalTokens: 999}}
+	if err := db.SaveFileEvents("claude", session, fingerprint.Size, fingerprint.MtimeMs, stale, model.ScannerStats{Files: 1, Events: 1}); err != nil {
+		t.Fatal(err)
+	}
+	events, _, err := ScanClaude(db, []string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].SessionID != "fresh" || events[0].TotalTokens != 12 {
+		t.Fatalf("events = %+v", events)
+	}
+}

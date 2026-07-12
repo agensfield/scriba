@@ -1,0 +1,2 @@
+{"timestamp":"2026-01-01T00:00:00Z","sessionId":"boundary","requestId":"exact","message":{"id":"exact","model":"claude-sonnet-4","usage":{"input_tokens":9007199254740993,"output_tokens":1}}}
+{"timestamp":"2026-01-01T00:01:00Z","sessionId":"boundary","requestId":"overflow","message":{"id":"overflow","model":"claude-sonnet-4","usage":{"input_tokens":9223372036854775808,"output_tokens":1}}}

@@ -1,8 +1,10 @@
 package codex
 
 import (
+	"bytes"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/agensfield/scriba/internal/local"
@@ -74,12 +76,16 @@ func ParseFile(baseDir, filePath string) ([]model.LocalUsageEvent, model.Scanner
 			return
 		}
 		var payload map[string]any
-		if err := json.Unmarshal(e.Payload, &payload); err != nil || payload["type"] != "token_count" {
+		if err := decodeJSON(e.Payload, &payload); err != nil || payload["type"] != "token_count" {
 			return
 		}
 		info, _ := payload["info"].(map[string]any)
-		lastUsage := parseRawUsage(info["last_token_usage"])
-		totalUsage := parseRawUsage(info["total_token_usage"])
+		lastUsage, lastValid := parseRawUsage(info["last_token_usage"])
+		totalUsage, totalValid := parseRawUsage(info["total_token_usage"])
+		if !lastValid || !totalValid {
+			stats.InvalidLines++
+			return
+		}
 		var usage *rawUsage
 		if lastUsage != nil {
 			usage = lastUsage
@@ -95,7 +101,7 @@ func ParseFile(baseDir, filePath string) ([]model.LocalUsageEvent, model.Scanner
 			return
 		}
 		normalizeUsage(usage)
-		extractedModel := extractModelFromMap(map[string]any{"payload": payload, "info": info})
+		extractedModel := extractModelValue(payload)
 		fallback := extractedModel == "" && currentModel == ""
 		modelName := extractedModel
 		if modelName == "" {
@@ -162,23 +168,44 @@ func pathsOrDefault(paths []string) []string {
 	return local.DefaultCodexSessionDirs()
 }
 
-func parseRawUsage(value any) *rawUsage {
+func parseRawUsage(value any) (*rawUsage, bool) {
+	if value == nil {
+		return nil, true
+	}
 	record, ok := value.(map[string]any)
 	if !ok {
-		return nil
+		return nil, false
 	}
-	input := number(record, "input_tokens")
-	cached := number(record, "cached_input_tokens")
+	input, ok := number(record, "input_tokens")
+	if !ok {
+		return nil, false
+	}
+	cached, ok := number(record, "cached_input_tokens")
+	if !ok {
+		return nil, false
+	}
 	if cached == 0 {
-		cached = number(record, "cache_read_input_tokens")
+		cached, ok = number(record, "cache_read_input_tokens")
+		if !ok {
+			return nil, false
+		}
 	}
-	output := number(record, "output_tokens")
-	reasoning := number(record, "reasoning_output_tokens")
-	total := number(record, "total_tokens")
+	output, ok := number(record, "output_tokens")
+	if !ok {
+		return nil, false
+	}
+	reasoning, ok := number(record, "reasoning_output_tokens")
+	if !ok {
+		return nil, false
+	}
+	total, ok := number(record, "total_tokens")
+	if !ok {
+		return nil, false
+	}
 	if total == 0 {
 		total = input + output
 	}
-	return &rawUsage{InputTokens: input, CachedInputTokens: cached, OutputTokens: output, ReasoningOutputTokens: reasoning, TotalTokens: total}
+	return &rawUsage{InputTokens: input, CachedInputTokens: cached, OutputTokens: output, ReasoningOutputTokens: reasoning, TotalTokens: total}, true
 }
 
 func subtract(current rawUsage, previous *rawUsage) rawUsage {
@@ -198,28 +225,31 @@ func subtract(current rawUsage, previous *rawUsage) rawUsage {
 	}
 }
 
-func number(record map[string]any, key string) int64 {
-	if value, ok := record[key].(float64); ok {
-		return int64(value)
+func number(record map[string]any, key string) (int64, bool) {
+	value, exists := record[key]
+	if !exists {
+		return 0, true
 	}
-	return 0
+	n, ok := value.(json.Number)
+	if !ok {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(n.String(), 10, 64)
+	return parsed, err == nil
 }
 
 func extractModel(raw json.RawMessage) string {
 	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
+	if err := decodeJSON(raw, &value); err != nil {
 		return ""
 	}
 	return extractModelValue(value)
 }
 
-func extractModelFromMap(record map[string]any) string {
-	for _, value := range record {
-		if modelName := extractModelValue(value); modelName != "" {
-			return modelName
-		}
-	}
-	return ""
+func decodeJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	return decoder.Decode(target)
 }
 
 func extractModelValue(value any) string {

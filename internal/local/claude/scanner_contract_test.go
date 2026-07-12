@@ -15,7 +15,7 @@ func TestContractCanonicalDuplicateAndCacheBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The directory corpus intentionally also contains malformed and API-error fixtures.
-	if len(events) != 3 || stats.Duplicates != 1 || stats.InvalidLines != 2 {
+	if len(events) != 4 || stats.Duplicates != 1 || stats.InvalidLines != 3 {
 		t.Fatalf("events=%d stats=%+v", len(events), stats)
 	}
 	var canonical = events[0]
@@ -26,6 +26,17 @@ func TestContractCanonicalDuplicateAndCacheBuckets(t *testing.T) {
 	}
 	if canonical.TotalTokens != 19 || canonical.CacheCreationTokens != 3 || canonical.CacheReadTokens != 4 || canonical.CachedInputTokens != 4 {
 		t.Fatalf("event=%+v", canonical)
+	}
+}
+
+func TestContractNumericBoundaryIsExactAndOverflowIsRejected(t *testing.T) {
+	root := claudeContractRoot()
+	events, stats, err := ParseFile(root, filepath.Join(root, "numeric-boundary.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].InputTokens != 9007199254740993 || events[0].TotalTokens != 9007199254740994 || stats.InvalidLines != 1 {
+		t.Fatalf("events=%+v stats=%+v", events, stats)
 	}
 }
 
