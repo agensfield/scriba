@@ -1,0 +1,2 @@
+{"cwd":"/redacted/project","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1","requestId":"r1","costUSD":0.1,"message":{"id":"m1","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":2,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}}}
+{"cwd":"/redacted/project","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1","requestId":"r1","costUSD":0.1,"message":{"id":"m1","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":2,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}}}

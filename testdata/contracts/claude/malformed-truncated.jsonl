@@ -1,0 +1,3 @@
+{"timestamp":"2026-01-01T00:00:00Z","message":{"id":"m1","usage":{"input_tokens":1,"output_tokens":2}}}
+{malformed}
+{"timestamp":"2026-01-01T00:01:00Z","message":
