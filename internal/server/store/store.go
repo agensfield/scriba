@@ -60,6 +60,13 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
+	if _, err := os.Stat(path); err == nil {
+		if err := checkSchemaCompatibilityPath(path); err != nil {
+			return nil, err
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
 	if err := secureSQLiteFile(path); err != nil {
 		return nil, err
 	}
@@ -123,7 +130,38 @@ func OpenExisting(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := checkSchemaCompatibility(context.Background(), db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{db: db, path: path}, nil
+}
+
+func checkSchemaCompatibilityPath(path string) error {
+	db, err := sql.Open("sqlite", sqliteDSN(path, "mode=ro"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	return checkSchemaCompatibility(context.Background(), db)
+}
+
+func checkSchemaCompatibility(ctx context.Context, db *sql.DB) error {
+	var exists int
+	if err := db.QueryRowContext(ctx, `select count(*) from sqlite_master where type = 'table' and name = 'schema_migrations'`).Scan(&exists); err != nil {
+		return fmt.Errorf("inspect schema version: %w", err)
+	}
+	if exists == 0 {
+		return nil
+	}
+	var version sql.NullInt64
+	if err := db.QueryRowContext(ctx, `select max(version) from schema_migrations`).Scan(&version); err != nil {
+		return fmt.Errorf("inspect schema version: %w", err)
+	}
+	if version.Valid && version.Int64 > SchemaVersion {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", version.Int64, SchemaVersion)
+	}
+	return nil
 }
 
 func secureSQLiteFile(path string) error {
@@ -147,6 +185,9 @@ func (s *Store) Path() string {
 }
 
 func (s *Store) Migrate(ctx context.Context) error {
+	if err := checkSchemaCompatibility(ctx, s.db); err != nil {
+		return err
+	}
 	var journalMode string
 	if err := s.db.QueryRowContext(ctx, `pragma journal_mode = wal;`).Scan(&journalMode); err != nil {
 		return fmt.Errorf("enable WAL: %w", err)

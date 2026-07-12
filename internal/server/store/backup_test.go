@@ -103,6 +103,86 @@ func TestOpenExistingDoesNotCreateOrMigrate(t *testing.T) {
 	}
 }
 
+func TestOpenVariantsRefuseNewerSchemaWithoutWrites(t *testing.T) {
+	for _, open := range []struct {
+		name string
+		fn   func(string) (*Store, error)
+	}{
+		{name: "open", fn: Open},
+		{name: "open-existing", fn: OpenExisting},
+		{name: "read-only", fn: OpenReadOnly},
+	} {
+		t.Run(open.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "future.sqlite")
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`create table schema_migrations (version integer primary key, applied_at text not null); insert into schema_migrations values (8, 'future')`); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if st, err := open.fn(path); err == nil {
+				_ = st.Close()
+				t.Fatal("expected newer schema to be refused")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatal("refused open changed database bytes")
+			}
+			for _, suffix := range []string{"-wal", "-shm"} {
+				if _, err := os.Stat(path + suffix); !os.IsNotExist(err) {
+					t.Fatalf("refused open created %s: %v", suffix, err)
+				}
+			}
+		})
+	}
+}
+
+func TestMigrateRefusesNewerSchemaBeforeWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "future.sqlite")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`create table schema_migrations (version integer primary key, applied_at text not null); insert into schema_migrations values (8, 'future')`); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &Store{db: db, path: path}
+	if err := st.Migrate(context.Background()); err == nil {
+		t.Fatal("expected newer schema to be refused")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("refused migration changed database bytes")
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(path + suffix); !os.IsNotExist(err) {
+			t.Fatalf("refused migration created %s: %v", suffix, err)
+		}
+	}
+}
+
 func TestBackupRetentionIgnoresUnrelatedFiles(t *testing.T) {
 	dir := t.TempDir()
 	st, err := Open(filepath.Join(dir, "server.sqlite"))

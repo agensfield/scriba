@@ -35,6 +35,10 @@ func OpenReadOnly(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := checkSchemaCompatibility(context.Background(), db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{db: db, path: path}, nil
 }
 
@@ -45,8 +49,8 @@ func (s *Store) LoadBudgetHistory(ctx context.Context, providerID, accountRef st
 select o.id, o.observed_at, w.label, w.used_percent, w.reset_at, w.period_duration_ms
 from limit_observations o
 join observed_windows w on w.observation_id = o.id
-where o.provider_id = ? and o.account_ref = ? and o.observed_at >= ?
-order by o.observed_at asc, o.id asc, w.label asc`, providerID, accountRef, formatTime(since))
+where o.provider_id = ? and o.account_ref = ? and julianday(o.observed_at) >= julianday(?)
+order by julianday(o.observed_at) asc, o.id asc, w.label asc`, providerID, accountRef, formatTime(since))
 	if err != nil {
 		return nil, err
 	}
