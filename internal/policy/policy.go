@@ -548,7 +548,8 @@ func validGrantIdentity(identity string) bool {
 		return false
 	}
 	for _, raw := range parts[1:] {
-		if _, err := time.Parse(time.RFC3339Nano, raw); err != nil {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil || parsed.UTC().Format(time.RFC3339Nano) != raw {
 			return false
 		}
 	}
