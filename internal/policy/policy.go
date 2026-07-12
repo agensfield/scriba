@@ -188,7 +188,7 @@ func evalRemaining(out *Result, rule Rule, in Input, windows map[string]WindowOb
 		reason, emit := ReasonNoMatch, false
 		if matched {
 			switch {
-			case in.Bootstrap || !exists:
+			case in.Bootstrap || !exists || !stateInitialized(prev):
 				reason = ReasonBootstrap
 			case slices.Contains(next.ReachedCheckpoints, cp):
 				reason = ReasonAlreadyReached
@@ -454,6 +454,10 @@ func cloneState(v State) State {
 
 func stale(observed, previous time.Time) bool {
 	return !previous.IsZero() && observed.Before(previous)
+}
+
+func stateInitialized(state State) bool {
+	return !state.LastObservedAt.IsZero() || !state.LastResetAt.IsZero() || !state.StableResetAt.IsZero()
 }
 
 func validateInput(in Input) error {

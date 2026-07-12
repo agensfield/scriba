@@ -185,6 +185,23 @@ func TestBootstrapThenSameObservationStaysSilent(t *testing.T) {
 	}
 }
 
+func TestFirstWindowAppearanceAfterBootstrapIsSilent(t *testing.T) {
+	now := mustTime("2026-07-12T10:00:00Z")
+	first, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now, Bootstrap: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.States[StateKey{RuleID: "current.remaining.primary", Subject: "primary.five_hour"}] = State{}
+	used := 90.0
+	second, err := Evaluate(CurrentPreset(), Input{AccountRef: "acct", ObservedAt: now.Add(time.Minute), Previous: first.States, Windows: []WindowObservation{{Key: "primary.five_hour", Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: now.Add(5 * time.Hour)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Events) != 0 {
+		t.Fatalf("first window appearance emitted %#v", second.Events)
+	}
+}
+
 func TestGrantCountRotationAndPostBootstrapIncrease(t *testing.T) {
 	now := mustTime("2026-07-12T10:00:00Z")
 	g1 := GrantObservation{ID: "g1", Status: "available", GrantedAt: now.Add(-time.Hour), ExpiresAt: now.Add(10 * 24 * time.Hour)}
