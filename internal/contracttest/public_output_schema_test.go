@@ -12,7 +12,7 @@ import (
 var publicOutputSchemaNames = []string{
 	"status", "codex-limits", "codex-profile", "codex-reset-grants", "budget",
 	"policy-validate", "policy-list", "policy-explain", "outbox-list",
-	"context", "event", "events",
+	"context", "event", "events", "local-health", "local-error",
 }
 
 func TestPublicOutputSchemas(t *testing.T) {
