@@ -215,6 +215,13 @@ the privacy-forbidden grep was clean. Full Go race/check gates and all 18 Swift
 tests passed. The Unix-socket API/SSE and stdio MCP portions, including parity
 proof, have not started and are not implied by this checkpoint.
 
+Durable replay sequencing is implemented at `6a6a163` as schema v9, but is not
+deployed yet. A separate `policy_event_replay` table assigns a never-reused,
+strictly increasing sequence in the same transaction as every policy event.
+Existing events backfill deterministically during migration. Unix SSE remains
+blocked on the copied-live migration/rollback gate and the public paging
+contract; timestamp or hashed-event-ID cursors are forbidden.
+
 - Add one allowlisted `AgentContextService` over read-only cache/store opens.
 - Define `scriba.context.v1` and minimized `scriba.event.v1` envelopes with
   per-source age, staleness, availability, and provenance.
@@ -234,6 +241,8 @@ cross-surface semantic parity remain.
 
 ### 3.2 Multi-account profiles
 
+- Use server schema v10 for profile/account mappings and isolated poll health;
+  schema v9 is now the earlier durable event-replay migration.
 - Add backward-compatible config schema v2 with stable profile IDs, labels,
   explicit auth paths, enabled state, and a default profile.
 - Poll profiles sequentially and isolate health/failure state. One failed

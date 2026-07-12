@@ -66,3 +66,9 @@ HTTP/SSE API and stdio MCP adapter are not implemented yet. They must reuse the
 same service and prove semantic fixture parity before being described as
 available; no API, SSE, or MCP endpoint should be inferred from this contract.
 
+Commit `6a6a163` establishes the undeployed schema-v9 replay foundation. Every
+future policy event receives a transactional monotonic replay sequence, and
+existing events backfill once in deterministic order. The sequence replaces
+unsafe timestamp/hash ordering, but it is not itself an available public API:
+the versioned cursor, expiry semantics, SSE adapter, and MCP event tool still
+need their shared contract and deployment proof.

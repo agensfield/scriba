@@ -78,6 +78,13 @@ Claude Code and Codex usage tracker.
   uniqueness, schema validation, and refusal to open a future schema version.
   Downgrading a v8 database is restore-only: use a pre-migration backup with an
   older binary rather than attempting an in-place rollback.
+- Commit `6a6a163` adds the undeployed schema-v9 durable replay sequence.
+  `policy_event_replay` maps every policy event to a transactional,
+  never-reused monotonic ordinal through an insert trigger. Replay pages use a
+  single read snapshot and a captured high-water mark, so later/backdated
+  inserts cannot be skipped or leak across a page boundary. Profiles move to
+  server schema v10. Live devbox remains schema 8 until copied-live migration,
+  previous-binary restore-copy, and deployment gates pass.
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and
   `grant_expiry_checkpoint`. Its `current` preset preserves the existing
