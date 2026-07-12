@@ -18,6 +18,41 @@ import (
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
+const maxRenderedProfiles = 8
+
+func RenderProfiles(profiles []server.ProfileHealth) string {
+	var b strings.Builder
+	b.WriteString("<b>Configured profiles</b>\n")
+	limit := len(profiles)
+	if limit > maxRenderedProfiles {
+		limit = maxRenderedProfiles
+	}
+	for _, profile := range profiles[:limit] {
+		marker := ""
+		if profile.IsDefault {
+			marker = " · default"
+		}
+		fmt.Fprintf(&b, "\n<code>%s</code> · %s · %s%s", html.EscapeString(profile.Profile.Ref), html.EscapeString(truncateProfileLabel(profile.Profile.Label)), html.EscapeString(string(profile.Status)), marker)
+	}
+	if len(profiles) > limit {
+		fmt.Fprintf(&b, "\n\n%d more profiles omitted", len(profiles)-limit)
+	}
+	if len(profiles) == 0 {
+		b.WriteString("\nno enabled profiles available")
+	} else {
+		b.WriteString("\n\nUse <code>/limits id</code>, <code>/grants id</code>, or <code>/profile id</code>.")
+	}
+	return b.String()
+}
+
+func truncateProfileLabel(label string) string {
+	runes := []rune(label)
+	if len(runes) <= 64 {
+		return label
+	}
+	return string(runes[:63]) + "…"
+}
+
 func RenderBaseline(notice server.BaselineNotice) string {
 	grants := resetwatch.ResetGrantsFromSnapshotJSON(notice.SnapshotJSON)
 	return "<b>Scriba is alive</b>\nstarted tracking Codex limits.\n" + renderFreshness(notice.ObservedAt) + "\n\n" + renderAccount(notice.Account) + "\n\n" + renderLimitDetails(notice.Windows, grants, "current")

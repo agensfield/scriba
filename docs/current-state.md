@@ -158,6 +158,9 @@ The devbox server and Telegram bot lane is implemented:
 - Telegram long polling, commands, reset notifications, low-limit warnings,
   reset-grant expiry warnings, health/recovery alerts, stats, and radar
   probability milestone alerts.
+- Telegram `/profiles` exposes bounded safe configured-profile health;
+  `/limits [profile]`, `/grants [profile]`, and `/profile [profile]` select the
+  mapped account while omission uses the configured default.
 - Radar probability alerts fire on upward 24h probability checkpoint crossings
   at 25%, 50%, and 75%; drops update the stored checkpoint silently so later
   increases can alert again.

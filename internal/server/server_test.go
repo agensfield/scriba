@@ -3,14 +3,17 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/remote"
+	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server/store"
 )
@@ -449,6 +452,61 @@ func TestHealthPreservesConfiguredProfileOrderAndMissingDefault(t *testing.T) {
 	}
 	if health.Status != HealthUnknown {
 		t.Fatalf("health status=%s", health.Status)
+	}
+}
+
+func TestProfileReadSelectionUsesConfiguredDefaultAndMappedAccount(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	if err := st.SyncProfiles(ctx, []store.ProfileSpec{
+		{ProfileRef: "personal", Label: "Personal", ProviderID: "codex", Enabled: true, IsDefault: true},
+		{ProfileRef: "work", Label: "Work", ProviderID: "codex", Enabled: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 13, 3, 0, 0, 0, time.UTC)
+	for i, ref := range []string{"personal", "work"} {
+		used := 20 + float64(60*i)
+		at := base.Add(time.Duration(i) * time.Hour)
+		obs := resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "acct-" + ref}, ObservedAt: at, SnapshotJSON: []byte(`{}`), Windows: []resetwatch.Window{{Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used, ResetAt: base.Add(7 * 24 * time.Hour)}}}
+		input := store.CodexPollInput{ProfileRef: ref, Observation: obs, ResetOptions: resetwatch.DefaultOptions(), CommittedAt: at.Add(time.Second)}
+		if _, err := st.ApplyCodexPoll(ctx, input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := New(st, nil, nil, Config{Profiles: []Profile{
+		{Ref: "personal", Label: "Personal", Default: true, AuthPaths: []string{"/auth/personal.json"}},
+		{Ref: "work", Label: "Work", AuthPaths: []string{"/auth/work.json"}},
+	}})
+	for _, tc := range []struct{ requested, account string }{{"", "acct-personal"}, {"work", "acct-work"}} {
+		obs, ok, err := srv.LatestObservationForProfile(ctx, tc.requested)
+		if err != nil || !ok || obs.Account.Ref != tc.account {
+			t.Fatalf("requested=%q obs=%+v ok=%v err=%v", tc.requested, obs, ok, err)
+		}
+	}
+	if _, _, err := srv.LatestObservationForProfile(ctx, "unknown"); !errors.Is(err, ErrProfileUnavailable) {
+		t.Fatalf("unknown err=%v", err)
+	}
+	withoutAuth := New(st, nil, nil, Config{Profiles: []Profile{{Ref: "personal", Label: "Personal", Default: true}}})
+	if _, err := withoutAuth.CodexProfileForProfile(ctx, ""); !errors.Is(err, ErrProfileAuthPaths) {
+		t.Fatalf("missing auth paths err=%v", err)
+	}
+}
+
+func TestSanitizeCodexProfileResultRemovesPrivateDiagnostics(t *testing.T) {
+	result := sanitizeCodexProfileResult(remotecodex.ProfileResult{
+		AuthState:  remote.AuthState{OK: true, Source: "/secret/auth.json", Error: "bearer secret", AccessToken: "token", AccountID: "acct"},
+		Metadata:   remotecodex.ProfileMetadata{StatsError: errors.New("/secret/stats")},
+		Provenance: []model.SourceProvenance{{Error: "/secret/provenance"}},
+	})
+	raw := fmt.Sprintf("%+v", result)
+	for _, secret := range []string{"/secret/", "bearer secret", "token", "acct"} {
+		if strings.Contains(raw, secret) {
+			t.Fatalf("secret %q in %+v", secret, result)
+		}
+	}
+	if result.Metadata.StatsError != "profile stats unavailable" {
+		t.Fatalf("stats error=%v", result.Metadata.StatsError)
 	}
 }
 

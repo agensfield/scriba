@@ -34,8 +34,8 @@ type Controller interface {
 	PollInterval(context.Context) (time.Duration, error)
 	SetPollInterval(context.Context, time.Duration) error
 	LastResetEvent(context.Context) (resetwatch.Event, bool, error)
-	LatestObservation(context.Context) (resetwatch.Observation, bool, error)
-	CodexProfile(context.Context) (remotecodex.ProfileResult, error)
+	LatestObservationForProfile(context.Context, string) (resetwatch.Observation, bool, error)
+	CodexProfileForProfile(context.Context, string) (remotecodex.ProfileResult, error)
 	Stats(context.Context) (server.Stats, error)
 	Health(context.Context) (server.Health, error)
 }
@@ -163,6 +163,7 @@ func (s *Service) RegisterCommands(ctx context.Context) error {
 		{Command: "limits", Description: "show current Codex limits"},
 		{Command: "grants", Description: "show detailed Codex reset grants"},
 		{Command: "profile", Description: "show Codex profile stats"},
+		{Command: "profiles", Description: "list configured Codex profiles"},
 		{Command: "refresh", Description: "force a live Codex poll"},
 		{Command: "lastreset", Description: "show the latest reset event"},
 		{Command: "settings", Description: "change runtime settings"},
@@ -284,29 +285,59 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 		interval, _ := s.controller.PollInterval(ctx)
 		return settingsText(interval), settingsKeyboard(interval)
 	case "/limits":
-		obs, ok, err := s.controller.LatestObservation(ctx)
+		profile, err := commandProfile(command)
 		if err != nil {
-			return "limits failed: " + err.Error(), nil
+			return "usage: /limits [profile]", nil
+		}
+		obs, ok, err := s.controller.LatestObservationForProfile(ctx, profile)
+		if err != nil {
+			if errors.Is(err, server.ErrProfileUnavailable) {
+				return "unknown or disabled profile.", nil
+			}
+			return "limits failed.", nil
 		}
 		if !ok {
 			return "no cached limits yet. use /refresh to fetch live Codex limits.", nil
 		}
-		return RenderLimits(obs), nil
+		return renderSelectedProfile(profile, RenderLimits(obs)), nil
 	case "/grants":
-		obs, ok, err := s.controller.LatestObservation(ctx)
+		profile, err := commandProfile(command)
 		if err != nil {
-			return "reset grants failed: " + err.Error(), nil
+			return "usage: /grants [profile]", nil
+		}
+		obs, ok, err := s.controller.LatestObservationForProfile(ctx, profile)
+		if err != nil {
+			if errors.Is(err, server.ErrProfileUnavailable) {
+				return "unknown or disabled profile.", nil
+			}
+			return "reset grants failed.", nil
 		}
 		if !ok {
 			return "no cached reset grants yet. use /refresh to fetch live Codex limits.", nil
 		}
-		return RenderResetGrantDetails(obs), mainKeyboard()
+		return renderSelectedProfile(profile, RenderResetGrantDetails(obs)), mainKeyboard()
 	case "/profile":
-		profile, err := s.controller.CodexProfile(ctx)
+		profileID, err := commandProfile(command)
 		if err != nil {
-			return "profile failed: " + err.Error(), nil
+			return "usage: /profile [profile]", nil
 		}
-		return RenderProfile(profile), mainKeyboard()
+		profile, err := s.controller.CodexProfileForProfile(ctx, profileID)
+		if err != nil {
+			if errors.Is(err, server.ErrProfileUnavailable) {
+				return "unknown or disabled profile.", nil
+			}
+			return "profile failed.", nil
+		}
+		return renderSelectedProfile(profileID, RenderProfile(profile)), mainKeyboard()
+	case "/profiles":
+		if len(command) != 1 {
+			return "usage: /profiles", nil
+		}
+		health, err := s.controller.Health(ctx)
+		if err != nil {
+			return "profiles failed.", nil
+		}
+		return RenderProfiles(health.Profiles), mainKeyboard()
 	case "/refresh":
 		if retryAfter := s.manualRefreshRetryAfter(); retryAfter > 0 {
 			return "refresh rate-limited. try again in " + retryAfter.Round(time.Second).String(), nil
@@ -640,6 +671,25 @@ func commandName(text string) string {
 	return command
 }
 
+var telegramProfileIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+func commandProfile(fields []string) (string, error) {
+	if len(fields) == 1 {
+		return "", nil
+	}
+	if len(fields) != 2 || len(fields[1]) > 32 || !telegramProfileIDPattern.MatchString(fields[1]) {
+		return "", server.ErrProfileUnavailable
+	}
+	return fields[1], nil
+}
+
+func renderSelectedProfile(profileID, body string) string {
+	if profileID == "" {
+		return body
+	}
+	return "<b>Configured profile</b> <code>" + html.EscapeString(profileID) + "</code>\n\n" + body
+}
+
 func settingsKeyboard(current time.Duration) models.InlineKeyboardMarkup {
 	button := func(label string, interval time.Duration) models.InlineKeyboardButton {
 		text := label
@@ -692,9 +742,10 @@ func helpText() string {
 		"<code>/status</code> server health and polling state",
 		"<code>/health</code> poll/auth health check",
 		"<code>/stats</code> storage and delivery stats",
-		"<code>/limits</code> current Codex limits",
-		"<code>/grants</code> detailed Codex reset grants",
-		"<code>/profile</code> Codex profile stats",
+		"<code>/profiles</code> configured Codex profiles",
+		"<code>/limits [profile]</code> current Codex limits",
+		"<code>/grants [profile]</code> detailed Codex reset grants",
+		"<code>/profile [profile]</code> Codex profile stats",
 		"<code>/refresh</code> force a live poll",
 		"<code>/lastreset</code> latest reset event",
 		"<code>/settings</code> polling settings",

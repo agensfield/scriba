@@ -23,7 +23,8 @@ CLI, resident server, Telegram, Unix HTTP/SSE API, and stdio MCP.
 - `scriba codex profile` for ChatGPT/Codex profile token activity, streaks,
   reasoning mix, and top skills/plugins.
 - Explicit additional Codex buckets, including Spark when OpenAI exposes it.
-- Resident Telegram bot with `/limits`, `/grants`, `/profile`, `/refresh`, `/health`,
+- Resident Telegram bot with `/profiles`, profile-aware `/limits`, `/grants`,
+  `/profile`, plus `/refresh`, `/health`,
   `/stats`, `/lastreset`, `/settings`, and radar commands.
 - Telegram notifications for weekly resets, low remaining limits, reset-grant
   expiry checkpoints, service health, and Codex Radar probability milestones.
@@ -117,6 +118,11 @@ Codex reset grant with its title, reset type, status, granted time, expiry,
 remaining lifetime, and full credit id. Use `/refresh` first when you need a
 new live provider observation rather than the resident server's latest stored
 poll.
+
+With config v2 profiles, `/profiles` lists enabled IDs and health. Use
+`/limits work`, `/grants work`, or `/profile work` to select one mapped Codex
+account; omitting the argument selects the configured default. Telegram never
+accepts provider account references or auth paths as selectors.
 
 For systemd user service setup and BotFather notes, see
 [Telegram Bot](docs/telegram.md).

@@ -32,13 +32,24 @@ In Telegram:
 
 ```text
 /health
+/profiles
 /limits
+/limits work
 /grants
+/grants work
 /profile
+/profile work
 /refresh
 /stats
 /lastreset
 ```
+
+`/profiles` lists up to 20 enabled stable config IDs with labels, health, and
+the default marker. `/limits [profile]`, `/grants [profile]`, and
+`/profile [profile]` resolve only that profile's durable current account;
+omission selects the configured default. Unknown, disabled, malformed, or
+extra arguments fail without falling back to another account. Rich inline
+account navigation remains a later delivery-parity feature.
 
 `/profile` fetches the ChatGPT/Codex profile stats backend on demand and
 renders token activity, streaks, reasoning mix, and top skills/plugins in a

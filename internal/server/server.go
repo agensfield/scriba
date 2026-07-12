@@ -35,9 +35,10 @@ const (
 )
 
 var (
-	ErrRefreshInProgress = errors.New("refresh already in progress")
-	ErrAllProfilesFailed = errors.New("all profiles failed")
-	ErrProfileAuthPaths  = errors.New("explicit profile requires auth paths")
+	ErrRefreshInProgress  = errors.New("refresh already in progress")
+	ErrAllProfilesFailed  = errors.New("all profiles failed")
+	ErrProfileAuthPaths   = errors.New("explicit profile requires auth paths")
+	ErrProfileUnavailable = errors.New("profile unavailable")
 )
 
 type Store interface {
@@ -46,6 +47,7 @@ type Store interface {
 	SetSetting(context.Context, string, string) error
 	LoadLastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
+	LoadLatestObservationForProfile(context.Context, string) (resetwatch.Observation, bool, error)
 	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
 	InsertRadarAlertEvent(context.Context, radar.ProbabilityAlert, ...string) (bool, error)
 	Stats(context.Context) (store.Stats, error)
@@ -343,6 +345,14 @@ func (s *Server) LatestObservation(ctx context.Context) (resetwatch.Observation,
 	return s.store.LoadLatestObservation(ctx)
 }
 
+func (s *Server) LatestObservationForProfile(ctx context.Context, profileRef string) (resetwatch.Observation, bool, error) {
+	profile, err := s.configuredProfile(profileRef)
+	if err != nil {
+		return resetwatch.Observation{}, false, err
+	}
+	return s.store.LoadLatestObservationForProfile(ctx, profile.Ref)
+}
+
 func (s *Server) CodexProfile(ctx context.Context) (remotecodex.ProfileResult, error) {
 	profile, err := remotecodex.FetchProfile(ctx, nil)
 	if err != nil {
@@ -350,6 +360,50 @@ func (s *Server) CodexProfile(ctx context.Context) (remotecodex.ProfileResult, e
 	}
 	profile.SchemaVersion = model.SchemaVersion
 	return profile, nil
+}
+
+func (s *Server) CodexProfileForProfile(ctx context.Context, profileRef string) (remotecodex.ProfileResult, error) {
+	profile, err := s.configuredProfile(profileRef)
+	if err != nil {
+		return remotecodex.ProfileResult{}, err
+	}
+	if len(profile.AuthPaths) == 0 && !profile.AllowAuthDiscovery {
+		return remotecodex.ProfileResult{}, ErrProfileAuthPaths
+	}
+	result, err := remotecodex.FetchProfileWithOptions(ctx, nil, remotecodex.FetchOptions{AuthPaths: append([]string(nil), profile.AuthPaths...)})
+	if err != nil {
+		return remotecodex.ProfileResult{}, err
+	}
+	result.SchemaVersion = model.SchemaVersion
+	return sanitizeCodexProfileResult(result), nil
+}
+
+func sanitizeCodexProfileResult(result remotecodex.ProfileResult) remotecodex.ProfileResult {
+	result.AuthState.Source = ""
+	result.AuthState.Error = ""
+	result.AuthState.AccessToken = ""
+	result.AuthState.AccountID = ""
+	if result.Metadata.StatsError != nil {
+		result.Metadata.StatsError = "profile stats unavailable"
+	}
+	for i := range result.Provenance {
+		result.Provenance[i].Error = ""
+	}
+	return result
+}
+
+func (s *Server) configuredProfile(ref string) (Profile, error) {
+	trimmed := strings.TrimSpace(ref)
+	if ref != trimmed {
+		return Profile{}, ErrProfileUnavailable
+	}
+	ref = trimmed
+	for _, profile := range s.cfg.Profiles {
+		if (ref == "" && profile.Default) || (ref != "" && profile.Ref == ref) {
+			return profile, nil
+		}
+	}
+	return Profile{}, ErrProfileUnavailable
 }
 
 func (s *Server) Stats(ctx context.Context) (Stats, error) {

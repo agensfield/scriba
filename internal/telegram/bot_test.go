@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -321,7 +322,7 @@ func TestLimitsCommandUsesCachedObservation(t *testing.T) {
 		latestOK: true,
 	}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	reply, _ := svc.handleCommand(context.Background(), "/limits")
+	reply, _ := svc.handleCommand(context.Background(), "/limits work")
 	if !strings.Contains(reply, "<b>Codex limits</b>") {
 		t.Fatalf("unexpected limits reply: %s", reply)
 	}
@@ -330,6 +331,9 @@ func TestLimitsCommandUsesCachedObservation(t *testing.T) {
 	}
 	if controller.refreshes != 0 {
 		t.Fatalf("/limits should not force refresh, got %d refreshes", controller.refreshes)
+	}
+	if controller.latestProfile != "work" || !strings.Contains(reply, "Configured profile</b> <code>work</code>") {
+		t.Fatalf("profile=%q reply=%s", controller.latestProfile, reply)
 	}
 }
 
@@ -353,7 +357,7 @@ func TestGrantsCommandShowsDetailedCachedCredits(t *testing.T) {
 		latestOK: true,
 	}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	reply, markup := svc.handleCommand(context.Background(), "/grants")
+	reply, markup := svc.handleCommand(context.Background(), "/grants personal")
 	for _, want := range []string{
 		"<b>Codex reset grants</b>",
 		"<b>1 available</b>",
@@ -374,6 +378,9 @@ func TestGrantsCommandShowsDetailedCachedCredits(t *testing.T) {
 	if controller.refreshes != 0 {
 		t.Fatalf("/grants should use the latest observation, got %d refreshes", controller.refreshes)
 	}
+	if controller.latestProfile != "personal" {
+		t.Fatalf("profile=%q", controller.latestProfile)
+	}
 }
 
 func TestProfileCommandUsesControllerProfile(t *testing.T) {
@@ -389,15 +396,86 @@ func TestProfileCommandUsesControllerProfile(t *testing.T) {
 		},
 	}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	reply, markup := svc.handleCommand(context.Background(), "/profile")
+	reply, markup := svc.handleCommand(context.Background(), "/profile work")
 	if !strings.Contains(reply, "<b>Codex profile</b>") || !strings.Contains(reply, "8.3B lifetime") {
 		t.Fatalf("unexpected profile reply: %s", reply)
 	}
 	if controller.profileCalls != 1 {
 		t.Fatalf("expected one profile call, got %d", controller.profileCalls)
 	}
+	if controller.codexProfileID != "work" {
+		t.Fatalf("profile=%q", controller.codexProfileID)
+	}
 	if markup == nil {
 		t.Fatal("expected main keyboard")
+	}
+}
+
+func TestProfilesCommandListsSafeBoundedHealthAndProfileUsage(t *testing.T) {
+	controller := &fakeController{}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	health := healthFixture()
+	health.Profiles = []server.ProfileHealth{
+		{Profile: server.ProfileIdentity{Ref: "personal", Label: "Personal"}, IsDefault: true, Status: server.HealthOK},
+		{Profile: server.ProfileIdentity{Ref: "work", Label: "Work"}, Status: server.HealthDegraded},
+	}
+	controller.health = health
+	reply, markup := svc.handleCommand(context.Background(), "/profiles")
+	for _, want := range []string{"Configured profiles", "personal", "default", "work", "degraded", "/limits id"} {
+		if !strings.Contains(reply, want) {
+			t.Fatalf("missing %q:\n%s", want, reply)
+		}
+	}
+	if markup == nil {
+		t.Fatal("expected main keyboard")
+	}
+	for _, command := range []string{"/limits INVALID", "/grants one two", "/profile " + strings.Repeat("a", 33), "/profiles extra"} {
+		reply, _ := svc.handleCommand(context.Background(), command)
+		if !strings.HasPrefix(reply, "usage:") {
+			t.Fatalf("%q reply=%q", command, reply)
+		}
+	}
+}
+
+func TestRenderProfilesEscapesAndBoundsOutput(t *testing.T) {
+	profiles := make([]server.ProfileHealth, 0, maxRenderedProfiles+1)
+	for i := 0; i < maxRenderedProfiles+1; i++ {
+		profiles = append(profiles, server.ProfileHealth{Profile: server.ProfileIdentity{Ref: fmt.Sprintf("p%d", i), Label: "<private>"}, IsDefault: i == 0, Status: server.HealthOK})
+	}
+	text := RenderProfiles(profiles)
+	if strings.Contains(text, "<private>") || !strings.Contains(text, "&lt;private&gt;") || !strings.Contains(text, fmt.Sprintf("%d more profiles omitted", len(profiles)-maxRenderedProfiles)) || strings.Contains(text, fmt.Sprintf("p%d", maxRenderedProfiles)) {
+		t.Fatalf("unexpected bounded profile output:\n%s", text)
+	}
+	worst := make([]server.ProfileHealth, maxRenderedProfiles+1)
+	for i := range worst {
+		worst[i] = server.ProfileHealth{Profile: server.ProfileIdentity{Ref: strings.Repeat("a", 31) + fmt.Sprint(i%10), Label: strings.Repeat("&", 128)}, Status: server.HealthDegraded}
+	}
+	if text := RenderProfiles(worst); len(text) > 4096 {
+		t.Fatalf("profile output exceeds Telegram limit: %d", len(text))
+	}
+}
+
+func TestProfileCommandsBoundPrivateControllerErrorsAndDefaultSelection(t *testing.T) {
+	privateErr := errors.New("open /secret/auth.json: bearer PRIVATE_ACCOUNT")
+	controller := &fakeController{latestErr: privateErr, profileErr: privateErr, healthErr: privateErr}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	for _, command := range []string{"/limits", "/grants", "/profile", "/profiles"} {
+		reply, _ := svc.handleCommand(context.Background(), command)
+		if strings.Contains(reply, "/secret/") || strings.Contains(reply, "PRIVATE_ACCOUNT") || !strings.Contains(reply, "failed") {
+			t.Fatalf("%q leaked private error: %q", command, reply)
+		}
+	}
+	if controller.latestProfile != "" || controller.codexProfileID != "" {
+		t.Fatalf("default selectors latest=%q profile=%q", controller.latestProfile, controller.codexProfileID)
+	}
+
+	controller = &fakeController{latestErr: server.ErrProfileUnavailable, profileErr: server.ErrProfileUnavailable}
+	svc.controller = controller
+	for _, command := range []string{"/limits missing", "/grants missing", "/profile missing"} {
+		reply, _ := svc.handleCommand(context.Background(), command)
+		if reply != "unknown or disabled profile." {
+			t.Fatalf("%q reply=%q", command, reply)
+		}
 	}
 }
 
@@ -519,12 +597,18 @@ func TestCommandNameNormalizesBotSuffix(t *testing.T) {
 }
 
 type fakeController struct {
-	interval     time.Duration
-	latest       resetwatch.Observation
-	latestOK     bool
-	refreshes    int
-	profile      remotecodex.ProfileResult
-	profileCalls int
+	interval       time.Duration
+	latest         resetwatch.Observation
+	latestOK       bool
+	refreshes      int
+	profile        remotecodex.ProfileResult
+	profileCalls   int
+	latestProfile  string
+	codexProfileID string
+	health         server.Health
+	latestErr      error
+	profileErr     error
+	healthErr      error
 }
 
 func (f *fakeController) RefreshNow(context.Context) (server.PollResult, error) {
@@ -549,9 +633,20 @@ func (f *fakeController) LatestObservation(context.Context) (resetwatch.Observat
 	return f.latest, f.latestOK, nil
 }
 
+func (f *fakeController) LatestObservationForProfile(_ context.Context, profile string) (resetwatch.Observation, bool, error) {
+	f.latestProfile = profile
+	return f.latest, f.latestOK, f.latestErr
+}
+
 func (f *fakeController) CodexProfile(context.Context) (remotecodex.ProfileResult, error) {
 	f.profileCalls++
 	return f.profile, nil
+}
+
+func (f *fakeController) CodexProfileForProfile(_ context.Context, profile string) (remotecodex.ProfileResult, error) {
+	f.profileCalls++
+	f.codexProfileID = profile
+	return f.profile, f.profileErr
 }
 
 func (f *fakeController) Stats(context.Context) (server.Stats, error) {
@@ -559,6 +654,12 @@ func (f *fakeController) Stats(context.Context) (server.Stats, error) {
 }
 
 func (f *fakeController) Health(context.Context) (server.Health, error) {
+	if f.healthErr != nil {
+		return server.Health{}, f.healthErr
+	}
+	if f.health.Version != "" || len(f.health.Profiles) > 0 {
+		return f.health, nil
+	}
 	return healthFixture(), nil
 }
 
