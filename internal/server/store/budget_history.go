@@ -27,7 +27,7 @@ func OpenReadOnly(path string) (*Store, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("store path is not a regular file: %s", path)
 	}
-	db, err := sql.Open("sqlite", sqliteDSN(path, "mode=ro"))
+	db, err := sql.Open("sqlite", sqliteReadOnlyDSN(path))
 	if err != nil {
 		return nil, err
 	}

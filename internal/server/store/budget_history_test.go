@@ -20,6 +20,9 @@ func TestOpenReadOnlyDoesNotCreateOrMutate(t *testing.T) {
 	}
 
 	s := openTestStore(t)
+	if err := s.SetSetting(context.Background(), "live_wal_fixture", "visible"); err != nil {
+		t.Fatal(err)
+	}
 	before, err := os.Stat(s.path)
 	if err != nil {
 		t.Fatal(err)
@@ -29,6 +32,9 @@ func TestOpenReadOnlyDoesNotCreateOrMutate(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ro.Close() })
+	if value, ok, err := ro.GetSetting(context.Background(), "live_wal_fixture"); err != nil || !ok || value != "visible" {
+		t.Fatalf("read-only store missed committed live WAL data: value=%q ok=%t err=%v", value, ok, err)
+	}
 	if _, err := ro.db.Exec(`create table should_not_exist (id integer)`); err == nil {
 		t.Fatal("read-only store accepted a write")
 	}

@@ -107,6 +107,17 @@ func sqliteDSN(path, extraQuery string) string {
 	return u.String()
 }
 
+func sqliteReadOnlyDSN(path string) string {
+	u := &url.URL{Scheme: "file", Path: path}
+	query := u.Query()
+	query.Set("mode", "ro")
+	query.Add("_pragma", "busy_timeout(5000)")
+	query.Add("_pragma", "foreign_keys(1)")
+	query.Add("_pragma", "query_only(1)")
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
 // OpenExisting opens an existing server database without creating directories
 // or running migrations. It is intended for pre-upgrade backup operations.
 func OpenExisting(path string) (*Store, error) {
