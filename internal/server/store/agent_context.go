@@ -34,15 +34,19 @@ type AgentEventRecord struct {
 
 // LoadAgentEvents returns newest-first policy events with a stable tie
 // break. The result is always bounded to at most 100 rows.
-func (s *Store) LoadAgentEvents(ctx context.Context, limit int) ([]AgentEventRecord, error) {
+func (s *Store) LoadAgentEvents(ctx context.Context, providerID, accountRef string, limit int) ([]AgentEventRecord, error) {
+	if providerID == "" || accountRef == "" {
+		return nil, fmt.Errorf("agent event provider and account are required")
+	}
 	if limit <= 0 || limit > maxRecentPolicyEvents {
 		limit = maxRecentPolicyEvents
 	}
 	rows, err := s.db.QueryContext(ctx, `
 select id,event_kind,rule_kind,provider_id,payload_version,payload_json,detected_at
 from policy_events
+where provider_id = ? and account_ref = ?
 order by detected_at desc,id desc
-limit ?`, limit)
+limit ?`, providerID, accountRef, limit)
 	if err != nil {
 		return nil, err
 	}

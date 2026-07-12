@@ -17,6 +17,15 @@ import (
 // writes, or business-state mutations. SQLite may coordinate a live WAL reader
 // through transient sidecar bookkeeping.
 func OpenReadOnly(path string) (*Store, error) {
+	return OpenReadOnlyContext(context.Background(), path)
+}
+
+// OpenReadOnlyContext is OpenReadOnly with cancellation-aware open and schema
+// validation for request-scoped agent/API consumers.
+func OpenReadOnlyContext(ctx context.Context, path string) (*Store, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if path == "" {
 		return nil, errors.New("store path is required")
 	}
@@ -33,11 +42,11 @@ func OpenReadOnly(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(maxOpenConnections)
 	db.SetMaxIdleConns(maxOpenConnections)
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := checkSchemaCompatibility(context.Background(), db); err != nil {
+	if err := checkSchemaCompatibility(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

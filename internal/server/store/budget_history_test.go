@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,6 +45,14 @@ func TestOpenReadOnlyDoesNotCreateOrMutate(t *testing.T) {
 	}
 	if after.Size() != before.Size() {
 		t.Fatalf("read-only open changed database size: %d -> %d", before.Size(), after.Size())
+	}
+}
+
+func TestOpenReadOnlyContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := OpenReadOnlyContext(ctx, filepath.Join(t.TempDir(), "missing.db")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
 

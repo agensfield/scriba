@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -185,8 +186,12 @@ func (c *Cache) SaveSnapshot(name string, snapshot any, updatedAt string) error 
 }
 
 func (c *Cache) LoadStatusSnapshot() (*model.StatusSnapshot, error) {
+	return c.LoadStatusSnapshotContext(context.Background())
+}
+
+func (c *Cache) LoadStatusSnapshotContext(ctx context.Context) (*model.StatusSnapshot, error) {
 	var text string
-	err := c.db.QueryRow(`select json from snapshots where name = ?`, "status").Scan(&text)
+	err := c.db.QueryRowContext(ctx, `select json from snapshots where name = ?`, "status").Scan(&text)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

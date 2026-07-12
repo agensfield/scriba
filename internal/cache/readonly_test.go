@@ -2,6 +2,8 @@ package cache
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -142,5 +144,13 @@ func TestOpenReadOnlyRejectsFutureSchema(t *testing.T) {
 	if readonly, err := OpenReadOnly(dir); err == nil {
 		_ = readonly.Close()
 		t.Fatal("OpenReadOnly accepted a future cache schema")
+	}
+}
+
+func TestOpenReadOnlyContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := OpenReadOnlyContext(ctx, t.TempDir()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }

@@ -641,14 +641,32 @@ func (s *Store) LoadLastResetEvent(ctx context.Context) (resetwatch.Event, bool,
 }
 
 func (s *Store) LoadLatestObservation(ctx context.Context) (resetwatch.Observation, bool, error) {
+	return s.loadLatestObservation(ctx, "")
+}
+
+func (s *Store) LoadLatestObservationForProvider(ctx context.Context, providerID string) (resetwatch.Observation, bool, error) {
+	if strings.TrimSpace(providerID) == "" {
+		return resetwatch.Observation{}, false, errors.New("provider id is required")
+	}
+	return s.loadLatestObservation(ctx, providerID)
+}
+
+func (s *Store) loadLatestObservation(ctx context.Context, providerID string) (resetwatch.Observation, bool, error) {
 	var obs resetwatch.Observation
 	var observationID, observedAt, snapshot string
+	where := ""
+	args := []any{}
+	if providerID != "" {
+		where = "where o.provider_id = ?"
+		args = append(args, providerID)
+	}
 	err := s.db.QueryRowContext(ctx, `
 select o.id, o.provider_id, o.account_ref, a.label, a.email, a.plan, o.observed_at, o.snapshot_json
 from limit_observations o
 join accounts a on a.account_ref = o.account_ref
-order by o.observed_at desc, o.created_at desc
-limit 1`).Scan(
+`+where+`
+order by o.observed_at desc, o.created_at desc, o.id desc
+limit 1`, args...).Scan(
 		&observationID, &obs.ProviderID, &obs.Account.Ref, &obs.Account.Label, &obs.Account.Email, &obs.Account.Plan, &observedAt, &snapshot,
 	)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -31,7 +31,7 @@ func TestLoadAgentEventsBoundedAndDeterministic(t *testing.T) {
 		}
 	}
 
-	events, err := s.LoadAgentEvents(ctx, 1000)
+	events, err := s.LoadAgentEvents(ctx, "codex", "acct", 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestLoadAgentEventsBoundedAndDeterministic(t *testing.T) {
 		t.Fatalf("unexpected event mapping: %#v", got)
 	}
 
-	one, err := s.LoadAgentEvents(ctx, 1)
+	one, err := s.LoadAgentEvents(ctx, "codex", "acct", 1)
 	if err != nil || len(one) != 1 || !reflect.DeepEqual(one[0], events[0]) {
 		t.Fatalf("repeat read differs: events=%#v err=%v", one, err)
 	}
@@ -72,12 +72,12 @@ func TestLoadAgentEventsThroughReadOnlyStoreDoesNotMutateFilesOrDatabase(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ro.LoadAgentEvents(ctx, 10); err != nil {
+	if _, err := ro.LoadAgentEvents(ctx, "codex", "acct", 10); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshotStoreFiles(t, s.path)
 	for i := 0; i < 3; i++ {
-		events, err := ro.LoadAgentEvents(ctx, 10)
+		events, err := ro.LoadAgentEvents(ctx, "codex", "acct", 10)
 		if err != nil || len(events) != 1 {
 			t.Fatalf("read %d: events=%d err=%v", i, len(events), err)
 		}

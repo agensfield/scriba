@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -13,6 +14,15 @@ import (
 // state. SQLite may create or coordinate transient WAL/SHM sidecars while
 // reading a live WAL database.
 func OpenReadOnly(configured string) (*Cache, error) {
+	return OpenReadOnlyContext(context.Background(), configured)
+}
+
+// OpenReadOnlyContext is OpenReadOnly with cancellation-aware open and schema
+// validation for request-scoped agent/API consumers.
+func OpenReadOnlyContext(ctx context.Context, configured string) (*Cache, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	dir := ResolveDir(configured)
 	dbPath := filepath.Join(dir, "scriba.sqlite")
 	info, err := os.Stat(dbPath)
@@ -33,12 +43,12 @@ func OpenReadOnly(configured string) (*Cache, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	var schemaVersion int
-	if err := db.QueryRow(`select value from meta where key = 'schema_version'`).Scan(&schemaVersion); err != nil {
+	if err := db.QueryRowContext(ctx, `select value from meta where key = 'schema_version'`).Scan(&schemaVersion); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("read cache schema version: %w", err)
 	}
