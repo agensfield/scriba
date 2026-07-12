@@ -1,6 +1,6 @@
 # Scriba Current State
 
-Date: 2026-07-10
+Date: 2026-07-12
 
 Scriba is the first child project under Agensfield. It is a fast, minimal
 Claude Code and Codex usage tracker.
@@ -34,6 +34,10 @@ Claude Code and Codex usage tracker.
 - Stable `scriba.v1` status, Codex limits, profile, and reset-grant JSON outputs,
   plus `scriba.budget.v1` reports, have checked-in Draft 2020-12 schemas and
   canonical validation goldens.
+- `scriba codex budget` and `scriba claude budget` derive provider-neutral quota
+  pacing from fresh provider windows. They use percentage points rather than
+  local token counts and intentionally have no `--fast` mode. Codex may use up
+  to 24 hours of matching durable observations; Claude is current-cycle only.
 - Pricing is embedded from a hash-bound reviewed offline catalog. Maintainer
   refresh writes a candidate only; CI validates provenance, aliases, rates,
   tier thresholds, boundary goldens, and deterministic generation without
@@ -64,6 +68,17 @@ Claude Code and Codex usage tracker.
   notification intents in one canonical outbox, atomically with their typed
   business events. Telegram claims one target-filtered row at a time with a
   fenced lease; legacy delivery tables remain read-only migration evidence.
+- The committed schema-v8 migration adds constrained `policy_states` and
+  `policy_events` tables, account/policy lookup indexes, semantic-event
+  uniqueness, schema validation, and refusal to open a future schema version.
+  Downgrading a v8 database is restore-only: use a pre-migration backup with an
+  older binary rather than attempting an in-place rollback.
+- The committed pure policy core supports the closed rule kinds
+  `remaining_checkpoint`, `reset_transition`, `grant_available`, and
+  `grant_expiry_checkpoint`. Its `current` preset preserves the existing
+  thresholds, and bootstrap evaluations update state without emitting events.
+  This is a code checkpoint, not a claim that resident polling has cut over to
+  policy evaluation or that schema v8 has been deployed.
 - Telegram `getUpdates` batches are durably staged as exact raw JSON before the
   polling dependency can advance its cursor. Pending updates replay after a
   crash, while malformed updates dead-letter visibly.
@@ -147,8 +162,9 @@ apps/macos/Scripts/package_zip.sh release
 
 - Execute the accepted local usage control-plane program in
   [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
-  migration safety, and the canonical outbox precede budget intelligence,
-  policy, agent interfaces, profiles, and surface parity.
+  migration safety, the canonical outbox, budget surfaces, schema v8, and the
+  pure policy core are code-complete checkpoints; policy runtime cutover,
+  deployment receipts, agent interfaces, profiles, and surface parity remain.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.
 - Decide whether ad-hoc signed zip distribution is enough before

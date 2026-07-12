@@ -147,6 +147,10 @@ soak with no duplicate/lost delivery or SQLite lock errors.
 
 ### 2.1 Deterministic quota pacing
 
+Status: code-complete checkpoint. Both budget commands, typed
+`scriba.budget.v1` output, schema validation, history bounds, and deterministic
+tests are committed. This does not imply a devbox deployment receipt.
+
 - Add a pure provider-neutral budget package with an injected clock.
 - Calculate remaining quota percentage points, cycle/recent burn, safe hourly
   and daily allowance, projected exhaustion, temporal margin, risk,
@@ -162,6 +166,10 @@ ordering, no NaN/Inf, monotonic projections, and zero influence from local
 token counts on quota calculations.
 
 ### 2.2 Typed policy evaluation
+
+Status: policy-core/schema checkpoint only. Schema v8 and the closed-world pure
+evaluator are committed; resident-server cutover, policy CLI inspection
+surfaces, live migration/deploy proof, and the Wave 2 release gate remain.
 
 - Normalize stable provider budget keys before policy evaluation.
 - Support closed rule kinds for remaining checkpoints, reset transitions,

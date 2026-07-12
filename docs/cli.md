@@ -66,6 +66,7 @@ scriba claude weekly
 scriba claude monthly
 scriba claude sessions
 scriba claude blocks
+scriba claude budget
 
 scriba codex summary
 scriba codex daily
@@ -75,6 +76,7 @@ scriba codex sessions
 scriba codex limits
 scriba codex reset-grants
 scriba codex profile
+scriba codex budget
 scriba codex limits --fast
 ```
 
@@ -133,6 +135,22 @@ current day may be absent until OpenAI generates the next profile snapshot.
 These provider-generated buckets have no model attribution and are independent
 from local rollout accounting, timezone grouping, and API-equivalent cost
 estimates; do not expect exact day-by-day reconciliation.
+
+`scriba codex budget` and `scriba claude budget` fetch current provider quota
+windows and derive pacing, safe allowance, projected exhaustion, risk,
+freshness, confidence, and explicit reason codes. Budget quantities are quota
+percentage points, not local token counts: `3pp/h` means three points of the
+provider-reported quota percentage per hour. These commands deliberately do
+not accept `--fast`; a budget must start from a fresh provider observation.
+
+Codex can use matching durable server observations from the preceding 24 hours
+for its recent-burn estimate; samples less than 10 minutes apart are ignored.
+Claude currently reports honest current-cycle confidence because it has no
+durable quota-window history. Derived budget values are never persisted. The
+machine-readable contract is `scriba.budget.v1`, validated by
+[`schemas/budget.schema.json`](../schemas/budget.schema.json). See
+[`budget-and-policy.md`](budget-and-policy.md) for the full checkpoint and its
+current runtime boundary.
 
 The resident server stores every available reset credit from the read-only
 metadata endpoint when present. Telegram grant-expiry warnings are deduped by
