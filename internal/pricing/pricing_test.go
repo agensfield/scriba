@@ -1,6 +1,9 @@
 package pricing
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestLookupPublishedRates(t *testing.T) {
 	tests := []struct {
@@ -11,8 +14,8 @@ func TestLookupPublishedRates(t *testing.T) {
 		{"gpt-5.6-sol", Rates{5e-6, 0.5e-6, 30e-6, 6.25e-6}, Rates{10e-6, 1e-6, 45e-6, 12.5e-6}},
 		{"gpt-5.6-terra", Rates{2.5e-6, 0.25e-6, 15e-6, 3.125e-6}, Rates{5e-6, 0.5e-6, 22.5e-6, 6.25e-6}},
 		{"gpt-5.6-luna", Rates{1e-6, 0.1e-6, 6e-6, 1.25e-6}, Rates{2e-6, 0.2e-6, 9e-6, 2.5e-6}},
-		{"gpt-5.5", Rates{5e-6, 0.5e-6, 30e-6, 5e-6}, Rates{10e-6, 1e-6, 45e-6, 10e-6}},
-		{"gpt-5.4", Rates{2.5e-6, 0.25e-6, 15e-6, 2.5e-6}, Rates{5e-6, 0.5e-6, 22.5e-6, 5e-6}},
+		{"gpt-5.5", Rates{5e-6, 0.5e-6, 30e-6, 0}, Rates{10e-6, 1e-6, 45e-6, 0}},
+		{"gpt-5.4", Rates{2.5e-6, 0.25e-6, 15e-6, 0}, Rates{5e-6, 0.5e-6, 22.5e-6, 0}},
 	}
 
 	for _, test := range tests {
@@ -154,6 +157,62 @@ func TestCostClampsNegativeTokenCounts(t *testing.T) {
 	if !ok || got != 0 {
 		t.Fatalf("Cost() = %v, %v", got, ok)
 	}
+}
+
+func TestGPT56BoundaryGoldensEveryCacheAndSpeedMix(t *testing.T) {
+	models := []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+	for _, model := range models {
+		pricing, _ := Lookup(model)
+		for _, input := range []int64{271_999, 272_000, 272_001} {
+			for _, cached := range []int64{0, input / 2, input} {
+				for _, speed := range []float64{StandardSpeedMultiplier, FastSpeedMultiplier} {
+					rates := pricing.Short
+					if input > 272_000 {
+						rates = pricing.Long
+					}
+					want := (float64(input-cached)*rates.Input + float64(cached)*rates.CachedInput + 17*rates.Output) * speed
+					got, ok := Cost(model, Usage{InputTokens: input, CachedInputTokens: cached, OutputTokens: 17}, speed)
+					if !ok {
+						t.Fatalf("missing %s", model)
+					}
+					closeEnough(t, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestCostProperties(t *testing.T) {
+	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		previous := 0.0
+		for input := int64(0); input < 400_000; input += 997 {
+			got, _ := Cost(model, Usage{InputTokens: input, CachedInputTokens: input / 3, OutputTokens: 41}, 1)
+			if got < 0 || math.IsNaN(got) || math.IsInf(got, 0) || got < previous {
+				t.Fatalf("invalid/nonmonotonic cost %s input=%d: %g after %g", model, input, got, previous)
+			}
+			previous = got
+			clamped, _ := Cost(model, Usage{InputTokens: input, CachedInputTokens: input + 1, OutputTokens: 41}, 1)
+			allCached, _ := Cost(model, Usage{InputTokens: input, CachedInputTokens: input, OutputTokens: 41}, 1)
+			closeEnough(t, clamped, allCached)
+		}
+	}
+}
+
+func FuzzCost(f *testing.F) {
+	f.Add("gpt-5.6-sol", int64(272_000), int64(12), int64(3), float64(1))
+	f.Add("gpt-5.6-luna", int64(-1), int64(99), int64(-4), float64(2))
+	f.Fuzz(func(t *testing.T, model string, input, cached, output int64, speed float64) {
+		got, ok := Cost(model, Usage{InputTokens: input, CachedInputTokens: cached, OutputTokens: output}, speed)
+		if !ok {
+			if got != 0 {
+				t.Fatalf("unknown model cost %g", got)
+			}
+			return
+		}
+		if got < 0 || math.IsNaN(got) || math.IsInf(got, 0) {
+			t.Fatalf("invalid cost %g", got)
+		}
+	})
 }
 
 func closeEnough(t *testing.T, got, want float64) {

@@ -1,97 +1,66 @@
-// Package pricing calculates token costs for models whose prices Scriba knows.
+// Package pricing calculates token costs from Scriba's reviewed offline catalog.
 package pricing
 
-import "strings"
+import (
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math"
+	"strconv"
+	"strings"
+)
 
 const (
-	// StandardSpeedMultiplier prices tokens at the published standard tier.
-	StandardSpeedMultiplier = 1.0
-	// FastSpeedMultiplier is the fallback used when fast pricing has no
-	// model-specific multiplier.
-	FastSpeedMultiplier = 2.0
-	// OpenAILongContextThreshold is the largest input that remains in the
-	// short-context tier. A request enters the long tier only above this value.
+	StandardSpeedMultiplier          = 1.0
+	FastSpeedMultiplier              = 2.0
 	OpenAILongContextThreshold int64 = 272_000
 )
 
-// Rates contains per-token prices in USD. CacheWrite is retained as pricing
-// metadata even though Codex currently reports no cache-write token bucket.
-type Rates struct {
-	Input       float64
-	CachedInput float64
-	Output      float64
-	CacheWrite  float64
-}
-
-// ModelPricing describes the standard short- and long-context rates for a
-// model. LongContextThreshold applies to total input, including cached input.
+type Rates struct{ Input, CachedInput, Output, CacheWrite float64 }
 type ModelPricing struct {
 	Model                string
-	Short                Rates
-	Long                 Rates
+	Short, Long          Rates
 	LongContextThreshold int64
 }
+type Usage struct{ InputTokens, CachedInputTokens, OutputTokens, ReasoningOutputTokens int64 }
 
-// Usage is one request's Codex token usage. InputTokens includes cached input;
-// ReasoningOutputTokens is informational because it is already included in
-// OutputTokens and must not be billed a second time.
-type Usage struct {
-	InputTokens           int64
-	CachedInputTokens     int64
-	OutputTokens          int64
-	ReasoningOutputTokens int64
+type decimalRates struct{ Input, CachedInput, Output, CacheWrite string }
+type catalogModel struct {
+	Model                string       `json:"model"`
+	Aliases              []string     `json:"aliases"`
+	LongContextThreshold int64        `json:"long_context_threshold"`
+	Short                decimalRates `json:"short"`
+	Long                 decimalRates `json:"long"`
+}
+type catalogFile struct {
+	SchemaVersion       int            `json:"schema_version"`
+	EffectiveDate       string         `json:"effective_date"`
+	Sources             []string       `json:"sources"`
+	SourceReceipt       string         `json:"source_receipt"`
+	SourceReceiptSHA256 string         `json:"source_receipt_sha256"`
+	Models              []catalogModel `json:"models"`
 }
 
-var models = map[string]ModelPricing{
-	"gpt-5.6-sol": {
-		Model:                "gpt-5.6-sol",
-		Short:                Rates{Input: 5e-6, CachedInput: 0.5e-6, Output: 30e-6, CacheWrite: 6.25e-6},
-		Long:                 Rates{Input: 10e-6, CachedInput: 1e-6, Output: 45e-6, CacheWrite: 12.5e-6},
-		LongContextThreshold: OpenAILongContextThreshold,
-	},
-	"gpt-5.6-terra": {
-		Model:                "gpt-5.6-terra",
-		Short:                Rates{Input: 2.5e-6, CachedInput: 0.25e-6, Output: 15e-6, CacheWrite: 3.125e-6},
-		Long:                 Rates{Input: 5e-6, CachedInput: 0.5e-6, Output: 22.5e-6, CacheWrite: 6.25e-6},
-		LongContextThreshold: OpenAILongContextThreshold,
-	},
-	"gpt-5.6-luna": {
-		Model:                "gpt-5.6-luna",
-		Short:                Rates{Input: 1e-6, CachedInput: 0.1e-6, Output: 6e-6, CacheWrite: 1.25e-6},
-		Long:                 Rates{Input: 2e-6, CachedInput: 0.2e-6, Output: 9e-6, CacheWrite: 2.5e-6},
-		LongContextThreshold: OpenAILongContextThreshold,
-	},
-	"gpt-5.5": {
-		Model:                "gpt-5.5",
-		Short:                Rates{Input: 5e-6, CachedInput: 0.5e-6, Output: 30e-6, CacheWrite: 5e-6},
-		Long:                 Rates{Input: 10e-6, CachedInput: 1e-6, Output: 45e-6, CacheWrite: 10e-6},
-		LongContextThreshold: OpenAILongContextThreshold,
-	},
-	"gpt-5.4": {
-		Model:                "gpt-5.4",
-		Short:                Rates{Input: 2.5e-6, CachedInput: 0.25e-6, Output: 15e-6, CacheWrite: 2.5e-6},
-		Long:                 Rates{Input: 5e-6, CachedInput: 0.5e-6, Output: 22.5e-6, CacheWrite: 5e-6},
-		LongContextThreshold: OpenAILongContextThreshold,
-	},
-}
+//go:embed catalog.json
+var catalogJSON []byte
 
-// Lookup returns pricing only for an exact known model, after removing common
-// transport decorations and a trailing release date. It deliberately does not
-// guess a model from a family prefix.
+var models, aliases = mustLoadCatalog(catalogJSON)
+
 func Lookup(model string) (ModelPricing, bool) {
 	name := normalizeModel(model)
+	if canonical, ok := aliases[name]; ok {
+		name = canonical
+	}
 	value, ok := models[name]
 	return value, ok
 }
 
-// Cost returns a request's USD cost and whether the model's pricing is known.
-// speedMultiplier is normally StandardSpeedMultiplier or FastSpeedMultiplier.
 func Cost(model string, usage Usage, speedMultiplier float64) (float64, bool) {
 	modelPricing, ok := Lookup(model)
 	if !ok {
 		return 0, false
 	}
-
 	input := max(usage.InputTokens, 0)
 	cached := min(max(usage.CachedInputTokens, 0), input)
 	output := max(usage.OutputTokens, 0)
@@ -99,50 +68,114 @@ func Cost(model string, usage Usage, speedMultiplier float64) (float64, bool) {
 	if input > modelPricing.LongContextThreshold {
 		rates = modelPricing.Long
 	}
-	if speedMultiplier <= 0 {
+	if speedMultiplier <= 0 || math.IsNaN(speedMultiplier) || math.IsInf(speedMultiplier, 0) {
 		speedMultiplier = StandardSpeedMultiplier
 	}
-
-	nonCached := input - cached
-	cost := float64(nonCached)*rates.Input +
-		float64(cached)*rates.CachedInput +
-		float64(output)*rates.Output
-	return cost * speedMultiplier, true
+	cost := (float64(input-cached)*rates.Input + float64(cached)*rates.CachedInput + float64(output)*rates.Output) * speedMultiplier
+	return cost, true
 }
 
+// CheckCatalog validates a catalog and returns deterministic canonical JSON.
+func CheckCatalog(data []byte) ([]byte, error) {
+	var catalog catalogFile
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&catalog); err != nil {
+		return nil, fmt.Errorf("decode catalog: %w", err)
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, fmt.Errorf("decode catalog: trailing data")
+	}
+	if catalog.SchemaVersion != 1 || catalog.EffectiveDate == "" || len(catalog.Sources) == 0 || catalog.SourceReceipt == "" || len(catalog.SourceReceiptSHA256) != 64 || len(catalog.Models) == 0 {
+		return nil, fmt.Errorf("missing catalog provenance or unsupported schema")
+	}
+	seen := map[string]bool{}
+	for _, model := range catalog.Models {
+		name := normalizeModel(model.Model)
+		if name == "" || name != model.Model || seen[name] {
+			return nil, fmt.Errorf("invalid model %q", model.Model)
+		}
+		seen[name] = true
+	}
+	for _, model := range catalog.Models {
+		if model.LongContextThreshold <= 0 {
+			return nil, fmt.Errorf("invalid model %q", model.Model)
+		}
+		for _, alias := range model.Aliases {
+			alias = normalizeModel(alias)
+			if alias == "" || seen[alias] {
+				return nil, fmt.Errorf("duplicate/empty alias %q", alias)
+			}
+			seen[alias] = true
+		}
+		for _, rates := range []decimalRates{model.Short, model.Long} {
+			for _, value := range []string{rates.Input, rates.CachedInput, rates.Output, rates.CacheWrite} {
+				n, err := strconv.ParseFloat(value, 64)
+				if err != nil || n < 0 || math.IsNaN(n) || math.IsInf(n, 0) {
+					return nil, fmt.Errorf("invalid rate %q for %s", value, model.Model)
+				}
+			}
+		}
+	}
+	canonical, err := json.MarshalIndent(catalog, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(canonical, '\n'), nil
+}
+
+func mustLoadCatalog(data []byte) (map[string]ModelPricing, map[string]string) {
+	canonical, err := CheckCatalog(data)
+	if err != nil {
+		panic(err)
+	}
+	var catalog catalogFile
+	if err := json.Unmarshal(canonical, &catalog); err != nil {
+		panic(err)
+	}
+	result, aliasMap := map[string]ModelPricing{}, map[string]string{}
+	for _, item := range catalog.Models {
+		pricing := ModelPricing{Model: item.Model, Short: parseRates(item.Short), Long: parseRates(item.Long), LongContextThreshold: item.LongContextThreshold}
+		result[item.Model] = pricing
+		for _, alias := range item.Aliases {
+			aliasMap[alias] = item.Model
+		}
+	}
+	return result, aliasMap
+}
+func parseRates(r decimalRates) Rates {
+	parse := func(s string) float64 { v, _ := strconv.ParseFloat(s, 64); return v }
+	return Rates{parse(r.Input), parse(r.CachedInput), parse(r.Output), parse(r.CacheWrite)}
+}
 func normalizeModel(model string) string {
 	model = strings.ToLower(strings.TrimSpace(model))
-	for _, prefix := range []string{"openai/", "openai:"} {
-		model = strings.TrimPrefix(model, prefix)
+	for _, p := range []string{"openai/", "openai:"} {
+		model = strings.TrimPrefix(model, p)
 	}
 	model = strings.TrimSuffix(model, "-latest")
-	model = trimDateSuffix(model)
-	return model
+	return trimDateSuffix(model)
 }
-
 func trimDateSuffix(model string) string {
 	if len(model) > 11 {
-		suffix := model[len(model)-11:]
-		if suffix[0] == '-' && allDigits(suffix[1:5]) && suffix[5] == '-' &&
-			allDigits(suffix[6:8]) && suffix[8] == '-' && allDigits(suffix[9:]) {
+		s := model[len(model)-11:]
+		if s[0] == '-' && allDigits(s[1:5]) && s[5] == '-' && allDigits(s[6:8]) && s[8] == '-' && allDigits(s[9:]) {
 			return model[:len(model)-11]
 		}
 	}
 	if len(model) > 9 {
-		suffix := model[len(model)-9:]
-		if suffix[0] == '-' && allDigits(suffix[1:]) {
+		s := model[len(model)-9:]
+		if s[0] == '-' && allDigits(s[1:]) {
 			return model[:len(model)-9]
 		}
 	}
 	return model
 }
-
 func allDigits(value string) bool {
 	if value == "" {
 		return false
 	}
-	for _, character := range value {
-		if character < '0' || character > '9' {
+	for _, c := range value {
+		if c < '0' || c > '9' {
 			return false
 		}
 	}

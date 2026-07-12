@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "effective_date": "2026-07-10",
+  "sources": ["https://developers.openai.com/api/docs/pricing"],
+  "source_receipt": "internal/pricing/source-receipt.json",
+  "source_receipt_sha256": "4216eb14347f0646cde0a4cb3830961df377a4dd1428a597e28affbf9ca8bd3a",
+  "models": [
+    {"model":"gpt-5.6-sol","aliases":[],"long_context_threshold":272000,"short":{"Input":"0.000005","CachedInput":"0.0000005","Output":"0.000030","CacheWrite":"0.00000625"},"long":{"Input":"0.000010","CachedInput":"0.000001","Output":"0.000045","CacheWrite":"0.0000125"}},
+    {"model":"gpt-5.6-terra","aliases":[],"long_context_threshold":272000,"short":{"Input":"0.0000025","CachedInput":"0.00000025","Output":"0.000015","CacheWrite":"0.000003125"},"long":{"Input":"0.000005","CachedInput":"0.0000005","Output":"0.0000225","CacheWrite":"0.00000625"}},
+    {"model":"gpt-5.6-luna","aliases":[],"long_context_threshold":272000,"short":{"Input":"0.000001","CachedInput":"0.0000001","Output":"0.000006","CacheWrite":"0.00000125"},"long":{"Input":"0.000002","CachedInput":"0.0000002","Output":"0.000009","CacheWrite":"0.0000025"}},
+    {"model":"gpt-5.5","aliases":[],"long_context_threshold":272000,"short":{"Input":"0.000005","CachedInput":"0.0000005","Output":"0.000030","CacheWrite":"0"},"long":{"Input":"0.000010","CachedInput":"0.000001","Output":"0.000045","CacheWrite":"0"}},
+    {"model":"gpt-5.4","aliases":[],"long_context_threshold":272000,"short":{"Input":"0.0000025","CachedInput":"0.00000025","Output":"0.000015","CacheWrite":"0"},"long":{"Input":"0.000005","CachedInput":"0.0000005","Output":"0.0000225","CacheWrite":"0"}}
+  ]
+}
