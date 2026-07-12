@@ -148,6 +148,23 @@ insert into server_settings values('poll_failure_error','/secret/auth.json beare
 	}
 }
 
+func TestProfileMigrationParsesFractionalActivityExactly(t *testing.T) {
+	s := openTestStore(t)
+	makeProfileV10(t, s)
+	for _, x := range []struct{ ref, raw string }{{"exact", "2026-07-13T00:00:00Z"}, {"hundredth", "2026-07-13T00:00:00.01Z"}, {"tenth", "2026-07-13T00:00:00.1Z"}, {"nano-z", "2026-07-13T00:00:00.100000001Z"}, {"nano-a", "2026-07-13T00:00:00.100000001Z"}} {
+		if _, err := s.db.Exec(`insert into accounts values(?,'codex','','','',?)`, x.ref, x.raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.migrateProfiles(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var current string
+	if err := s.db.QueryRow(`select account_ref from profile_accounts where is_current=1`).Scan(&current); err != nil || current != "nano-a" {
+		t.Fatalf("current=%q err=%v", current, err)
+	}
+}
+
 func TestProfileMigrationEmptyIdempotentAndConcurrent(t *testing.T) {
 	s := openTestStore(t)
 	makeProfileV10(t, s)

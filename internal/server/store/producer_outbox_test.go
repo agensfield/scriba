@@ -13,6 +13,9 @@ import (
 func TestV7ProducersEnqueueTypedPayloadsOnce(t *testing.T) {
 	ctx, target := context.Background(), "telegram:producer"
 	s := openTestStore(t)
+	if err := s.SyncProfiles(ctx, []ProfileSpec{{"primary", "codex", "Primary", true, true}}); err != nil {
+		t.Fatal(err)
+	}
 	acct := resetwatch.Account{Ref: "acct", Label: "personal", Email: "a@example.com", Plan: "Plus"}
 	now := parseTime("2026-07-12T12:00:00Z")
 	warning := resetwatch.WarningEvent{ID: "warning-1", ProviderID: "codex", Account: acct, Label: resetwatch.LabelFiveHour, ThresholdRemaining: 5, UsedPercent: 96, RemainingPercent: 4, ResetAt: now.Add(time.Hour), SnapshotJSON: []byte(`{"warning":true}`), DetectedAt: now}
@@ -82,6 +85,13 @@ func TestV7ProducersEnqueueTypedPayloadsOnce(t *testing.T) {
 		if reflect.TypeOf(decoded) != reflect.TypeOf(wantTypes[m.EventKind]) {
 			t.Fatalf("%s decoded %T", m.EventKind, decoded)
 		}
+		if m.EventKind == "radar_alert" {
+			if m.ProfileRef != "" || m.AccountRef != "" {
+				t.Fatal("radar attribution is not global")
+			}
+		} else if m.ProfileRef != "primary" || m.AccountRef != "acct" {
+			t.Fatalf("%s attribution=%q/%q", m.EventKind, m.ProfileRef, m.AccountRef)
+		}
 		seen[m.EventKind]++
 	}
 	for kind := range wantTypes {
@@ -108,6 +118,51 @@ func TestV7ProducersEnqueueTypedPayloadsOnce(t *testing.T) {
 		if err := s.db.QueryRow(`select count(*) from ` + table).Scan(&n); err != nil || n != 0 {
 			t.Errorf("legacy %s rows=%d err=%v", table, n, err)
 		}
+	}
+}
+
+func TestLegacyAccountProducersWithoutTargetsBindConfiguredDefault(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	if err := s.SyncProfiles(ctx, []ProfileSpec{{"primary", "codex", "Primary", true, true}}); err != nil {
+		t.Fatal(err)
+	}
+	acct := resetwatch.Account{Ref: "acct", Label: "personal"}
+	now := parseTime("2026-07-12T12:00:00Z")
+	base := observation("2026-07-12T10:00:00Z", "2026-07-19T10:00:00Z", "2026-07-12T15:00:00Z")
+	states := resetwatch.Decide(base, nil, testOptions())
+	if _, err := s.ApplyDecision(ctx, base, states); err != nil {
+		t.Fatal(err)
+	}
+	changedObs := observation("2026-07-13T10:00:00Z", "2026-07-20T10:00:00Z", "2026-07-13T15:00:00Z")
+	old, _ := s.LoadWindowStates(ctx, "acct")
+	if _, err := s.ApplyDecision(ctx, changedObs, resetwatch.Decide(changedObs, old, testOptions())); err != nil {
+		t.Fatal(err)
+	}
+	w := resetwatch.WarningEvent{ID: "w", ProviderID: "codex", Account: acct, Label: resetwatch.LabelFiveHour, ThresholdRemaining: 5, UsedPercent: 96, RemainingPercent: 4, ResetAt: now.Add(time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: now}
+	if _, err := s.InsertWarningEvents(ctx, []resetwatch.WarningEvent{w}); err != nil {
+		t.Fatal(err)
+	}
+	gw := resetwatch.GrantExpiryWarning{ID: "gw", ProviderID: "codex", Account: acct, CreditID: "c", CreditTitle: "C", ThresholdDays: 3, ExpiresAt: now.Add(72 * time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: now}
+	if _, err := s.InsertGrantExpiryWarningEvents(ctx, []resetwatch.GrantExpiryWarning{gw}); err != nil {
+		t.Fatal(err)
+	}
+	obs := base
+	obs.ResetGrants = resetwatch.ResetGrants{AvailableCount: ptrInt(2), Credits: []resetwatch.ResetCredit{{ID: "c", Status: "available", Title: "C", GrantedAt: now, ExpiresAt: now.Add(24 * time.Hour)}}}
+	grants := resetwatch.ResetGrantEventCandidates(obs)
+	if _, err := s.InsertResetGrantEvents(ctx, obs, grants); err != nil {
+		t.Fatal(err)
+	}
+	alert := radar.ProbabilityAlert{ID: "radar-no-target", Milestone: 50, Probability24H: .6, Level: "high", DetectedAt: now, SnapshotJSON: []byte(`{}`)}
+	if _, err := s.InsertRadarAlertEvent(ctx, alert); err != nil {
+		t.Fatal(err)
+	}
+	var mapping, outbox, resets, warnings, grantWarnings, grantEvents, radarRows int
+	if err := s.db.QueryRow(`select (select count(*) from profile_accounts where profile_ref='primary' and account_ref='acct'),(select count(*) from notification_outbox),(select count(*) from reset_events),(select count(*) from limit_warning_events),(select count(*) from reset_grant_warning_events),(select count(*) from reset_grant_events),(select count(*) from radar_alert_events)`).Scan(&mapping, &outbox, &resets, &warnings, &grantWarnings, &grantEvents, &radarRows); err != nil {
+		t.Fatal(err)
+	}
+	if mapping != 1 || outbox != 0 || resets < 1 || warnings != 1 || grantWarnings != 1 || grantEvents < 1 || radarRows != 1 {
+		t.Fatalf("mapping=%d outbox=%d rows=%d/%d/%d/%d radar=%d", mapping, outbox, resets, warnings, grantWarnings, grantEvents, radarRows)
 	}
 }
 
@@ -151,7 +206,7 @@ func TestClaimOutboxForTargetIsolation(t *testing.T) {
 	now := time.Now().UTC()
 	for _, target := range []string{"telegram:a", "telegram:b"} {
 		tx, _ := s.db.BeginTx(context.Background(), nil)
-		if err := EnqueueOutbox(context.Background(), tx, OutboxEnqueue{EventKind: "reset", Source: "test", EventID: target, Target: target, PayloadVersion: 1, PayloadJSON: `{"version":1,"kind":"reset"}`}, now); err != nil {
+		if err := EnqueueOutbox(context.Background(), tx, OutboxEnqueue{EventKind: "radar_alert", Source: "test", EventID: target, Target: target, PayloadVersion: 1, PayloadJSON: `{"version":1,"kind":"reset"}`}, now); err != nil {
 			t.Fatal(err)
 		}
 		_ = tx.Commit()

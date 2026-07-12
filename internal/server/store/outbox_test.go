@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -18,7 +19,7 @@ func enqueueTestOutbox(t *testing.T, s *Store, id string, now time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = EnqueueOutbox(context.Background(), tx, OutboxEnqueue{ID: id, EventKind: "reset", Source: "test", AccountRef: "acct", EventID: id, Target: "telegram:1", PayloadVersion: 1, PayloadJSON: `{"ok":true}`}, now); err != nil {
+	if err = EnqueueOutbox(context.Background(), tx, OutboxEnqueue{ID: id, EventKind: "radar_alert", Source: "test", EventID: id, Target: "telegram:1", PayloadVersion: 1, PayloadJSON: `{"ok":true}`}, now); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -33,13 +34,69 @@ func TestOutboxEnqueueRollback(t *testing.T) {
 	}
 	now := time.Unix(1700000000, 0).UTC()
 	tx, _ := s.db.BeginTx(context.Background(), nil)
-	if err := EnqueueOutbox(context.Background(), tx, OutboxEnqueue{ID: "x", EventKind: "reset", Source: "test", EventID: "e", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, now); err != nil {
+	if err := EnqueueOutbox(context.Background(), tx, OutboxEnqueue{ID: "x", EventKind: "radar_alert", Source: "test", EventID: "e", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, now); err != nil {
 		t.Fatal(err)
 	}
 	_ = tx.Rollback()
 	var n int
 	if err := s.db.QueryRow(`select count(*) from notification_outbox`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("rollback count=%d err=%v", n, err)
+	}
+}
+
+func TestOutboxCanonicalKindScope(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.db.Exec(`insert into accounts values('acct','codex','','','','2026-07-13T00:00:00Z');insert into profile_accounts values('default','codex','acct',1,'2026-07-13T00:00:00Z','2026-07-13T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	accountKinds := []string{"reset", "limit_warning", "reset_grant_warning", "reset_grant"}
+	for _, kind := range accountKinds {
+		t.Run(kind+" valid", func(t *testing.T) {
+			tx, _ := s.db.BeginTx(ctx, nil)
+			defer func() { _ = tx.Rollback() }()
+			if err := EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "test", ProfileRef: "default", AccountRef: "acct", EventID: kind + "-valid", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+		})
+		t.Run(kind+" global rejected", func(t *testing.T) {
+			tx, _ := s.db.BeginTx(ctx, nil)
+			defer func() { _ = tx.Rollback() }()
+			err := EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "test", EventID: kind + "-bad", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, time.Now())
+			if !errors.Is(err, ErrOutboxScope) {
+				t.Fatalf("err=%v", err)
+			}
+			var n int
+			_ = tx.QueryRow(`select count(*) from notification_outbox where event_id=?`, kind+"-bad").Scan(&n)
+			if n != 0 {
+				t.Fatal("invalid scope inserted")
+			}
+		})
+	}
+	for name, in := range map[string]OutboxEnqueue{"radar valid": {EventKind: "radar_alert", Source: "test", EventID: "radar-valid", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, "radar account rejected": {EventKind: "radar_alert", Source: "test", ProfileRef: "default", AccountRef: "acct", EventID: "radar-bad", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, "unknown": {EventKind: "mystery", Source: "test", EventID: "unknown", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}} {
+		t.Run(name, func(t *testing.T) {
+			tx, _ := s.db.BeginTx(ctx, nil)
+			defer func() { _ = tx.Rollback() }()
+			err := EnqueueOutbox(ctx, tx, in, time.Now())
+			if name == "radar valid" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			want := ErrOutboxScope
+			if name == "unknown" {
+				want = ErrOutboxEventKind
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("err=%v want=%v", err, want)
+			}
+			var n int
+			_ = tx.QueryRow(`select count(*) from notification_outbox where event_id=?`, in.EventID).Scan(&n)
+			if n != 0 {
+				t.Fatal("invalid envelope inserted")
+			}
+		})
 	}
 }
 
@@ -240,7 +297,7 @@ func TestOutboxConflictingSemanticDuplicateFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	err = EnqueueOutbox(context.Background(), tx, OutboxEnqueue{ID: "different", EventKind: "reset", Source: "other", EventID: "same", Target: "telegram:1", PayloadVersion: 1, PayloadJSON: `{"different":true}`}, now)
+	err = EnqueueOutbox(context.Background(), tx, OutboxEnqueue{ID: "different", EventKind: "radar_alert", Source: "other", EventID: "same", Target: "telegram:1", PayloadVersion: 1, PayloadJSON: `{"different":true}`}, now)
 	if err == nil {
 		t.Fatal("expected semantic conflict")
 	}

@@ -18,6 +18,11 @@ import (
 
 const OutboxMaxAttempts = 8
 
+var (
+	ErrOutboxScope     = errors.New("invalid outbox scope")
+	ErrOutboxEventKind = errors.New("invalid outbox event kind")
+)
+
 type OutboxMessage struct {
 	ID, EventKind, Source, ProfileRef, AccountRef, EventID, Target string
 	PayloadVersion                                                 int
@@ -50,6 +55,41 @@ func EnqueueOutbox(ctx context.Context, tx *sql.Tx, in OutboxEnqueue, now time.T
 	}
 	if in.EventKind == "" || in.Source == "" || in.EventID == "" || in.Target == "" || in.PayloadVersion < 1 || in.PayloadJSON == "" {
 		return errors.New("invalid outbox envelope")
+	}
+	switch in.EventKind {
+	case "reset", "limit_warning", "reset_grant_warning", "reset_grant":
+		if in.AccountRef == "" || in.ProfileRef == "" {
+			return ErrOutboxScope
+		}
+	case "radar_alert":
+		if in.AccountRef != "" || in.ProfileRef != "" {
+			return ErrOutboxScope
+		}
+	default:
+		return ErrOutboxEventKind
+	}
+	if in.AccountRef != "" {
+		if !validProfileRef(in.ProfileRef) {
+			return ErrInvalidProfile
+		}
+		var enabled int
+		if err := tx.QueryRowContext(ctx, `select enabled from profiles where profile_ref=?`, in.ProfileRef).Scan(&enabled); errors.Is(err, sql.ErrNoRows) {
+			return ErrProfileMissing
+		} else if err != nil {
+			return err
+		}
+		if enabled != 1 {
+			return ErrProfileDisabled
+		}
+		var owner string
+		if err := tx.QueryRowContext(ctx, `select profile_ref from profile_accounts where account_ref=?`, in.AccountRef).Scan(&owner); errors.Is(err, sql.ErrNoRows) {
+			return ErrProfileAccountUnbound
+		} else if err != nil {
+			return err
+		}
+		if owner != in.ProfileRef {
+			return ErrProfileAccountOwned
+		}
 	}
 	if in.AvailableAt.IsZero() {
 		in.AvailableAt = now
@@ -205,6 +245,22 @@ func changed(r sql.Result, e error) (bool, error) {
 }
 
 func enqueueEvent(ctx context.Context, tx *sql.Tx, kind, id, account, target string, event any) error {
+	profile := ""
+	if account != "" {
+		err := tx.QueryRowContext(ctx, `select profile_ref from profile_accounts where account_ref=?`, account).Scan(&profile)
+		if errors.Is(err, sql.ErrNoRows) {
+			var provider string
+			if err = tx.QueryRowContext(ctx, `select provider_id from accounts where account_ref=?`, account).Scan(&provider); err == nil {
+				profile, err = resolveDefaultProfile(ctx, tx, provider)
+				if err == nil {
+					err = bindProfileAccount(ctx, tx, profile, provider, account, time.Now())
+				}
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("resolve outbox profile: %w", err)
+		}
+	}
 	if target == "" {
 		return nil
 	}
@@ -212,7 +268,7 @@ func enqueueEvent(ctx context.Context, tx *sql.Tx, kind, id, account, target str
 	if err != nil {
 		return err
 	}
-	return EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "scriba-v7", AccountRef: account, EventID: id, Target: target, PayloadVersion: 1, PayloadJSON: payload}, time.Now())
+	return EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "scriba-v7", ProfileRef: profile, AccountRef: account, EventID: id, Target: target, PayloadVersion: 1, PayloadJSON: payload}, time.Now())
 }
 
 func firstTarget(targets []string) string {

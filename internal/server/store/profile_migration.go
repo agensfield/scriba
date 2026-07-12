@@ -87,12 +87,7 @@ func (s *Store) migrateProfiles(ctx context.Context) (retErr error) {
 	if _, err = conn.ExecContext(ctx, `insert into profiles values('default','codex','Default',1,1,?,?)`, now, now); err != nil {
 		return err
 	}
-	if _, err = conn.ExecContext(ctx, `insert into profile_accounts
-select 'default',a.provider_id,a.account_ref,
- case when a.account_ref=(select a2.account_ref from accounts a2 left join limit_observations o2 on o2.provider_id=a2.provider_id and o2.account_ref=a2.account_ref where a2.provider_id=a.provider_id group by a2.account_ref order by max(a2.updated_at,coalesce(max(o2.observed_at),a2.updated_at)) desc,a2.account_ref collate binary asc limit 1) then 1 else 0 end,
- coalesce(min(o.observed_at),a.updated_at),max(a.updated_at,coalesce(max(o.observed_at),a.updated_at))
-from accounts a left join limit_observations o on o.provider_id=a.provider_id and o.account_ref=a.account_ref
-where a.provider_id='codex' group by a.provider_id,a.account_ref`); err != nil {
+	if err = migrateProfileAccounts(ctx, conn); err != nil {
 		return err
 	}
 	attempt := sanitizedLegacyTime(ctx, conn, "poll_attempt_at")
@@ -134,6 +129,83 @@ where a.provider_id='codex' group by a.provider_id,a.account_ref`); err != nil {
 	}
 	_, err = conn.ExecContext(ctx, `commit`)
 	return err
+}
+
+func migrateProfileAccounts(ctx context.Context, conn *sql.Conn) error {
+	type account struct {
+		ref, updated string
+		first, last  time.Time
+	}
+	rows, err := conn.QueryContext(ctx, `select account_ref,updated_at from accounts where provider_id='codex'`)
+	if err != nil {
+		return err
+	}
+	var accounts []account
+	for rows.Next() {
+		var a account
+		if err = rows.Scan(&a.ref, &a.updated); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		parsed, e := time.Parse(time.RFC3339Nano, a.updated)
+		if e != nil {
+			_ = rows.Close()
+			return e
+		}
+		a.first, a.last = parsed, parsed
+		accounts = append(accounts, a)
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	current := ""
+	var latest time.Time
+	for i := range accounts {
+		obs, queryErr := conn.QueryContext(ctx, `select observed_at from limit_observations where provider_id='codex' and account_ref=?`, accounts[i].ref)
+		if queryErr != nil {
+			return queryErr
+		}
+		seen := false
+		for obs.Next() {
+			var raw string
+			if err = obs.Scan(&raw); err != nil {
+				_ = obs.Close()
+				return err
+			}
+			parsed, e := time.Parse(time.RFC3339Nano, raw)
+			if e != nil {
+				_ = obs.Close()
+				return e
+			}
+			if !seen || parsed.Before(accounts[i].first) {
+				accounts[i].first = parsed
+			}
+			if parsed.After(accounts[i].last) {
+				accounts[i].last = parsed
+			}
+			seen = true
+		}
+		if err = obs.Err(); err != nil {
+			_ = obs.Close()
+			return err
+		}
+		_ = obs.Close()
+		if current == "" || accounts[i].last.After(latest) || (accounts[i].last.Equal(latest) && accounts[i].ref < current) {
+			current, latest = accounts[i].ref, accounts[i].last
+		}
+	}
+	for _, a := range accounts {
+		isCurrent := 0
+		if a.ref == current {
+			isCurrent = 1
+		}
+		if _, err = conn.ExecContext(ctx, `insert into profile_accounts values('default','codex',?,?,?,?)`, a.ref, isCurrent, formatTime(a.first), formatTime(a.last)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func sanitizedLegacyTime(ctx context.Context, q profileSchemaQuerier, key string) any {
