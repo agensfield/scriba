@@ -3,7 +3,9 @@ package codexauth
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +15,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -22,6 +27,9 @@ const (
 )
 
 var RefreshURL = "https://auth.openai.com/oauth/token"
+
+var errAuthChanged = errors.New("Codex auth changed during refresh; refusing to overwrite newer credentials")
+var errWriteCommitted = errors.New("Codex auth rename committed before durability sync failed")
 
 type Credentials struct {
 	OK           bool
@@ -94,11 +102,11 @@ func Load(ctx context.Context, opts LoadOptions) (Credentials, error) {
 			continue
 		}
 		if file.Auth.Tokens.RefreshToken != "" && (opts.ForceRefresh || NeedsRefresh(file.Auth.LastRefresh, now())) {
-			refreshed, err := Refresh(ctx, opts.Client, file, now)
+			refreshed, err := refreshLocked(ctx, opts, path, tokenGeneration(file), now)
 			if err == nil && refreshed.Auth.Tokens.AccessToken != "" {
-				if err := WriteFileAtomic(refreshed.Path, refreshed.Raw); err != nil {
-					return Credentials{}, err
-				}
+				return credentials(refreshed), nil
+			}
+			if errors.Is(err, errAuthChanged) && refreshed.Auth.Tokens.AccessToken != "" {
 				return credentials(refreshed), nil
 			}
 			if opts.ForceRefresh {
@@ -108,6 +116,81 @@ func Load(ctx context.Context, opts LoadOptions) (Credentials, error) {
 		return credentials(file), nil
 	}
 	return Credentials{OK: false, Error: "Not logged in. Run `codex` to authenticate."}, nil
+}
+
+func refreshLocked(ctx context.Context, opts LoadOptions, path, initialGeneration string, now func() time.Time) (File, error) {
+	lock := pathLock(path)
+	if err := lock.Lock(ctx); err != nil {
+		return File{}, err
+	}
+	defer lock.Unlock()
+
+	flock, err := acquireFileLock(ctx, path+".scriba.lock")
+	if err != nil {
+		return File{}, err
+	}
+	defer func() { _ = flock.Close() }()
+
+	file, err := ReadFile(path)
+	if err != nil {
+		return File{}, err
+	}
+	if tokenGeneration(file) != initialGeneration {
+		return file, nil
+	}
+	if file.Auth.Tokens.RefreshToken == "" || (!opts.ForceRefresh && !NeedsRefresh(file.Auth.LastRefresh, now())) {
+		return file, nil
+	}
+	generation := tokenGeneration(file)
+	refreshed, err := Refresh(ctx, opts.Client, file, now)
+	if err != nil {
+		return file, err
+	}
+	current, err := ReadFile(path)
+	if err != nil {
+		return file, err
+	}
+	if tokenGeneration(current) != generation {
+		return current, errAuthChanged
+	}
+	if err := writeFileAtomic(refreshed.Path, refreshed.Raw); err != nil {
+		if errors.Is(err, errWriteCommitted) {
+			if committed, readErr := ReadFile(path); readErr == nil {
+				return committed, nil
+			}
+		}
+		return file, err
+	}
+	return refreshed, nil
+}
+
+func acquireFileLock(ctx context.Context, path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- sibling of configured Codex auth path.
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			_ = f.Close()
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func tokenGeneration(file File) string {
+	data, _ := json.Marshal(file.Raw)
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
 }
 
 func ReadFile(path string) (File, error) {
@@ -177,9 +260,15 @@ func Refresh(ctx context.Context, client *http.Client, file File, now func() tim
 
 func WriteFileAtomic(path string, raw map[string]json.RawMessage) error {
 	lock := pathLock(path)
-	lock.Lock()
+	if err := lock.Lock(context.Background()); err != nil {
+		return err
+	}
 	defer lock.Unlock()
 
+	return writeFileAtomic(path, raw)
+}
+
+func writeFileAtomic(path string, raw map[string]json.RawMessage) error {
 	data, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return err
@@ -200,13 +289,28 @@ func WriteFileAtomic(path string, raw map[string]json.RawMessage) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
 	if err := os.Chmod(tmpPath, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dirFile.Close() }()
+	if err := dirFile.Sync(); err != nil {
+		return fmt.Errorf("%w: %v", errWriteCommitted, err)
+	}
+	return nil
 }
 
 func EmailFromIDToken(token string) string {
@@ -285,7 +389,28 @@ func refreshErrorCode(payload map[string]any) string {
 	return ""
 }
 
-func pathLock(path string) *sync.Mutex {
-	value, _ := pathLocks.LoadOrStore(path, &sync.Mutex{})
-	return value.(*sync.Mutex)
+type contextMutex struct {
+	token chan struct{}
+}
+
+func newContextMutex() *contextMutex {
+	m := &contextMutex{token: make(chan struct{}, 1)}
+	m.token <- struct{}{}
+	return m
+}
+
+func (m *contextMutex) Lock(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.token:
+		return nil
+	}
+}
+
+func (m *contextMutex) Unlock() { m.token <- struct{}{} }
+
+func pathLock(path string) *contextMutex {
+	value, _ := pathLocks.LoadOrStore(path, newContextMutex())
+	return value.(*contextMutex)
 }
