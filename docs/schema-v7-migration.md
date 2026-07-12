@@ -58,7 +58,28 @@ A fresh disposable copy of the untouched schema-v6 backup was opened on
 devbox by the previous `0a8e6f1` binary. It reported schema 6 successfully.
 The immutable remote backup hash still matched the original receipt afterward.
 
-No current binary has opened the live database yet. Live deployment requires a
-fresh predeploy backup, service stop/install/start, schema-7 health/stats proof,
-Telegram command smoke, two clean poll cycles, and a journal scan for SQLite
-lock errors or duplicate delivery.
+## Live deployment receipt
+
+Before deployment, the current candidate produced a fresh non-migrating
+schema-v6 backup. It matched the earlier verified backup byte-for-byte and by
+SHA-256. The previous live binary was preserved as
+`~/.local/bin/scriba.pre-v7-6b9a85c`; the service was stopped, commit `b999204`
+was installed, and the service restarted successfully.
+
+Post-migration evidence:
+
+- service active, version `0.2.9`, commit `b999204`, schema 7
+- health `ok`, zero poll failures
+- 38 delivered outbox rows, 39 preserved attempts, zero pending, leased,
+  expired, or dead-letter rows
+- Telegram inbox empty with zero dead rows
+- two additional live refreshes completed with four windows each and no
+  duplicate events or warnings
+- live `quick_check=ok`, `foreign_key_check` returned zero rows
+- post-deploy journal scan returned no warnings, errors, locks, duplicate, or
+  constraint failures
+- Telegram Bot API identity and all 11 registered commands were verified
+
+An interactive `/health` reply remains the final durable-inbox command smoke;
+it requires an actual user update and does not block continued local Wave 1.3
+work.

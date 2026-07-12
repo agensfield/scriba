@@ -296,4 +296,7 @@ No product implementation was started before this plan was reconciled.
   on a disposable copy with exact 38-row reconciliation, clean integrity
   checks, idempotent reopen, schema-v7 backup proof, and previous-binary
   rollback-copy proof. See `docs/schema-v7-migration.md`. Live deployment is
-  intentionally pending the fresh predeploy backup and soak sequence.
+  now verified on devbox at `b999204`: fresh predeploy backup, schema 7,
+  healthy empty queues, two clean additional polls, integrity checks, Bot API
+  command registration, and a clean journal scan. Interactive `/health`
+  durable-inbox smoke remains pending user input.
