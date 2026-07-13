@@ -44,12 +44,13 @@ func TestRealOutboxDispatchesSameCanonicalEventToWebhookAndNtfy(t *testing.T) {
 	if inserted, err := state.InsertRadarAlertEvent(t.Context(), alert, "webhook:one", "ntfy:phone"); err != nil || !inserted {
 		t.Fatalf("inserted=%t err=%v", inserted, err)
 	}
+	dispatchAt := time.Now().UTC().Add(time.Minute)
 	webhook := Webhook{ID: "one", URL: webhookServer.URL, Secret: []byte("secret")}
 	ntfy := Ntfy{ID: "phone", URL: ntfyServer.URL, Topic: "scriba_test"}
-	if processed, err := (Dispatcher{Store: state, Adapter: webhook, Now: func() time.Time { return at }}).DispatchOnce(t.Context()); err != nil || processed != 1 {
+	if processed, err := (Dispatcher{Store: state, Adapter: webhook, Now: func() time.Time { return dispatchAt }}).DispatchOnce(t.Context()); err != nil || processed != 1 {
 		t.Fatalf("webhook processed=%d err=%v", processed, err)
 	}
-	if processed, err := (Dispatcher{Store: state, Adapter: ntfy, Now: func() time.Time { return at }}).DispatchOnce(t.Context()); err != nil || processed != 1 {
+	if processed, err := (Dispatcher{Store: state, Adapter: ntfy, Now: func() time.Time { return dispatchAt }}).DispatchOnce(t.Context()); err != nil || processed != 1 {
 		t.Fatalf("ntfy processed=%d err=%v", processed, err)
 	}
 	if string(webhookBody) != string(ntfyMessage) || len(webhookBody) == 0 {
