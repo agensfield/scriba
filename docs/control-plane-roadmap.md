@@ -276,13 +276,17 @@ last state. See [`schema-v10-migration.md`](schema-v10-migration.md).
 Gate: two independent fixture auth files remain isolated; config v1 still
 runs as one implicit profile; v10-to-v11 migration/rollback and account
 rotation are proven; no raw auth path, account ref, auth source, or credentials
-leak. Live release proof still needs two independent real Codex auth files.
+leak. The live release proof requires one real Codex account to preserve config
+v1 compatibility and profile-aware surface parity. Two successful live accounts
+are not required because a second authorized account is not available; composed
+two-fixture isolation remains the authoritative multi-account proof.
 
-Current gate status: implementation, composed two-fixture isolation, schema-v11
-migration/rollback, compatibility-profile deployment, and all public-surface
-smokes passed through `538d557`. The devbox has only one real Codex auth file,
-so the explicitly separate two-real-account live proof remains externally
-gated. See [`schema-v11-migration.md`](schema-v11-migration.md).
+Current gate status: passed. Implementation, composed two-fixture isolation,
+schema-v11 migration/rollback, one-account compatibility-profile deployment,
+and all public-surface smokes passed through `538d557`. On 2026-07-13 Arda
+explicitly revised the unavailable two-successful-real-account requirement to
+this fixture-plus-live contract. See
+[`schema-v11-migration.md`](schema-v11-migration.md).
 
 ### 3.3 Delivery adapters and Telegram parity
 
@@ -305,8 +309,9 @@ through `68814b1`: versioned profile pages/actions, bounded callback/HTML
 surfaces, explicit group-user allowlisting, inaccessible-message authorization,
 stale-control retirement, closed logging, and durable API-failure propagation.
 Wave 3.3 is deployed at `ce03c7a`; health, schema-11 integrity, queues, command
-registration, and journal smokes passed. One human inline profile-button tap
-remains the interactive callback proof.
+registration, and journal smokes passed. The human Profiles to `default` to
+Limits callback path passed as processed durable updates `133548448` through
+`133548450` on 2026-07-13.
 
 ### 3.4 Operational and release parity
 
@@ -360,9 +365,10 @@ Pause a phase and report a blocker when any of these is true:
 
 - The production-like schema-v6 fixture, outbox migration, and rollback gate
   are complete.
-- Multi-account live proof still requires two independent Codex auth files.
-  Fixture coverage and one-account compatibility are proven, but the release
-  gate remains blocked without live proof unless scope is explicitly revised.
+- Multi-account behavior is proven by two independent fixture auth files;
+  config-v1 and profile-aware compatibility are proven with one live account.
+  This became the explicit release contract on 2026-07-13 because no second
+  authorized account is available.
 - Absolute OAuth exclusion against the Codex CLI is impossible unless Scriba
   adopts Codex's own lock protocol. Optimistic generation checks remain
   required.
@@ -403,8 +409,9 @@ CLI/server operational and release work.
   rollback-copy proof. See `docs/schema-v7-migration.md`. Live deployment is
   now verified on devbox at `b999204`: fresh predeploy backup, schema 7,
   healthy empty queues, two clean additional polls, integrity checks, Bot API
-  command registration, and a clean journal scan. Interactive `/health`
-  durable-inbox smoke remains pending user input.
+  command registration, and a clean journal scan. The interactive health smoke
+  later passed as processed durable update `133548446` (`quick:health`) on
+  2026-07-13.
 - 2026-07-12: Wave 1.3 contract laboratory completed through `3aade5a`.
   Codex integers are exact beyond 2^53 with explicit invalid-number rejection;
   model precedence is deterministic; Codex and Claude parser caches have
@@ -470,4 +477,8 @@ CLI/server operational and release work.
   then polled disposable copies of two distinct-account auth files: the current
   profile stayed healthy while the old backup failed closed as
   `auth/auth_unavailable`; both source files remained byte-identical. The
-  two-successful-real-account gate therefore remains open.
+  unavailable two-successful-real-account proof was explicitly replaced by
+  composed two-fixture isolation plus one-account live compatibility. Human
+  Telegram health and Profiles to `default` to Limits smokes then passed as
+  durable processed updates `133548446` and `133548448` through `133548450`;
+  inbox state was 10 processed with zero pending or dead work.

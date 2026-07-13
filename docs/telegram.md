@@ -191,8 +191,9 @@ grants are available, each grant has its own expiry schedule and dedupe key.
 Wave 3.3 live evidence is stored on the devbox at
 `/home/arda/.local/state/scriba/deployments/wave33-ce03c7a`. The deployed
 `ce03c7a` binary passed health, schema-11 integrity, empty-queue, command
-registration, and journal smokes. Tap Profiles, choose `default`, then tap
-Limits once to complete the interactive callback smoke.
+registration, and journal smokes. The human Profiles to `default` to Limits
+path passed on 2026-07-13 as durable processed updates `133548448` through
+`133548450`; the subsequent Grants action `133548451` also passed.
 
 ## Auth Requirements
 

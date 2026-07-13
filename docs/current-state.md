@@ -126,8 +126,9 @@ Claude Code and Codex usage tracker.
   `e4387d92f4525a470a64d9386c73d871071e966d896291037ad25c8e88371b1e`.
   Health/profile, empty queues, integrity, all 12 Bot API commands, and journal
   smokes passed. Live evidence is under
-  `/home/arda/.local/state/scriba/deployments/wave33-ce03c7a`; one human inline
-  profile-button tap remains the interactive callback proof.
+  `/home/arda/.local/state/scriba/deployments/wave33-ce03c7a`. Human health and
+  Profiles to `default` to Limits smokes later passed as durable processed
+  updates `133548446` and `133548448` through `133548450`.
 - Wave 3.4 operations and release parity are deployed through `v0.3.0` at
   `92e7147`. Bounded retention, verified scheduled backups, hardened user
   units, linger, a stopped-service restore drill, and an autonomous reboot all
@@ -248,22 +249,13 @@ apps/macos/Scripts/package_zip.sh release
 
 ## Open Follow-Ups
 
-- Execute the binding two-real-account profile isolation proof when a second
-  live independent Codex credential is available, or explicitly revise that
-  gate. A distinct-account local backup was tested through disposable copies
-  with exact public `v0.3.0`; it failed closed as `auth/auth_unavailable` while
-  the current account stayed healthy and both source files remained unchanged.
-- Record one post-schema-v7 human `/health` command/reply smoke.
-- Record one human Telegram Profiles to default to Limits callback tap.
-- Close the remaining accepted local usage control-plane gates in
-  [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
-  migration safety, the canonical outbox, budget surfaces, and the schema-v8
-  policy runtime, inspection CLI surfaces, Wave 3.1 agent transports, and Wave
-  3.2 profiles, Wave 3.3 delivery/Telegram parity, and Wave 3.4 retention,
-  backup, restore, hardened-systemd, linger, reboot, reproducible release,
-  attestation, security, exact-artifact deployment, and Homebrew checkpoints
-  are complete. The two-real-account live profile proof is externally gated by
-  a second Codex auth file.
+- The local usage control-plane goal is complete under the 2026-07-13 revised
+  Wave 3.2 contract: composed two-fixture isolation plus one-account live
+  compatibility. Reliability, migrations, durable delivery, budget/policy
+  intelligence, agent transports, profiles, delivery adapters, Telegram
+  parity, operations, reproducible release, and the human interaction receipts
+  are proven. See
+  [`control-plane-completion-audit.md`](control-plane-completion-audit.md).
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.
 - Use the requirement-by-requirement verdict in

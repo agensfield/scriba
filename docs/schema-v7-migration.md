@@ -80,6 +80,6 @@ Post-migration evidence:
   constraint failures
 - Telegram Bot API identity and all 11 registered commands were verified
 
-An interactive `/health` reply remains the final durable-inbox command smoke;
-it requires an actual user update and does not block continued local Wave 1.3
-work.
+The final durable-inbox command smoke passed on 2026-07-13: Telegram update
+`133548446` (`quick:health`) was processed successfully, with zero pending or
+dead inbox work afterward.

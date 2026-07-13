@@ -56,8 +56,10 @@ proved:
 
 Local composed fixtures use two independent auth files and prove profile route,
 sequential poll, durable mapping, and agent-context isolation. The devbox has
-only one real Codex auth file, so the roadmap's two-independent-real-account
-release proof remains an explicit external gate rather than a claimed result.
+one real Codex auth file and proves config-v1 compatibility plus profile-aware
+surface parity. On 2026-07-13 Arda explicitly accepted this composed
+two-fixture plus one-account-live contract because no second authorized account
+is available.
 
 ## Cancellation-log roll-forward
 
@@ -77,6 +79,6 @@ migration:
   pending, leased, or dead inbox/outbox work;
 - the post-deploy journal contained no poll failure or cancellation warning.
 
-Wave 3.2 is implemented, deployed for the compatibility profile, and locally
-proven with two isolated fixture accounts. Only the explicitly external
-two-real-account live proof remains.
+Wave 3.2 is implemented, deployed for the compatibility profile, and proven
+under the revised release contract with two isolated fixture accounts plus one
+live compatibility account.

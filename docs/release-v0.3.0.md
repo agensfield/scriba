@@ -63,10 +63,17 @@ and the service restarted successfully. Post-deploy evidence proves:
 - SQLite `quick_check=ok` and no foreign-key violations;
 - server, default profile, owner-only context API, context CLI, and SSE healthy;
 - outbox 44 delivered with zero pending, leased, due, expired, or dead rows;
-- Telegram inbox three processed with zero pending, due, or dead rows;
+- Telegram inbox 10 processed with zero pending, due, or dead rows after human
+  health and Profiles to `default` to Limits smokes;
 - service and persistent backup timer active and enabled;
 - privacy-forbidden context grep and post-start journal failure-pattern scan
   clean.
 
 Authoritative evidence is owner-only on the devbox at
 `/home/arda/.local/state/scriba/deployments/release-v0.3.0-92e7147`.
+
+The final completion audit on 2026-07-13 accepted composed two-fixture profile
+isolation plus one-account live compatibility because no second authorized
+Codex account is available. Durable Telegram updates `133548446` and
+`133548448` through `133548450` closed the health and profile-navigation
+interaction receipts without changing the immutable release artifact.

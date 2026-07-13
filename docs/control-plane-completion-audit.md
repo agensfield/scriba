@@ -39,14 +39,14 @@ devbox state. A status paragraph by itself is not treated as proof.
 | Wave 1.1 SQLite/OAuth/network/process safety | Proven | Connection, OAuth, ingress, timeout, health, supervision, shutdown, and race tests remain in the current suite; live service restart/reboot receipts are committed. |
 | Wave 1.2 canonical durable outbox | Proven | Schema-v7 copied-live migration/rollback receipt; producer atomicity, fenced claim, retry/dead-letter, legacy preservation, queue health, and real Telegram retry tests pass in current source. |
 | Wave 1.3 provider contract laboratory | Proven | The frozen corpus now includes generated oversized-line policy and synthetic markers matching current Codex fork/replayed-history rollout shapes in addition to malformed/boundary cases. Exact-number decoders, semantic cache versions, JSON schemas, fuzz/property/golden tests, offline differential checks, and hash-bound pricing refresh/check workflows pass exact-HEAD CI. |
-| Wave 1 release gate | Proven except one interactive receipt | Copied production migration, backup/restore, devbox deployment, durable Telegram delivery/ingress, two-poll soak, SQLite integrity, and current full gates are recorded and remain compatible with schema 11. The three processed live inbox updates are `quick:limits`, `quick:refresh`, and `quick:limits`; the exact post-schema-v7 human `/health` command/reply smoke was not recorded. |
+| Wave 1 release gate | Proven | Copied production migration, backup/restore, devbox deployment, durable Telegram delivery/ingress, two-poll soak, SQLite integrity, and current full gates are recorded and remain compatible with schema 11. Human health update `133548446` (`quick:health`) was durably processed on 2026-07-13. |
 | Wave 2.1 deterministic pacing | Proven | Provider-neutral pure budget package, fixed-clock/property/fuzz/render tests, bounded history, typed schemas, both provider commands, and explicit no-token-influence tests. `a45d7c3` adds the missing monotonic projection property over increasing utilization; exact-HEAD CI passes. |
 | Wave 2.2 typed policy runtime | Proven | Schema-v8 migration/deployment receipt; all four closed rule kinds; atomic state/event/outbox tests; silent bootstrap, compatibility history, duplicate-concurrency, inspection surfaces, and real retry integration proof. |
 | Wave 2 release gate | Proven | `budget-and-policy.md`, schema-v8 live receipt, and composed `6bfbcb3` fixture/SQLite/Telegram evidence cover bootstrap, exact transitions, payload parity, and retry completion. A fresh 2026-07-13 live comparison matched the quota source at weekly used 27%, remaining 73%, reset `2026-07-19T20:15:45Z`; the derived budget reported the same inputs and deterministic high-risk pacing. Spark likewise matched at 0% used. |
 | Wave 3.1 shared agent context | Proven | Schema-v10 migration/rollback; direct/CLI/Unix HTTP/SSE/MCP parity tests; privacy and semantic read-only checks; live API/SSE/MCP activation receipt; healthy v0.3.0 CLI/API/SSE smoke. The roadmap now states explicitly that TCP is a conditional future constraint, not a program deliverable. |
 | Wave 3.2 profile implementation | Proven | Config-v1 compatibility, config-v2 isolation, schema-v11 migration/rollback, rotation, isolated polling/health, public surface parity, strict selectors, privacy tests, and composed two-auth fixture proof. |
-| Wave 3.2 two-real-account live gate | **Blocked externally** | The devbox exposes one real Codex auth file. A local backup belongs to a distinct account, but an exact-public-v0.3.0 run against disposable copies produced `ok` for the current profile and closed `auth/auth_unavailable` failure for the backup profile. Both source files remained byte-identical. This strengthens live failure-isolation evidence but cannot prove two successful real-account polling, mapping, and privacy. |
-| Wave 3.3 webhook/ntfy/Telegram parity | Proven, one interactive receipt pending | Signed canonical webhook and ntfy delivery, deterministic HTTP outcomes, retry/fencing, Telegram pagination/navigation/auth/callback tests, deployment, command registration, and healthy queues are proven. A human Profiles to default to Limits button tap has not been recorded. |
+| Wave 3.2 revised live gate | Proven | On 2026-07-13 Arda explicitly accepted composed two-fixture isolation plus one-account live compatibility because no second authorized account is available. Fixtures prove successful multi-account routing/mapping/privacy; the devbox proves compatibility-profile deployment and public-surface parity. A distinct unavailable backup account additionally failed closed without affecting the healthy profile or modifying either source file. |
+| Wave 3.3 webhook/ntfy/Telegram parity | Proven | Signed canonical webhook and ntfy delivery, deterministic HTTP outcomes, retry/fencing, Telegram pagination/navigation/auth/callback tests, deployment, command registration, and healthy queues are proven. Human updates `133548448` (`quick:profiles`), `133548449` (`profiles:v1:open:default`), and `133548450` (`profiles:v1:limits:default`) were durably processed on 2026-07-13. |
 | Wave 3.4 operations/release parity | Proven | Retention invariants/tests; scheduled verified backups; hardened user units and linger; stopped-service restore and autonomous reboot; security policy; immutable reproducible v0.3.0, checksums/attestations, Homebrew, and exact-artifact deployment. See `release-v0.3.0.md`. |
 | macOS menu app | Excluded | Arda explicitly removed menu-app development from this program. Existing Swift code and CI are preserved, but no new UI/package parity is a completion requirement. |
 
@@ -66,24 +66,14 @@ devbox state. A status paragraph by itself is not treated as proof.
 
 The accepted roadmap said not to begin a later wave before the prior wave's
 release gate passed. Wave 3.3, Wave 3.4, and `v0.3.0` nevertheless shipped
-while the explicitly separate Wave 3.2 two-real-account live gate remained
-open. The later work is independently verified and does not need to be undone,
-but this is a process-contract violation, not successful adherence to the
-original dependency order.
+while the then-binding Wave 3.2 two-real-account live gate remained open. The
+gate was subsequently revised explicitly, so no product proof remains missing,
+but the historical sequencing was still a process-contract violation.
 
 ## Verdict
 
-The full goal is **not yet complete**. The binding Wave 3.2 two-real-account
-live isolation gate lacks a second working real Codex credential. Two smaller
-human Telegram receipts also remain: a post-schema-v7 `/health` command/reply
-and the Profiles to default to Limits callback path. Neither is evidence for
-the missing account-isolation gate.
-
-Completion requires either:
-
-1. provision a second independent Codex auth file on an authorized live host
-   and execute the documented isolation/privacy/failure proof; or
-2. explicitly revise the accepted roadmap to make fixture-level two-account
-   proof plus one-account live compatibility the release contract.
-
-Separately, complete and record both pending human Telegram interactions.
+The full control-plane goal is **complete** under the explicitly revised Wave
+3.2 contract. All requirement rows are proven or explicitly excluded. The
+human Telegram health and profile-navigation receipts are processed durably,
+the live inbox is 10 processed with zero pending or dead work, and the absence
+of a second authorized Codex account is no longer a release gate.
