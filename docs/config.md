@@ -45,6 +45,25 @@ and accepts an explicit JSON config via `--config`.
       "weeklyPercent": 80,
       "includeErrors": true
     }
+  },
+  "deliveries": {
+    "webhooks": [
+      {
+        "id": "deploy",
+        "enabled": true,
+        "url": "https://example.com/scriba/events",
+        "secretEnv": "SCRIBA_WEBHOOK_DEPLOY_SECRET"
+      }
+    ],
+    "ntfy": [
+      {
+        "id": "phone",
+        "enabled": true,
+        "url": "https://ntfy.sh",
+        "topic": "scriba_private_random_topic",
+        "tokenEnv": "SCRIBA_NTFY_TOKEN"
+      }
+    ]
   }
 }
 ```
@@ -59,8 +78,24 @@ Existing schema-v1 files continue to load without being rewritten. Scriba
 normalizes them in memory to one implicit `default` profile using the existing
 `server.accountLabel` and legacy Codex auth discovery. Explicit schema-v2 files
 never fall back to ambient `CODEX_HOME` discovery. Multi-profile resident
-polling and public selectors land in the following Wave 3.2 slices; this commit
-only freezes config and request-isolation contracts.
+polling and public selectors are active across CLI, Unix HTTP/SSE, MCP, and
+Telegram.
+
+Enabled webhook and ntfy deliveries receive their own stable outbox targets,
+`webhook:<id>` and `ntfy:<id>`. IDs are lowercase slugs up to 32 characters.
+Secrets are environment-only: webhooks require `secretEnv`; ntfy accepts an
+optional `tokenEnv` for protected topics. Scriba never persists either value.
+Ntfy topics follow the upstream 1-64 character letter/number/underscore/dash
+grammar. On public ntfy instances, an unprotected topic effectively acts as a
+password, so use a random unguessable name or server-side access controls.
+
+Webhooks receive byte-stable `scriba.notification.v1` JSON. Each request has
+`X-Scriba-Event-ID`, a Unix `X-Scriba-Timestamp`, and
+`X-Scriba-Signature: v1=<hex>` where the HMAC-SHA256 input is exactly
+`<timestamp>.<request-body>`. Redirects are never followed. Ntfy uses its root
+JSON publish endpoint with the same canonical envelope as the message body.
+Both adapters use deterministic retry/terminal HTTP classes and cap
+`Retry-After` at one hour without shortening Scriba's own backoff.
 
 `server.contextAPI` is opt-in. When enabled without `socketPath`, Scriba places
 `context.sock` beside the resolved server database. An explicit socket path

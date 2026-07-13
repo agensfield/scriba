@@ -295,6 +295,13 @@ gated. See [`schema-v11-migration.md`](schema-v11-migration.md).
 Gate: adapter retries and terminal/retryable HTTP classes are deterministic;
 Telegram content remains below platform limits and all auth paths share tests.
 
+Current adapter status: passed through `fe60414`. All producers atomically fan
+out to stable target IDs. Webhook and ntfy share a minimized bounded envelope;
+exact-body HMAC, redirect refusal, deterministic HTTP outcomes, capped
+`Retry-After`, shutdown fencing, continuous backlog drain, env-only secrets,
+and real SQLite-to-both-adapters parity are proven. Rich Telegram navigation
+and callback/pagination hardening remain in this wave.
+
 ### 3.4 Operational and release parity
 
 - Add bounded retention for events/deliveries, scheduled verified backups,
@@ -396,3 +403,11 @@ CLI/server operational and release work.
   8 with 15 policy states, zero bootstrap events, 40 delivered outbox rows and
   41 preserved attempts, two clean explicit refreshes, and all 11 Telegram
   commands registered. See `docs/schema-v8-migration.md`.
+- 2026-07-13: Wave 3.3 delivery adapters completed through `fe60414`. Commit
+  `47d3455` widens every producer to atomic multi-target fanout; `533183c`
+  freezes the target-independent `scriba.notification.v1` body and HTTP
+  adapters. The final dispatcher adds env-only config, exact-body HMAC, ntfy
+  JSON publishing, deterministic terminal/retryable classes, capped
+  `Retry-After`, fenced shutdown completion, continuous backlog drain, and a
+  real SQLite webhook/ntfy parity test. Full local race/lint/security gates and
+  independent adversarial review passed.

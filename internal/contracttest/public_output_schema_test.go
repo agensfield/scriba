@@ -14,6 +14,7 @@ var publicOutputSchemaNames = []string{
 	"policy-validate", "policy-list", "policy-explain", "outbox-list",
 	"context", "event", "events", "local-health", "local-error",
 	"profiles",
+	"notification",
 }
 
 func TestPublicOutputSchemas(t *testing.T) {

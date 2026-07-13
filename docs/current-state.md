@@ -108,6 +108,11 @@ Claude Code and Codex usage tracker.
   profiles and disjoint auth paths. Polling, health, stats, refresh, CLI,
   Unix HTTP/SSE, MCP, and Telegram selection all preserve profile isolation.
   See [`schema-v11-migration.md`](schema-v11-migration.md).
+- Wave 3.3 delivery foundations are implemented through `fe60414`. Every event
+  fans out atomically to stable target IDs. Signed webhook and ntfy adapters
+  share one minimized, bounded, target-independent `scriba.notification.v1`
+  envelope; dispatcher outcomes are fenced across shutdown and use closed
+  delivered/retryable/terminal HTTP semantics with capped `Retry-After`.
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and
   `grant_expiry_checkpoint`. Its `current` preset preserves the existing
@@ -220,8 +225,8 @@ apps/macos/Scripts/package_zip.sh release
   [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
   migration safety, the canonical outbox, budget surfaces, and the schema-v8
   policy runtime, inspection CLI surfaces, Wave 3.1 agent transports, and Wave
-  3.2 profiles are completed checkpoints. Delivery adapters, full Telegram
-  inline parity, operations, and release evidence remain. The two-real-account
+  3.2 profiles and Wave 3.3 delivery adapters are completed checkpoints. Full
+  Telegram inline parity, operations, and release evidence remain. The two-real-account
   live profile proof is externally gated by a second Codex auth file.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.

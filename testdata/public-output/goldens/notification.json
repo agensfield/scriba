@@ -1,0 +1,1 @@
+{"data":{"accountLabel":"Work","label":"Weekly limit","remainingPercent":19,"resetAt":"2026-07-20T12:00:00Z","thresholdRemaining":20,"usedPercent":81},"eventId":"warning-1","eventKind":"limit_warning","occurredAt":"2026-07-13T12:00:00Z","profileId":"work","schemaVersion":"scriba.notification.v1","source":"scriba-v7"}
