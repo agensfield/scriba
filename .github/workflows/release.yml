@@ -91,6 +91,7 @@ jobs:
             gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
           done
       - name: Create complete draft release
+        id: create_release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           files: dist/*
@@ -102,16 +103,15 @@ jobs:
       - name: Verify assets and publish
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.create_release.outputs.id }}
         run: |
           find dist -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/expected-assets"
-          release_id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\" and .draft == true) | .id" | head -n 1)"
-          test -n "$release_id"
-          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" --jq '.assets[].name' | sort > "$RUNNER_TEMP/actual-assets"
+          test -n "$RELEASE_ID"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.assets[].name' | sort > "$RUNNER_TEMP/actual-assets"
           diff -u "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/actual-assets"
           if [[ "${{ steps.version.outputs.prerelease }}" == true ]]; then latest=false; else latest=true; fi
           git rev-parse --verify "refs/tags/$GITHUB_REF_NAME^{commit}"
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             -F draft=false \
             -F prerelease="${{ steps.version.outputs.prerelease }}" \
             -f make_latest="$latest" >/dev/null
