@@ -84,6 +84,7 @@ type Notifier interface {
 type Config struct {
 	Profiles                 []Profile
 	NotificationTarget       string
+	NotificationTargets      []string
 	AccountLabel             string
 	JokeTone                 string
 	StartupHeartbeat         bool
@@ -572,9 +573,10 @@ func (s *Server) pollProfile(ctx context.Context, profile Profile) (PollResult, 
 		return PollResult{}, "shape", errors.New("codex limits response had no reset windows")
 	}
 	applied, err := s.store.ApplyCodexPoll(ctx, store.CodexPollInput{
-		ProfileRef:         profile.Ref,
-		Observation:        obs,
-		NotificationTarget: s.cfg.NotificationTarget,
+		ProfileRef:          profile.Ref,
+		Observation:         obs,
+		NotificationTarget:  s.cfg.NotificationTarget,
+		NotificationTargets: append([]string(nil), s.cfg.NotificationTargets...),
 		ResetOptions: resetwatch.Options{
 			JokeChooser: resetwatch.CatalogJokeChooser{Tone: s.cfg.JokeTone},
 		},
@@ -657,7 +659,11 @@ func (s *Server) pollRadar(ctx context.Context) ([]radar.ProbabilityAlert, error
 	if err != nil {
 		return nil, err
 	}
-	inserted, err := s.store.InsertRadarAlertEvent(ctx, alert, s.cfg.NotificationTarget)
+	targets := append([]string(nil), s.cfg.NotificationTargets...)
+	if s.cfg.NotificationTarget != "" {
+		targets = append(targets, s.cfg.NotificationTarget)
+	}
+	inserted, err := s.store.InsertRadarAlertEvent(ctx, alert, targets...)
 	if err != nil {
 		return nil, err
 	}

@@ -21,11 +21,12 @@ const currentPolicyRevision = "current-v1"
 var ErrStaleObservation = errors.New("stale observation")
 
 type CodexPollInput struct {
-	ProfileRef         string
-	Observation        resetwatch.Observation
-	NotificationTarget string
-	ResetOptions       resetwatch.Options
-	CommittedAt        time.Time
+	ProfileRef          string
+	Observation         resetwatch.Observation
+	NotificationTarget  string
+	NotificationTargets []string
+	ResetOptions        resetwatch.Options
+	CommittedAt         time.Time
 }
 
 type CodexPollResult struct {
@@ -135,7 +136,11 @@ func (s *Store) ApplyCodexPoll(ctx context.Context, input CodexPollInput) (Codex
 	if err = persistPolicyStates(ctx, tx, obs, result, currentPolicyRevision, configHash, input.CommittedAt); err != nil {
 		return empty, err
 	}
-	inserted, err := persistPolicyEvents(ctx, tx, obs, legacy, result.Events, currentPolicyRevision, configHash, profileRef, input.NotificationTarget, resetOptions.JokeChooser, input.CommittedAt)
+	targets, err := notificationTargets(input.NotificationTarget, input.NotificationTargets)
+	if err != nil {
+		return empty, err
+	}
+	inserted, err := persistPolicyEvents(ctx, tx, obs, legacy, result.Events, currentPolicyRevision, configHash, profileRef, targets, resetOptions.JokeChooser, input.CommittedAt)
 	if err != nil {
 		return empty, err
 	}
@@ -382,10 +387,10 @@ func persistPolicyStates(ctx context.Context, tx *sql.Tx, obs resetwatch.Observa
 	return nil
 }
 
-func persistPolicyEvents(ctx context.Context, tx *sql.Tx, obs resetwatch.Observation, legacy map[string]resetwatch.WindowState, events []policy.Event, revision, hash, profile, target string, chooser resetwatch.JokeChooser, committedAt time.Time) (CodexPollResult, error) {
+func persistPolicyEvents(ctx context.Context, tx *sql.Tx, obs resetwatch.Observation, legacy map[string]resetwatch.WindowState, events []policy.Event, revision, hash, profile string, targets []string, chooser resetwatch.JokeChooser, committedAt time.Time) (CodexPollResult, error) {
 	var inserted CodexPollResult
 	for _, event := range events {
-		kind, payload, added, err := insertPolicyLegacyEvent(ctx, tx, obs, legacy, event, profile, target, chooser, committedAt)
+		kind, payload, added, err := insertPolicyLegacyEvent(ctx, tx, obs, legacy, event, profile, targets, chooser, committedAt)
 		if err != nil {
 			return CodexPollResult{}, err
 		}
@@ -426,32 +431,32 @@ func persistPolicyEvents(ctx context.Context, tx *sql.Tx, obs resetwatch.Observa
 	return inserted, nil
 }
 
-func insertPolicyLegacyEvent(ctx context.Context, tx *sql.Tx, obs resetwatch.Observation, legacy map[string]resetwatch.WindowState, event policy.Event, profile, target string, chooser resetwatch.JokeChooser, committedAt time.Time) (string, any, bool, error) {
+func insertPolicyLegacyEvent(ctx context.Context, tx *sql.Tx, obs resetwatch.Observation, legacy map[string]resetwatch.WindowState, event policy.Event, profile string, targets []string, chooser resetwatch.JokeChooser, committedAt time.Time) (string, any, bool, error) {
 	switch event.Kind {
 	case policy.EventResetTransition:
 		previous := legacy[resetwatch.StateKey(obs.Account.Ref, event.LegacyLabel)]
 		legacyEvent := resetwatch.Event{ID: event.ID, ProviderID: obs.ProviderID, Account: obs.Account, PrimaryTriggerLabel: event.LegacyLabel, SecondaryTriggerLabels: event.SecondaryLegacyLabels, ResetKind: event.ResetKind, PreviousResetAt: event.PreviousResetAt, CurrentResetAt: event.ResetAt, PreviousSnapshotJSON: previous.LastSnapshotJSON, CurrentSnapshotJSON: obs.SnapshotJSON, DetectedAt: event.DetectedAt}
 		legacyEvent.JokeID = chooser.Choose(legacyEvent)
-		added, err := insertResetEventTx(ctx, tx, legacyEvent, profile, target, committedAt)
+		added, err := insertResetEventTx(ctx, tx, legacyEvent, profile, targets, committedAt)
 		return "reset", legacyEvent, added, err
 	case policy.EventRemainingCheckpoint:
 		v := resetwatch.WarningEvent{ID: event.ID, ProviderID: obs.ProviderID, Account: obs.Account, Label: event.LegacyLabel, ThresholdRemaining: event.Checkpoint, UsedPercent: event.UsedPercent, RemainingPercent: event.RemainingPercent, ResetAt: event.ResetAt, SnapshotJSON: obs.SnapshotJSON, DetectedAt: event.DetectedAt}
-		added, err := insertWarningEventTx(ctx, tx, v, profile, target, committedAt)
+		added, err := insertWarningEventTx(ctx, tx, v, profile, targets, committedAt)
 		return "limit_warning", v, added, err
 	case policy.EventGrantAvailable:
 		v := resetwatch.ResetGrantEvent{ID: event.ID, ProviderID: obs.ProviderID, Account: obs.Account, CreditID: event.Grant.ID, CreditTitle: event.Grant.Title, ResetType: event.Grant.ResetType, GrantedAt: event.Grant.GrantedAt, ExpiresAt: event.Grant.ExpiresAt, AvailableCount: event.AvailableCount, SnapshotJSON: obs.SnapshotJSON, DetectedAt: event.DetectedAt}
-		added, err := insertResetGrantEventTx(ctx, tx, v, profile, target, committedAt)
+		added, err := insertResetGrantEventTx(ctx, tx, v, profile, targets, committedAt)
 		return "reset_grant", v, added, err
 	case policy.EventGrantExpiryCheckpoint:
 		v := resetwatch.GrantExpiryWarning{ID: event.ID, ProviderID: obs.ProviderID, Account: obs.Account, CreditID: event.Grant.ID, CreditTitle: event.Grant.Title, ThresholdDays: event.Checkpoint, ExpiresAt: event.Grant.ExpiresAt, SnapshotJSON: obs.SnapshotJSON, DetectedAt: event.DetectedAt}
-		added, err := insertGrantWarningEventTx(ctx, tx, v, profile, target, committedAt)
+		added, err := insertGrantWarningEventTx(ctx, tx, v, profile, targets, committedAt)
 		return "reset_grant_warning", v, added, err
 	default:
 		return "", nil, false, fmt.Errorf("unsupported policy event kind %q", event.Kind)
 	}
 }
 
-func insertResetEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.Event, profile, target string, committedAt time.Time) (bool, error) {
+func insertResetEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.Event, profile string, targets []string, committedAt time.Time) (bool, error) {
 	secondary, err := json.Marshal(v.SecondaryTriggerLabels)
 	if err != nil {
 		return false, err
@@ -471,13 +476,13 @@ func insertResetEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.Event, pro
 			return false, errors.New("conflicting reset event semantic duplicate")
 		}
 	}
-	if err = enqueuePollEvent(ctx, tx, "reset", v.ID, profile, v.Account.Ref, target, v, committedAt); err != nil {
+	if err = enqueuePollEvent(ctx, tx, "reset", v.ID, profile, v.Account.Ref, targets, v, committedAt); err != nil {
 		return false, err
 	}
 	return n == 1, nil
 }
 
-func insertWarningEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.WarningEvent, profile, target string, committedAt time.Time) (bool, error) {
+func insertWarningEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.WarningEvent, profile string, targets []string, committedAt time.Time) (bool, error) {
 	r, err := tx.ExecContext(ctx, `insert into limit_warning_events(id,provider_id,account_ref,account_label,account_email,account_plan,label,threshold_remaining,used_percent,remaining_percent,reset_at,snapshot_json,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do nothing`, v.ID, v.ProviderID, v.Account.Ref, v.Account.Label, v.Account.Email, v.Account.Plan, v.Label, v.ThresholdRemaining, v.UsedPercent, v.RemainingPercent, formatTime(v.ResetAt), string(v.SnapshotJSON), formatTime(v.DetectedAt), formatTime(committedAt))
 	if err != nil {
 		return false, err
@@ -493,13 +498,13 @@ func insertWarningEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.WarningE
 			return false, errors.New("conflicting warning event semantic duplicate")
 		}
 	}
-	if err = enqueuePollEvent(ctx, tx, "limit_warning", v.ID, profile, v.Account.Ref, target, v, committedAt); err != nil {
+	if err = enqueuePollEvent(ctx, tx, "limit_warning", v.ID, profile, v.Account.Ref, targets, v, committedAt); err != nil {
 		return false, err
 	}
 	return n == 1, nil
 }
 
-func insertGrantWarningEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.GrantExpiryWarning, profile, target string, committedAt time.Time) (bool, error) {
+func insertGrantWarningEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.GrantExpiryWarning, profile string, targets []string, committedAt time.Time) (bool, error) {
 	r, err := tx.ExecContext(ctx, `insert into reset_grant_warning_events(id,provider_id,account_ref,account_label,account_email,account_plan,credit_id,credit_title,threshold_days,expires_at,snapshot_json,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do nothing`, v.ID, v.ProviderID, v.Account.Ref, v.Account.Label, v.Account.Email, v.Account.Plan, v.CreditID, v.CreditTitle, v.ThresholdDays, formatTime(v.ExpiresAt), string(v.SnapshotJSON), formatTime(v.DetectedAt), formatTime(committedAt))
 	if err != nil {
 		return false, err
@@ -515,13 +520,13 @@ func insertGrantWarningEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.Gra
 			return false, errors.New("conflicting grant warning semantic duplicate")
 		}
 	}
-	if err = enqueuePollEvent(ctx, tx, "reset_grant_warning", v.ID, profile, v.Account.Ref, target, v, committedAt); err != nil {
+	if err = enqueuePollEvent(ctx, tx, "reset_grant_warning", v.ID, profile, v.Account.Ref, targets, v, committedAt); err != nil {
 		return false, err
 	}
 	return n == 1, nil
 }
 
-func insertResetGrantEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.ResetGrantEvent, profile, target string, committedAt time.Time) (bool, error) {
+func insertResetGrantEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.ResetGrantEvent, profile string, targets []string, committedAt time.Time) (bool, error) {
 	r, err := tx.ExecContext(ctx, `insert into reset_grant_events(id,provider_id,account_ref,account_label,account_email,account_plan,credit_id,credit_title,reset_type,granted_at,expires_at,available_count,snapshot_json,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do nothing`, v.ID, v.ProviderID, v.Account.Ref, v.Account.Label, v.Account.Email, v.Account.Plan, v.CreditID, v.CreditTitle, v.ResetType, formatTime(v.GrantedAt), formatTime(v.ExpiresAt), v.AvailableCount, string(v.SnapshotJSON), formatTime(v.DetectedAt), formatTime(committedAt))
 	if err != nil {
 		return false, err
@@ -537,19 +542,24 @@ func insertResetGrantEventTx(ctx context.Context, tx *sql.Tx, v resetwatch.Reset
 			return false, errors.New("conflicting reset grant semantic duplicate")
 		}
 	}
-	if err = enqueuePollEvent(ctx, tx, "reset_grant", v.ID, profile, v.Account.Ref, target, v, committedAt); err != nil {
+	if err = enqueuePollEvent(ctx, tx, "reset_grant", v.ID, profile, v.Account.Ref, targets, v, committedAt); err != nil {
 		return false, err
 	}
 	return n == 1, nil
 }
 
-func enqueuePollEvent(ctx context.Context, tx *sql.Tx, kind, id, profile, account, target string, event any, committedAt time.Time) error {
-	if target == "" {
+func enqueuePollEvent(ctx context.Context, tx *sql.Tx, kind, id, profile, account string, targets []string, event any, committedAt time.Time) error {
+	if len(targets) == 0 {
 		return nil
 	}
 	payload, err := EncodeOutboxPayload(kind, event)
 	if err != nil {
 		return err
 	}
-	return EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "scriba-v7", ProfileRef: profile, AccountRef: account, EventID: id, Target: target, PayloadVersion: 1, PayloadJSON: payload}, committedAt)
+	for _, target := range targets {
+		if err := EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "scriba-v7", ProfileRef: profile, AccountRef: account, EventID: id, Target: target, PayloadVersion: 1, PayloadJSON: payload}, committedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }

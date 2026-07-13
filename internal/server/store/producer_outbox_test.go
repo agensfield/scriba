@@ -221,3 +221,47 @@ func TestClaimOutboxForTargetIsolation(t *testing.T) {
 		t.Fatalf("other target status=%s", status)
 	}
 }
+
+func TestRadarProducerAtomicallyFansOutToEveryTarget(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	alert := radar.ProbabilityAlert{ID: "radar-fanout", Milestone: 50, Probability24H: 0.6, Level: "high", DetectedAt: now, SnapshotJSON: []byte(`{}`)}
+	targets := []string{"telegram:42", "webhook:deploy", "ntfy:phone"}
+	inserted, err := s.InsertRadarAlertEvent(ctx, alert, targets...)
+	if err != nil || !inserted {
+		t.Fatalf("inserted=%t err=%v", inserted, err)
+	}
+	rows, err := s.ListOutbox(ctx, OutboxFilter{Limit: 10})
+	if err != nil || len(rows) != len(targets) {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	want := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		want[target] = true
+	}
+	for i, row := range rows {
+		if !want[row.Target] || row.EventID != alert.ID || row.PayloadJSON != rows[0].PayloadJSON {
+			t.Fatalf("row %d=%+v", i, row)
+		}
+		delete(want, row.Target)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing targets=%v", want)
+	}
+}
+
+func TestDuplicateFanoutTargetRejectsWholeProducerTransaction(t *testing.T) {
+	s := openTestStore(t)
+	alert := radar.ProbabilityAlert{ID: "radar-duplicate", Milestone: 25, Probability24H: 0.3, Level: "medium", DetectedAt: time.Now().UTC(), SnapshotJSON: []byte(`{}`)}
+	if _, err := s.InsertRadarAlertEvent(context.Background(), alert, "webhook:a", "webhook:a"); err == nil {
+		t.Fatal("expected duplicate target error")
+	}
+	var events, deliveries int
+	if err := s.db.QueryRow(`select (select count(*) from radar_alert_events where id=?),(select count(*) from notification_outbox where event_id=?)`, alert.ID, alert.ID).Scan(&events, &deliveries); err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 || deliveries != 0 {
+		t.Fatalf("events=%d deliveries=%d", events, deliveries)
+	}
+}

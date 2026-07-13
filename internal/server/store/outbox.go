@@ -44,6 +44,26 @@ type OutboxEnqueue struct {
 
 type OutboxStats struct{ Pending, Leased, Delivered, DeadLetter int }
 
+func notificationTargets(legacy string, configured []string) ([]string, error) {
+	targets := append([]string(nil), configured...)
+	if legacy != "" {
+		targets = append(targets, legacy)
+	}
+	seen := make(map[string]struct{}, len(targets))
+	out := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if target == "" || strings.TrimSpace(target) != target {
+			return nil, errors.New("notification target must be nonempty and trimmed")
+		}
+		if _, ok := seen[target]; ok {
+			return nil, fmt.Errorf("duplicate notification target %q", target)
+		}
+		seen[target] = struct{}{}
+		out = append(out, target)
+	}
+	return out, nil
+}
+
 func OutboxID(kind, eventID, target string) string {
 	sum := sha256.Sum256([]byte(kind + "\x00" + eventID + "\x00" + target))
 	return "outbox_" + hex.EncodeToString(sum[:16])
@@ -271,11 +291,16 @@ func enqueueEvent(ctx context.Context, tx *sql.Tx, kind, id, account, target str
 	return EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "scriba-v7", ProfileRef: profile, AccountRef: account, EventID: id, Target: target, PayloadVersion: 1, PayloadJSON: payload}, time.Now())
 }
 
-func firstTarget(targets []string) string {
+func enqueueEventTargets(ctx context.Context, tx *sql.Tx, kind, id, account string, targets []string, event any) error {
 	if len(targets) == 0 {
-		return ""
+		return enqueueEvent(ctx, tx, kind, id, account, "", event)
 	}
-	return targets[0]
+	for _, target := range targets {
+		if err := enqueueEvent(ctx, tx, kind, id, account, target, event); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // EncodeOutboxPayload returns the stable v1 wire representation. Maps are used

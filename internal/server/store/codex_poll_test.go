@@ -313,7 +313,7 @@ func TestPersistPolicyEventsPayloadParityAllKinds(t *testing.T) {
 		{ID: "grant_warning_fixture", RuleID: "current.grant.expiry", Kind: policy.EventGrantExpiryCheckpoint, Subject: fallback.CreditID, Checkpoint: 3, Grant: policy.GrantObservation{ID: fallback.CreditID, Title: credit.Title, ExpiresAt: credit.ExpiresAt}, DetectedAt: at},
 	}
 	chooser := resetwatch.JokeChooserFunc(func(resetwatch.Event) string { return "configured-joke" })
-	got, err := persistPolicyEvents(ctx, tx, obs, legacy, events, "current-v1", "fixture-hash", "default", "telegram:42", chooser, committed)
+	got, err := persistPolicyEvents(ctx, tx, obs, legacy, events, "current-v1", "fixture-hash", "default", []string{"telegram:42"}, chooser, committed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestPersistPolicyEventsPayloadParityAllKinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repaired, err := persistPolicyEvents(ctx, repair, obs, legacy, events, "current-v1", "fixture-hash", "default", "telegram:42", chooser, committed.Add(time.Minute))
+	repaired, err := persistPolicyEvents(ctx, repair, obs, legacy, events, "current-v1", "fixture-hash", "default", []string{"telegram:42"}, chooser, committed.Add(time.Minute))
 	if err != nil {
 		_ = repair.Rollback()
 		t.Fatal(err)
@@ -417,7 +417,7 @@ func TestTypedEventSemanticConflictRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = insertWarningEventTx(ctx, tx, v, "default", "telegram:42", at); err != nil {
+	if _, err = insertWarningEventTx(ctx, tx, v, "default", []string{"telegram:42"}, at); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -431,7 +431,7 @@ func TestTypedEventSemanticConflictRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = insertWarningEventTx(ctx, tx, v, "default", "telegram:42", at.Add(time.Minute)); err == nil {
+	if _, err = insertWarningEventTx(ctx, tx, v, "default", []string{"telegram:42"}, at.Add(time.Minute)); err == nil {
 		t.Fatal("expected immutable typed-event conflict")
 	}
 }
