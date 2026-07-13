@@ -36,9 +36,10 @@ func TestClaudeBudgetHistoryIsExplicitlyUnavailable(t *testing.T) {
 	}
 }
 
-func TestRenderBudgetShowsPacingAndReasons(t *testing.T) {
+func TestRenderBudgetExplainsPacingWithoutMachineReasonCodes(t *testing.T) {
 	used, remaining, pace, safe := 72.5, 27.5, 3.25, 1.5
 	reset := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	exhaustion := reset.Add(-6 * time.Hour)
 	report := budget.Report{
 		ProviderID: "codex",
 		History:    budget.History{State: budget.HistoryAvailable, SampleCount: 3},
@@ -46,11 +47,26 @@ func TestRenderBudgetShowsPacingAndReasons(t *testing.T) {
 			Label: "5h limit", Risk: "high", Freshness: "fresh", Confidence: "high",
 			UsedPercent: &used, RemainingPercentPoints: &remaining,
 			PaceBurnPercentPointsPerHour: &pace, SafeHourlyAllowancePercentPoints: &safe,
-			ResetAt: &reset, Reasons: []string{"recent_estimate_available"},
+			ResetAt: &reset, ProjectedExhaustionAt: &exhaustion, Reasons: []string{"recent_estimate_available"},
 		}},
 	}
 	text := stripANSI(renderBudget(report))
-	for _, want := range []string{"Codex budget", "history available", "samples 3", "5h limit", "high", "72.5% used", "27.5% remaining", "3.25pp/h", "safe 1.50pp/h", "fresh · high confidence", "recent_estimate_available"} {
+	for _, want := range []string{"Codex budget", "Using 3 recent samples", "5h limit · spending too fast", "72.5% used, 27.5% left", "Current pace 3.25% per hour", "sustainable pace 1.50% per hour", "6h before reset", "Resets"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "recent_estimate_available") || strings.Contains(text, "reasons") {
+		t.Fatalf("machine reasons leaked into human output:\n%s", text)
+	}
+}
+
+func TestRenderBudgetMakesZeroBurnPlain(t *testing.T) {
+	used, remaining, pace, safe := 0.0, 100.0, 0.0, 0.6
+	reset := time.Date(2026, 7, 20, 20, 33, 0, 0, time.UTC)
+	report := budget.Report{ProviderID: "codex", History: budget.History{State: budget.HistoryEmpty}, Windows: []budget.Window{{Label: "Spark weekly", Risk: "low", Freshness: "fresh", Confidence: "low", UsedPercent: &used, RemainingPercentPoints: &remaining, PaceBurnPercentPointsPerHour: &pace, SafeHourlyAllowancePercentPoints: &safe, ResetAt: &reset, Reasons: []string{"burn_zero", "projection_unavailable"}}}}
+	text := stripANSI(renderBudget(report))
+	for _, want := range []string{"No recent history yet", "Spark weekly · on track", "0.0% used, 100.0% left", "No usage yet", "up to 0.60% per hour", "Estimate confidence: low"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q:\n%s", want, text)
 		}
