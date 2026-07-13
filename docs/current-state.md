@@ -113,6 +113,11 @@ Claude Code and Codex usage tracker.
   share one minimized, bounded, target-independent `scriba.notification.v1`
   envelope; dispatcher outcomes are fenced across shutdown and use closed
   delivered/retryable/terminal HTTP semantics with capped `Retry-After`.
+- Telegram profile parity is implemented through `68814b1`: six-row versioned
+  inline pages, exact profile Limits/Grants/Profile actions, stable back/home
+  navigation, private-only empty-allowlist compatibility, explicit group-user
+  allowlisting, inaccessible-message authorization, stale-control retirement,
+  closed callback logging, and durable callback failure propagation.
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and
   `grant_expiry_checkpoint`. Its `current` preset preserves the existing
@@ -225,8 +230,8 @@ apps/macos/Scripts/package_zip.sh release
   [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
   migration safety, the canonical outbox, budget surfaces, and the schema-v8
   policy runtime, inspection CLI surfaces, Wave 3.1 agent transports, and Wave
-  3.2 profiles and Wave 3.3 delivery adapters are completed checkpoints. Full
-  Telegram inline parity, operations, and release evidence remain. The two-real-account
+  3.2 profiles and Wave 3.3 delivery/Telegram parity are completed checkpoints.
+  Operations and release evidence remain. The two-real-account
   live profile proof is externally gated by a second Codex auth file.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.

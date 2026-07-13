@@ -44,12 +44,25 @@ In Telegram:
 /lastreset
 ```
 
-`/profiles` lists up to 20 enabled stable config IDs with labels, health, and
+`/profiles` lists enabled stable config IDs with labels, health, and
 the default marker. `/limits [profile]`, `/grants [profile]`, and
 `/profile [profile]` resolve only that profile's durable current account;
 omission selects the configured default. Unknown, disabled, malformed, or
-extra arguments fail without falling back to another account. Rich inline
-account navigation remains a later delivery-parity feature.
+extra arguments fail without falling back to another account.
+
+The main keyboard and `/profiles` expose versioned inline profile navigation.
+Profile lists use bounded six-row pages; choosing a profile opens exact
+profile-scoped Limits, Grants, and Profile stats controls. Callback data stays
+under Telegram's 64-byte limit and rendered HTML stays under 4096 bytes. Stale
+or removed profile controls retire themselves rather than falling back to the
+default account. Callback API/edit failures remain visible to the durable inbox
+instead of silently advancing the update.
+
+An empty `telegram.allowedUserIds` retains compatibility only for the configured
+private chat. Group and supergroup use requires an explicit user allowlist;
+every message and callback must match both `telegram.chatId` and an allowed
+Telegram user ID. Chat-backed inaccessible callback messages preserve this
+authorization, while identity-free inline callbacks remain denied.
 
 `/profile` fetches the ChatGPT/Codex profile stats backend on demand and
 renders token activity, streaks, reasoning mix, and top skills/plugins in a

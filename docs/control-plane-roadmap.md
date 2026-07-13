@@ -299,8 +299,11 @@ Current adapter status: passed through `fe60414`. All producers atomically fan
 out to stable target IDs. Webhook and ntfy share a minimized bounded envelope;
 exact-body HMAC, redirect refusal, deterministic HTTP outcomes, capped
 `Retry-After`, shutdown fencing, continuous backlog drain, env-only secrets,
-and real SQLite-to-both-adapters parity are proven. Rich Telegram navigation
-and callback/pagination hardening remain in this wave.
+and real SQLite-to-both-adapters parity are proven. Telegram parity passed
+through `68814b1`: versioned profile pages/actions, bounded callback/HTML
+surfaces, explicit group-user allowlisting, inaccessible-message authorization,
+stale-control retirement, closed logging, and durable API-failure propagation.
+Wave 3.3 is locally complete; live bot deployment/smoke remains.
 
 ### 3.4 Operational and release parity
 
@@ -411,3 +414,10 @@ CLI/server operational and release work.
   `Retry-After`, fenced shutdown completion, continuous backlog drain, and a
   real SQLite webhook/ntfy parity test. Full local race/lint/security gates and
   independent adversarial review passed.
+- 2026-07-13: Wave 3.3 Telegram parity completed at `68814b1`. Versioned
+  six-profile pages and exact profile actions stay within Telegram's byte/text
+  limits. Empty allowlists are private-chat-only; explicit group users require
+  both chat and user matches. Stale/disabled profiles cannot retain active
+  controls or fall back. Chat-backed inaccessible messages remain authorized,
+  unknown callback logs are closed, and callback API failures propagate to the
+  durable inbox. Two adversarial review rounds and full local gates passed.
