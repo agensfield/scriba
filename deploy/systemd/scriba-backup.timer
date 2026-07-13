@@ -1,0 +1,13 @@
+[Unit]
+Description=Create a daily verified Scriba server backup
+Documentation=https://github.com/agensfield/scriba/blob/main/docs/operations.md
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+RandomizedDelaySec=15m
+AccuracySec=1m
+Unit=scriba-backup.service
+
+[Install]
+WantedBy=timers.target

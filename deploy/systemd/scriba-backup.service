@@ -1,16 +1,12 @@
 [Unit]
-Description=Scriba Codex usage tracker and Telegram bot
-After=network-online.target
-Wants=network-online.target
+Description=Create and verify a Scriba server backup
+Documentation=https://github.com/agensfield/scriba/blob/main/docs/operations.md
+ConditionPathExists=%h/.local/state/scriba/server.sqlite
 
 [Service]
-Type=simple
-Environment=CODEX_HOME=%h/.codex
+Type=oneshot
 Environment=SCRIBA_CONFIG=%h/.config/scriba/config.json
-EnvironmentFile=-%h/.config/scriba/scriba.env
-ExecStart=%h/.local/bin/scriba server run --config %h/.config/scriba/config.json --env prod
-Restart=on-failure
-RestartSec=10s
+ExecStart=%h/.local/bin/scriba server backup --config %h/.config/scriba/config.json --env prod --retention 14
 UMask=0077
 CapabilityBoundingSet=
 LockPersonality=true
@@ -26,11 +22,8 @@ ProtectKernelLogs=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=strict
-ReadWritePaths=%h/.local/state %h/.cache %h/.codex
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=%h/.local/state
+RestrictAddressFamilies=AF_UNIX
 RestrictRealtime=true
 RestrictSUIDSGID=true
 SystemCallArchitectures=native
-
-[Install]
-WantedBy=default.target

@@ -124,7 +124,8 @@ With config v2 profiles, `/profiles` lists enabled IDs and health. Use
 account; omitting the argument selects the configured default. Telegram never
 accepts provider account references or auth paths as selectors.
 
-For systemd user service setup and BotFather notes, see
+For systemd user service setup, scheduled backups, restore drills, and linger,
+see [Operations](docs/operations.md). BotFather setup lives in
 [Telegram Bot](docs/telegram.md).
 
 ## Development
@@ -150,6 +151,7 @@ just check-all
 - [Telegram Bot](docs/telegram.md)
 - [CLI](docs/cli.md)
 - [Configuration](docs/config.md)
+- [Operations](docs/operations.md)
 - [Current State](docs/current-state.md)
 - [Agent Context](docs/agent-context.md)
 - [Benchmarks](docs/benchmarks.md)

@@ -92,14 +92,16 @@ printf 'SCRIBA_TELEGRAM_BOT_TOKEN=%s\n' "$SCRIBA_TELEGRAM_BOT_TOKEN" > ~/.config
 chmod 600 ~/.config/scriba/scriba.env
 ```
 
-Install the service:
+Install the hardened service and verified-backup timer:
 
 ```sh
 mkdir -p ~/.config/systemd/user
 cp deploy/systemd/scriba.service ~/.config/systemd/user/scriba.service
+cp deploy/systemd/scriba-backup.service ~/.config/systemd/user/scriba-backup.service
+cp deploy/systemd/scriba-backup.timer ~/.config/systemd/user/scriba-backup.timer
 systemctl --user daemon-reload
-systemctl --user enable --now scriba.service
-systemctl --user status scriba.service
+systemctl --user enable --now scriba.service scriba-backup.timer
+systemctl --user status scriba.service scriba-backup.timer
 ```
 
 Useful checks:
@@ -117,6 +119,10 @@ Scriba config or Codex/Telegram authentication. The default destination is a
 `backups` directory beside `server.sqlite`; the default retention is the newest
 14 Scriba backup files. Each candidate must pass SQLite `quick_check` and schema
 inspection before it is promoted with owner-only permissions.
+
+See [Operations](operations.md) for unit verification, hardening boundaries,
+linger, timer behavior, the authoritative stopped-service restore procedure,
+and the off-host backup boundary.
 
 Manual restore drill (stop the service first, and never overwrite the live file):
 
