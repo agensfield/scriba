@@ -91,12 +91,10 @@ capture the current high-water and tail future events; cursor
 future or malformed cursors return `400`, and heartbeats never advance the
 cursor.
 
-Commit `6a6a163` establishes the undeployed schema-v9 replay foundation. Every
-future policy event receives a transactional monotonic replay sequence, and
-existing events backfill once in deterministic order. The sequence replaces
-unsafe timestamp/hash ordering, but it is not itself an available public API:
-the versioned cursor, expiry semantics, SSE adapter, and MCP event tool still
-need their shared contract and deployment proof.
+Commit `6a6a163` established the schema-v9 replay foundation. Every policy
+event receives a transactional monotonic replay sequence, and existing events
+backfilled once in deterministic order. The sequence replaces unsafe
+timestamp/hash ordering.
 
 Commit `8b6272e` defines the shared page contract as `scriba.events.v1`.
 Its account-free fixed-width cursors support explicit replay, latest-page
@@ -106,4 +104,5 @@ bounded scan slot and never leak raw payloads. Commits `29fd69a`, `e157b66`,
 and `249991d` implement and expose the Unix API and stdio MCP adapters. A shared
 fixture proves context parity across CLI/HTTP/MCP and event/cursor parity across
 the service/SSE/MCP while preserving schema, business-row, and privacy bounds.
-Live deployment remains pending the schema-v8 to v10 migration gate.
+The schema-v8-to-v10 migration and live transport gate passed at `9bf7392`; the
+same surfaces remain healthy on schema 11 in the `v0.3.0` deployment.

@@ -316,14 +316,16 @@ remains the interactive callback proof.
 Gate: devbox reboot and restore drills, clean journal inspection, and
 reproducible CLI/server release artifact verification.
 
-Operational status through `eb74648`: bounded daily retention preserves
+Operational status through `92e7147`: bounded daily retention preserves
 pending/leased work, exact timestamp boundaries, global replay high-water, and
 one explicit per-account prune floor. The devbox runs repo-identical hardened
 user units with linger enabled and a persistent daily verified-backup timer.
 An actual stopped-service backup boot and exact live-state restoration both
 passed schema/integrity/queue health, followed by an autonomous reboot with
-zero failed user units or journal error hits. Reproducible tagged artifacts,
-checksums, attestations, security policy, and release evidence remain.
+zero failed user units or journal error hits. Reproducible `v0.3.0` artifacts,
+checksums, Sigstore-backed GitHub attestations, security policy, pinned
+installer, manual Homebrew update, and exact-artifact devbox deployment all
+passed. See [`release-v0.3.0.md`](release-v0.3.0.md).
 
 The existing macOS menu app is preserved but explicitly outside this program.
 No menu-app UI parity, packaging, launch-at-login, notarization, or Sparkle work

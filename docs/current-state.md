@@ -79,7 +79,7 @@ Claude Code and Codex usage tracker.
   uniqueness, schema validation, and refusal to open a future schema version.
   Downgrading a v8 database is restore-only: use a pre-migration backup with an
   older binary rather than attempting an in-place rollback.
-- Commit `6a6a163` adds the undeployed schema-v9 durable replay sequence.
+- Commit `6a6a163` introduced the schema-v9 durable replay sequence.
   `policy_event_replay` maps every policy event to a transactional,
   never-reused monotonic ordinal through an insert trigger. Replay pages use a
   single read snapshot and a captured high-water mark, so later/backdated
@@ -125,6 +125,13 @@ Claude Code and Codex usage tracker.
   smokes passed. Live evidence is under
   `/home/arda/.local/state/scriba/deployments/wave33-ce03c7a`; one human inline
   profile-button tap remains the interactive callback proof.
+- Wave 3.4 operations and release parity are deployed through `v0.3.0` at
+  `92e7147`. Bounded retention, verified scheduled backups, hardened user
+  units, linger, a stopped-service restore drill, and an autonomous reboot all
+  passed. The published four-platform release is reproducible, checksummed,
+  provenance-attested, immutable, independently verified, installed on the
+  devbox from its exact Linux amd64 archive, and distributed through Homebrew.
+  See [`release-v0.3.0.md`](release-v0.3.0.md).
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and
   `grant_expiry_checkpoint`. Its `current` preset preserves the existing
@@ -238,9 +245,10 @@ apps/macos/Scripts/package_zip.sh release
   migration safety, the canonical outbox, budget surfaces, and the schema-v8
   policy runtime, inspection CLI surfaces, Wave 3.1 agent transports, and Wave
   3.2 profiles, Wave 3.3 delivery/Telegram parity, and Wave 3.4 retention,
-  backup, restore, hardened-systemd, linger, and reboot operations are completed
-  checkpoints. Reproducible release/attestation/security evidence remains. The two-real-account
-  live profile proof is externally gated by a second Codex auth file.
+  backup, restore, hardened-systemd, linger, reboot, reproducible release,
+  attestation, security, exact-artifact deployment, and Homebrew checkpoints
+  are complete. The two-real-account live profile proof is externally gated by
+  a second Codex auth file.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.
 - Decide whether ad-hoc signed zip distribution is enough before
