@@ -1,6 +1,6 @@
 # Scriba Current State
 
-Date: 2026-07-12
+Date: 2026-07-13
 
 Scriba is the first child project under Agensfield. It is a fast, minimal
 Claude Code and Codex usage tracker.
@@ -30,7 +30,8 @@ Claude Code and Codex usage tracker.
   boundary and reject fractional/overflow counters. Claude counters are clamped
   nonnegative without conflating cache-read tokens with uncached input.
 - Both provider parser caches use explicit semantic namespaces. Frozen corpus
-  fixtures, cumulative-reset properties, and native fuzzers guard parsing.
+  fixtures, including oversized-line policy and Codex fork/replayed-history
+  markers, cumulative-reset properties, and native fuzzers guard parsing.
 - Stable `scriba.v1` status, Codex limits, profile, and reset-grant JSON outputs,
   plus `scriba.budget.v1` reports, have checked-in Draft 2020-12 schemas and
   canonical validation goldens.
@@ -44,6 +45,8 @@ Claude Code and Codex usage tracker.
   pacing from fresh provider windows. They use percentage points rather than
   local token counts and intentionally have no `--fast` mode. Codex may use up
   to 24 hours of matching durable observations; Claude is current-cycle only.
+  Fixed-clock properties prove projected exhaustion never moves later as used
+  percentage increases.
 - Pricing is embedded from a hash-bound reviewed offline catalog. Maintainer
   refresh writes a candidate only; CI validates provenance, aliases, rates,
   tier thresholds, boundary goldens, and deterministic generation without
@@ -132,6 +135,11 @@ Claude Code and Codex usage tracker.
   provenance-attested, immutable, independently verified, installed on the
   devbox from its exact Linux amd64 archive, and distributed through Homebrew.
   See [`release-v0.3.0.md`](release-v0.3.0.md).
+- Completion-audit follow-up `a45d7c3` added the missing frozen parser cases,
+  monotonic budget projection proof, PR archive packaging/executable smoke, and
+  explicit conditional TCP scope. Local `just check`, full uncached race tests,
+  checksum verification, and a host archive smoke passed. Exact-HEAD CI
+  `29261669059` is green, including Linux archive/executable smoke.
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and
   `grant_expiry_checkpoint`. Its `current` preset preserves the existing
@@ -240,7 +248,14 @@ apps/macos/Scripts/package_zip.sh release
 
 ## Open Follow-Ups
 
-- Continue the accepted local usage control-plane program in
+- Execute the binding two-real-account profile isolation proof when a second
+  live independent Codex credential is available, or explicitly revise that
+  gate. A distinct-account local backup was tested through disposable copies
+  with exact public `v0.3.0`; it failed closed as `auth/auth_unavailable` while
+  the current account stayed healthy and both source files remained unchanged.
+- Record one post-schema-v7 human `/health` command/reply smoke.
+- Record one human Telegram Profiles to default to Limits callback tap.
+- Close the remaining accepted local usage control-plane gates in
   [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
   migration safety, the canonical outbox, budget surfaces, and the schema-v8
   policy runtime, inspection CLI surfaces, Wave 3.1 agent transports, and Wave
@@ -251,5 +266,6 @@ apps/macos/Scripts/package_zip.sh release
   a second Codex auth file.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.
-- Decide whether ad-hoc signed zip distribution is enough before
-  notarization/Sparkle.
+- Use the requirement-by-requirement verdict in
+  [`control-plane-completion-audit.md`](control-plane-completion-audit.md) as
+  the completion authority.

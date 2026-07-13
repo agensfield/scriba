@@ -461,3 +461,13 @@ CLI/server operational and release work.
   was `yes`, queues were empty, no user units failed, and the boot journal had
   zero failure-pattern hits. Evidence lives at
   `~/.local/state/scriba/deployments/wave34-922d464` on devbox.
+- 2026-07-13: completion audit follow-up `a45d7c3` added the missing frozen
+  oversized-JSONL and Codex fork/replayed-history cases, monotonic budget
+  projection property, PR archive packaging/executable smoke, and explicit
+  conditional TCP scope. Local full gates passed and exact-HEAD CI
+  `29261669059` is green. A fresh live quota/budget comparison matched weekly
+  27% used, 73% remaining, and reset time, plus Spark 0%. Exact public `v0.3.0`
+  then polled disposable copies of two distinct-account auth files: the current
+  profile stayed healthy while the old backup failed closed as
+  `auth/auth_unavailable`; both source files remained byte-identical. The
+  two-successful-real-account gate therefore remains open.
