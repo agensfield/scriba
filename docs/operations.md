@@ -19,8 +19,9 @@ journalctl --user -u scriba.service -u scriba-backup.service --since today
 The service sandbox leaves the config and home directory read-only. Scriba can
 write only its state, cache, and Codex authentication directories; the backup
 job can write only under `~/.local/state`. Both units use an owner-only umask,
-an empty capability set, restricted address families, and kernel/system
-protection directives. Validate edits on the target system before reloading:
+restricted address families, a read-only system and home baseline, and the
+process restrictions supported by unprivileged user managers. Validate edits
+on the target system before reloading:
 
 ```sh
 systemd-analyze --user verify \
