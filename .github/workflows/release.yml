@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  actions: read
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  release:
+    name: Reproducible CLI/server release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Validate tag and source version
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          test "$GITHUB_REF_NAME" = "v$version"
+          source_version="$(awk -F'"' '/^[[:space:]]*Version = / {print $2}' internal/buildinfo/buildinfo.go)"
+          test "$version" = "$source_version"
+          if [[ "$version" == *-* ]]; then prerelease=true; else prerelease=false; fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'prerelease=%s\n' "$prerelease" >> "$GITHUB_OUTPUT"
+      - name: Require the tagged commit on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Require successful CI for the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=completed" --jq '.workflow_runs | sort_by(.created_at) | last | .conclusion')"
+          test "$conclusion" = success
+      - name: Reject an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists" >&2
+            exit 1
+          fi
+      - name: Restore dependencies
+        run: go mod download
+      - name: Test release source
+        env:
+          GOPROXY: "off"
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Build deterministic archives twice
+        env:
+          GOPROXY: "off"
+        run: |
+          GOCACHE="$RUNNER_TEMP/gocache-a" go run ./scripts/release --version "${{ steps.version.outputs.version }}" --commit "$GITHUB_SHA" --output dist
+          GOCACHE="$RUNNER_TEMP/gocache-b" go run ./scripts/release --version "${{ steps.version.outputs.version }}" --commit "$GITHUB_SHA" --output repro
+          diff -r dist repro
+      - name: Verify checksums and Linux smoke
+        run: |
+          cd dist
+          sha256sum --check checksums.txt
+          mkdir "$RUNNER_TEMP/scriba-smoke"
+          tar -xzf "scriba_${{ steps.version.outputs.version }}_linux_amd64.tar.gz" -C "$RUNNER_TEMP/scriba-smoke"
+          test "$("$RUNNER_TEMP/scriba-smoke/scriba" --version)" = "${{ steps.version.outputs.version }}"
+          strings "$RUNNER_TEMP/scriba-smoke/scriba" | grep -F "$GITHUB_SHA"
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: "dist/*"
+      - name: Verify release attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for artifact in dist/*; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+          done
+      - name: Create complete draft release
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          draft: true
+          overwrite_files: false
+          prerelease: ${{ steps.version.outputs.prerelease }}
+      - name: Verify assets and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          find dist -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/expected-assets"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq '.assets[].name' | sort > "$RUNNER_TEMP/actual-assets"
+          diff -u "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/actual-assets"
+          if [[ "${{ steps.version.outputs.prerelease }}" == true ]]; then latest=false; else latest=true; fi
+          gh release edit "$GITHUB_REF_NAME" --verify-tag --draft=false --prerelease="${{ steps.version.outputs.prerelease }}" --latest="$latest"

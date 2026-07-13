@@ -152,6 +152,7 @@ just check-all
 - [CLI](docs/cli.md)
 - [Configuration](docs/config.md)
 - [Operations](docs/operations.md)
+- [Security](SECURITY.md)
 - [Current State](docs/current-state.md)
 - [Agent Context](docs/agent-context.md)
 - [Benchmarks](docs/benchmarks.md)

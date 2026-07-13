@@ -31,10 +31,20 @@ GitHub release tarball, verifies it against `checksums.txt`, and installs
 3. `$GOPATH/bin`, when set
 4. `~/.local/bin`
 
+Releases after `v0.2.9` also have Sigstore-backed GitHub build provenance. With
+the GitHub CLI installed, verify a manually downloaded archive using:
+
+```sh
+gh attestation verify scriba_<version>_<os>_<arch>.tar.gz --repo agensfield/scriba
+```
+
+See [Security](../SECURITY.md) for supported versions, private vulnerability
+reporting, local security boundaries, and release-integrity expectations.
+
 Pin a version:
 
 ```sh
-SCRIBA_VERSION=v0.2.1 curl -fsSL https://raw.githubusercontent.com/agensfield/scriba/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/agensfield/scriba/main/scripts/install.sh | SCRIBA_VERSION=v0.2.1 sh
 ```
 
 Choose an install directory:

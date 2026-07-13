@@ -55,12 +55,15 @@ if [ -z "$install_dir" ]; then
   fi
 fi
 
-tmp="${TMPDIR:-/tmp}/scriba-install.$$"
+tmp=""
+install_tmp=""
 cleanup() {
-  rm -rf "$tmp"
+	[ -z "$install_tmp" ] || rm -f -- "$install_tmp"
+	[ -z "$tmp" ] || rm -rf -- "$tmp"
 }
 trap cleanup EXIT INT TERM
-mkdir -p "$tmp"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/scriba-install.XXXXXX")"
+chmod 700 "$tmp"
 
 log "downloading scriba ${tag} for ${os}/${arch}"
 curl -fsSL "${base_url}/${asset}" -o "$tmp/$asset"
@@ -83,7 +86,11 @@ tar -xzf "$tmp/$asset" -C "$tmp"
 [ -f "$tmp/scriba" ] || fail "archive did not contain scriba binary"
 chmod +x "$tmp/scriba"
 mkdir -p "$install_dir"
-cp "$tmp/scriba" "$install_dir/scriba"
+install_tmp="$(mktemp "$install_dir/.scriba-install.XXXXXX")"
+cp "$tmp/scriba" "$install_tmp"
+chmod 755 "$install_tmp"
+mv -f "$install_tmp" "$install_dir/scriba"
+install_tmp=""
 
 log "installed $install_dir/scriba"
 "$install_dir/scriba" --version
