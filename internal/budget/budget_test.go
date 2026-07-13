@@ -82,6 +82,23 @@ func TestDeterministicSortAndNoNonFinite(t *testing.T) {
 	}
 }
 
+func TestProjectionIsMonotonicAsUsageIncreases(t *testing.T) {
+	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	resetAt := now.Add(2 * time.Hour)
+	var previous time.Time
+	for used := 1.0; used <= 100; used += 0.25 {
+		r := Evaluate(Input{HistoryState: HistoryEmpty, Observation: Observation{ObservedAt: now, Windows: []WindowObservation{{Key: "weekly", UsedPercent: &used, ResetAt: resetAt, PeriodDuration: 5 * time.Hour}}}}, now)
+		projection := r.Windows[0].ProjectedExhaustionAt
+		if projection == nil {
+			t.Fatalf("used=%v has no projection: %#v", used, r.Windows[0])
+		}
+		if !previous.IsZero() && projection.After(previous) {
+			t.Fatalf("projection moved later as usage increased: used=%v previous=%s current=%s", used, previous, projection)
+		}
+		previous = *projection
+	}
+}
+
 func FuzzEvaluate(f *testing.F) {
 	f.Add(50.0, int64(3600), int64(7200))
 	f.Fuzz(func(t *testing.T, used float64, remainingSec, periodSec int64) {

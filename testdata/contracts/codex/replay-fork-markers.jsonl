@@ -1,0 +1,4 @@
+{"type":"session_meta","payload":{"id":"019f0000-0000-7000-8000-000000000002","forked_from_id":"019f0000-0000-7000-8000-000000000001","source":"cli"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"replayed history"}]}}
+{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+{"type":"event_msg","timestamp":"2026-07-13T00:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":11,"cached_input_tokens":3,"output_tokens":2,"reasoning_output_tokens":1}}}}

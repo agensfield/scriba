@@ -1,0 +1,6 @@
+{
+  "productionMaxLineBytes": 67108864,
+  "testMaxLineBytes": 1024,
+  "extraBytes": 1,
+  "policy": "A JSONL record larger than the configured scanner limit is rejected without invoking the record callback."
+}

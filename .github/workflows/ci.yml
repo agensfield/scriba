@@ -33,6 +33,17 @@ jobs:
         env:
           GOPROXY: "off"
         run: go vet ./...
+      - name: Package and smoke CLI/server archives
+        env:
+          GOPROXY: "off"
+        run: |
+          version="$(awk -F'"' '/^[[:space:]]*Version = / {print $2}' internal/buildinfo/buildinfo.go)"
+          go run ./scripts/release --version "$version" --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/dist"
+          cd "$RUNNER_TEMP/dist"
+          sha256sum --check checksums.txt
+          mkdir "$RUNNER_TEMP/scriba-smoke"
+          tar -xzf "scriba_${version}_linux_amd64.tar.gz" -C "$RUNNER_TEMP/scriba-smoke"
+          test "$("$RUNNER_TEMP/scriba-smoke/scriba" --version)" = "$version"
 
   macos:
     name: macOS (Go and Swift)

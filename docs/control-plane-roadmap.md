@@ -52,8 +52,9 @@ business rules.
   shell actions, or user-defined message templates.
 - Build one allowlisted agent-context query service and reuse it across CLI,
   HTTP/SSE, and MCP.
-- Default the local API to a Unix socket. TCP is explicit, loopback-only, and
-  authenticated. MCP is stdio-only in this program.
+- Default the local API to a Unix socket. If TCP is added later, it must be
+  explicit, loopback-only, and authenticated. TCP is not a deliverable in this
+  program; MCP is stdio-only.
 - Add profiles without mutating process-wide `CODEX_HOME`; auth paths are
   explicit per profile.
 - Do not build a cloud dashboard, public API, provider marketplace,
@@ -355,19 +356,21 @@ Pause a phase and report a blocker when any of these is true:
 - live validation requires unavailable independent accounts or external
   infrastructure.
 
-## Known Blockers
+## Known Blockers and Boundaries
 
-- A production-like schema-v6 fixture is required before the outbox migration.
-- Multi-account live proof requires two independent Codex auth files. Fixture
-  coverage can land first, but the release gate remains blocked without live
-  proof unless scope is explicitly revised.
+- The production-like schema-v6 fixture, outbox migration, and rollback gate
+  are complete.
+- Multi-account live proof still requires two independent Codex auth files.
+  Fixture coverage and one-account compatibility are proven, but the release
+  gate remains blocked without live proof unless scope is explicitly revised.
 - Absolute OAuth exclusion against the Codex CLI is impossible unless Scriba
   adopts Codex's own lock protocol. Optimistic generation checks remain
   required.
 - Off-host backup destination/retention is not defined. Verified local backups
   are recoverability, not disaster recovery.
 - Homebrew updates remain manual until the automated CLI release path has
-  proven stable.
+  proven stable. The first automated release and manual `v0.3.0` formula update
+  passed; automation of tap updates remains deferred.
 
 ## Planning Receipt
 

@@ -37,6 +37,19 @@ func TestContractLastUsageModelConflictAndCompactionMarker(t *testing.T) {
 	}
 }
 
+func TestContractReplayAndForkMarkersDoNotChangeUsage(t *testing.T) {
+	events, stats, err := ParseFile(filepath.Dir(contractFixture("replay-fork-markers.jsonl")), contractFixture("replay-fork-markers.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || stats.Lines != 4 || stats.InvalidLines != 0 {
+		t.Fatalf("events=%d stats=%+v", len(events), stats)
+	}
+	if events[0].Model != "gpt-5.6-sol" || events[0].InputTokens != 11 || events[0].CachedInputTokens != 3 || events[0].OutputTokens != 2 || events[0].ReasoningOutputTokens != 1 || events[0].TotalTokens != 13 {
+		t.Fatalf("event=%+v", events[0])
+	}
+}
+
 func TestContractCounterReset(t *testing.T) {
 	events, stats, err := ParseFile(filepath.Dir(contractFixture("counter-reset.jsonl")), contractFixture("counter-reset.jsonl"))
 	if err != nil {

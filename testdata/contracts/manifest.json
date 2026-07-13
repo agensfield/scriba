@@ -3,6 +3,8 @@
   "cases": [
     {"id":"codex-cumulative-malformed-truncated","provider":"codex","fixture":"codex/cumulative-malformed-truncated.jsonl","tags":["cumulative","malformed-middle","truncated-tail"]},
     {"id":"codex-last-model-switch","provider":"codex","fixture":"codex/last-model-switch.jsonl","tags":["last","model-switch","model-conflict","compaction"]},
+    {"id":"codex-oversized-jsonl","provider":"codex","fixture":"codex/oversized-jsonl.json","tags":["oversized","scanner-limit","generated-from-spec"]},
+    {"id":"codex-replay-fork-markers","provider":"codex","fixture":"codex/replay-fork-markers.jsonl","tags":["replay","fork","session-meta","response-item"]},
     {"id":"codex-counter-reset","provider":"codex","fixture":"codex/counter-reset.jsonl","tags":["counter-reset"]},
     {"id":"codex-numeric-boundary","provider":"codex","fixture":"codex/numeric-boundary.jsonl","tags":["numeric-boundary"]},
     {"id":"codex-numeric-exact-2p53-plus-1","provider":"codex","fixture":"codex/numeric-exact-2p53-plus-1.jsonl","tags":["numeric-boundary","exact-integer"]},
