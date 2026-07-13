@@ -232,9 +232,8 @@ func (s *Service) dispatchUpdate(ctx context.Context, update *models.Update) err
 		return nil
 	}
 	if update.CallbackQuery != nil {
-		s.logger.Info("telegram callback received", "update_id", update.ID, "data", update.CallbackQuery.Data)
-		s.handleCallback(ctx, update.CallbackQuery)
-		return nil
+		s.logger.Info("telegram callback received", "update_id", update.ID, "kind", callbackKind(update.CallbackQuery.Data))
+		return s.handleCallback(ctx, update.CallbackQuery)
 	}
 	if update.Message == nil || update.Message.Text == "" {
 		return nil
@@ -299,7 +298,7 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 		if !ok {
 			return "no cached limits yet. use /refresh to fetch live Codex limits.", nil
 		}
-		return renderSelectedProfile(profile, RenderLimits(obs)), nil
+		return renderSelectedProfile(profile, RenderLimits(obs)), selectedProfileKeyboard(profile)
 	case "/grants":
 		profile, err := commandProfile(command)
 		if err != nil {
@@ -315,7 +314,7 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 		if !ok {
 			return "no cached reset grants yet. use /refresh to fetch live Codex limits.", nil
 		}
-		return renderSelectedProfile(profile, RenderResetGrantDetails(obs)), mainKeyboard()
+		return renderSelectedProfile(profile, RenderResetGrantDetails(obs)), selectedProfileKeyboard(profile)
 	case "/profile":
 		profileID, err := commandProfile(command)
 		if err != nil {
@@ -328,7 +327,7 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 			}
 			return "profile failed.", nil
 		}
-		return renderSelectedProfile(profileID, RenderProfile(profile)), mainKeyboard()
+		return renderSelectedProfile(profileID, RenderProfile(profile)), selectedProfileKeyboard(profileID)
 	case "/profiles":
 		if len(command) != 1 {
 			return "usage: /profiles", nil
@@ -337,7 +336,8 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 		if err != nil {
 			return "profiles failed.", nil
 		}
-		return RenderProfiles(health.Profiles), mainKeyboard()
+		text, _ := RenderProfilesPage(health.Profiles, 0)
+		return text, profilesKeyboard(health.Profiles, 0)
 	case "/refresh":
 		if retryAfter := s.manualRefreshRetryAfter(); retryAfter > 0 {
 			return "refresh rate-limited. try again in " + retryAfter.Round(time.Second).String(), nil
@@ -373,79 +373,140 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 	}
 }
 
-func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuery) {
+func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuery) error {
+	if strings.HasPrefix(query.Data, "profiles:v1:") {
+		return s.handleProfileCallback(ctx, query)
+	}
 	switch query.Data {
+	case "quick:home":
+		_ = s.answerCallback(ctx, query.ID, "main menu")
+		return s.editCallbackMessage(ctx, query, helpText(), mainKeyboard())
+	case "quick:profiles":
+		_ = s.answerCallback(ctx, query.ID, "loading profiles")
+		reply, markup := s.handleCommand(ctx, "/profiles")
+		return s.editCallbackMessage(ctx, query, reply, markup)
 	case "quick:limits":
-		s.answerCallback(ctx, query.ID, "refreshing limits")
+		_ = s.answerCallback(ctx, query.ID, "refreshing limits")
 		reply, _ := s.handleCommand(ctx, "/limits")
-		_, _ = s.send(ctx, reply, nil)
-		return
+		_, err := s.send(ctx, reply, mainKeyboard())
+		return err
 	case "quick:profile":
-		s.answerCallback(ctx, query.ID, "loading profile")
+		_ = s.answerCallback(ctx, query.ID, "loading profile")
 		reply, _ := s.handleCommand(ctx, "/profile")
-		_, _ = s.send(ctx, reply, mainKeyboard())
-		return
+		_, err := s.send(ctx, reply, mainKeyboard())
+		return err
 	case "quick:grants":
-		s.answerCallback(ctx, query.ID, "loading reset grants")
+		_ = s.answerCallback(ctx, query.ID, "loading reset grants")
 		reply, _ := s.handleCommand(ctx, "/grants")
-		_, _ = s.send(ctx, reply, mainKeyboard())
-		return
+		_, err := s.send(ctx, reply, mainKeyboard())
+		return err
 	case "quick:health":
-		s.answerCallback(ctx, query.ID, "checking health")
+		_ = s.answerCallback(ctx, query.ID, "checking health")
 		reply, _ := s.handleCommand(ctx, "/health")
-		_, _ = s.send(ctx, reply, mainKeyboard())
-		return
+		_, err := s.send(ctx, reply, mainKeyboard())
+		return err
 	case "quick:refresh":
-		s.answerCallback(ctx, query.ID, "forcing refresh")
+		_ = s.answerCallback(ctx, query.ID, "forcing refresh")
 		reply, _ := s.handleCommand(ctx, "/refresh")
-		_, _ = s.send(ctx, reply, nil)
-		return
+		_, err := s.send(ctx, reply, nil)
+		return err
 	case "quick:radar":
-		s.answerCallback(ctx, query.ID, "checking radar")
+		_ = s.answerCallback(ctx, query.ID, "checking radar")
 		reply, _ := s.handleCommand(ctx, "/radar")
-		_, _ = s.send(ctx, reply, nil)
-		return
+		_, err := s.send(ctx, reply, nil)
+		return err
 	case "quick:stats":
-		s.answerCallback(ctx, query.ID, "loading stats")
+		_ = s.answerCallback(ctx, query.ID, "loading stats")
 		reply, _ := s.handleCommand(ctx, "/stats")
-		_, _ = s.send(ctx, reply, mainKeyboard())
-		return
+		_, err := s.send(ctx, reply, mainKeyboard())
+		return err
 	case "quick:settings":
 		interval, _ := s.controller.PollInterval(ctx)
-		s.answerCallback(ctx, query.ID, "settings")
-		s.editCallbackMessage(ctx, query, settingsText(interval), settingsKeyboard(interval))
-		return
+		_ = s.answerCallback(ctx, query.ID, "settings")
+		return s.editCallbackMessage(ctx, query, settingsText(interval), settingsKeyboard(interval))
 	}
 	if !strings.HasPrefix(query.Data, "settings:poll:") {
-		return
+		return s.answerCallback(ctx, query.ID, "expired or invalid control")
 	}
 	raw := strings.TrimPrefix(query.Data, "settings:poll:")
 	interval, err := time.ParseDuration(raw)
 	if err != nil {
-		s.answerCallback(ctx, query.ID, "bad interval")
-		return
+		return s.answerCallback(ctx, query.ID, "bad interval")
 	}
 	if err := s.controller.SetPollInterval(ctx, interval); err != nil {
-		s.answerCallback(ctx, query.ID, "could not update interval")
-		return
+		return s.answerCallback(ctx, query.ID, "could not update interval")
 	}
-	s.answerCallback(ctx, query.ID, "poll interval updated: "+server.FormatDuration(interval))
-	s.editCallbackMessage(ctx, query, settingsText(interval), settingsKeyboard(interval))
+	_ = s.answerCallback(ctx, query.ID, "poll interval updated: "+server.FormatDuration(interval))
+	return s.editCallbackMessage(ctx, query, settingsText(interval), settingsKeyboard(interval))
 }
 
-func (s *Service) answerCallback(ctx context.Context, id, text string) {
+func (s *Service) handleProfileCallback(ctx context.Context, query *models.CallbackQuery) error {
+	action, value, ok := parseProfileCallback(query.Data)
+	if !ok {
+		return s.answerCallback(ctx, query.ID, "expired or invalid profile control")
+	}
+	if action == "list" {
+		page, err := strconv.Atoi(value)
+		if err != nil {
+			return s.answerCallback(ctx, query.ID, "invalid profile page")
+		}
+		health, err := s.controller.Health(ctx)
+		if err != nil {
+			return s.answerCallback(ctx, query.ID, "profiles unavailable")
+		}
+		text, pages := RenderProfilesPage(health.Profiles, page)
+		if text == "" || page >= pages {
+			return s.answerCallback(ctx, query.ID, "profile page expired")
+		}
+		_ = s.answerCallback(ctx, query.ID, "profiles")
+		return s.editCallbackMessage(ctx, query, text, profilesKeyboard(health.Profiles, page))
+	}
+
+	profileID := value
+	if action == "open" {
+		health, err := s.controller.Health(ctx)
+		if err != nil {
+			return s.answerCallback(ctx, query.ID, "profile unavailable")
+		}
+		profile, found := profileHealthByID(health.Profiles, profileID)
+		if !found {
+			return s.answerCallback(ctx, query.ID, "unknown or disabled profile")
+		}
+		_ = s.answerCallback(ctx, query.ID, "profile "+profileID)
+		return s.editCallbackMessage(ctx, query, renderProfileLanding(profile), profileKeyboard(profileID))
+	}
+	health, err := s.controller.Health(ctx)
+	if err != nil {
+		return s.answerCallback(ctx, query.ID, "profile unavailable")
+	}
+	if _, found := profileHealthByID(health.Profiles, profileID); !found {
+		_ = s.answerCallback(ctx, query.ID, "unknown or disabled profile")
+		return s.editCallbackMessage(ctx, query, "unknown or disabled profile.", profilesBackKeyboard())
+	}
+
+	command := map[string]string{"limits": "/limits ", "grants": "/grants ", "stats": "/profile "}[action]
+	if command == "" {
+		return s.answerCallback(ctx, query.ID, "expired or invalid profile control")
+	}
+	_ = s.answerCallback(ctx, query.ID, "loading "+action)
+	reply, _ := s.handleCommand(ctx, command+profileID)
+	return s.editCallbackMessage(ctx, query, reply, profileKeyboard(profileID))
+}
+
+func (s *Service) answerCallback(ctx context.Context, id, text string) error {
 	if s.bot == nil {
-		return
+		return nil
 	}
 	ctx, cancel := s.apiContext(ctx)
 	defer cancel()
-	_, _ = s.bot.AnswerCallbackQuery(ctx, &tgbot.AnswerCallbackQueryParams{CallbackQueryID: id, Text: text, CacheTime: 1})
+	_, err := s.bot.AnswerCallbackQuery(ctx, &tgbot.AnswerCallbackQueryParams{CallbackQueryID: id, Text: text, CacheTime: 1})
+	return err
 }
 
-func (s *Service) editCallbackMessage(ctx context.Context, query *models.CallbackQuery, text string, markup models.ReplyMarkup) {
+func (s *Service) editCallbackMessage(ctx context.Context, query *models.CallbackQuery, text string, markup models.ReplyMarkup) error {
 	if s.bot == nil || query.Message.Message == nil {
-		_, _ = s.send(ctx, text, markup)
-		return
+		_, err := s.send(ctx, text, markup)
+		return err
 	}
 	editCtx, cancel := s.apiContext(ctx)
 	_, err := s.bot.EditMessageText(editCtx, &tgbot.EditMessageTextParams{
@@ -456,9 +517,14 @@ func (s *Service) editCallbackMessage(ctx context.Context, query *models.Callbac
 		ReplyMarkup: markup,
 	})
 	cancel()
-	if err != nil && !isUncertainSendError(err) && !strings.Contains(strings.ToLower(err.Error()), "message is not modified") {
-		_, _ = s.send(ctx, text, markup)
+	if err == nil || strings.Contains(strings.ToLower(err.Error()), "message is not modified") {
+		return nil
 	}
+	if isUncertainSendError(err) {
+		return err
+	}
+	_, sendErr := s.send(ctx, text, markup)
+	return sendErr
 }
 
 func (s *Service) retryDeliveries(ctx context.Context) {
@@ -614,12 +680,12 @@ func isUncertainSendError(err error) bool {
 }
 
 func (s *Service) authorized(update *models.Update) bool {
-	chatID, userID, ok := updateIdentity(update)
+	chatID, userID, chatType, ok := updateIdentity(update)
 	if !ok || chatID != s.cfg.ChatID {
 		return false
 	}
 	if len(s.cfg.AllowedUserIDs) == 0 {
-		return true
+		return chatType == models.ChatTypePrivate
 	}
 	for _, allowed := range s.cfg.AllowedUserIDs {
 		if userID == allowed {
@@ -633,25 +699,29 @@ func (s *Service) target() string {
 	return "telegram:" + strconv.FormatInt(s.cfg.ChatID, 10)
 }
 
-func updateIdentity(update *models.Update) (chatID int64, userID int64, ok bool) {
+func updateIdentity(update *models.Update) (chatID int64, userID int64, chatType models.ChatType, ok bool) {
 	if update.Message != nil {
 		chatID = update.Message.Chat.ID
+		chatType = update.Message.Chat.Type
 		if update.Message.From != nil {
 			userID = update.Message.From.ID
 		}
-		return chatID, userID, true
+		return chatID, userID, chatType, true
 	}
 	if update.CallbackQuery != nil {
 		userID = update.CallbackQuery.From.ID
 		if msg := update.CallbackQuery.Message.Message; msg != nil {
-			return msg.Chat.ID, userID, true
+			return msg.Chat.ID, userID, msg.Chat.Type, true
+		}
+		if msg := update.CallbackQuery.Message.InaccessibleMessage; msg != nil {
+			return msg.Chat.ID, userID, msg.Chat.Type, true
 		}
 	}
-	return 0, 0, false
+	return 0, 0, "", false
 }
 
 func (s *Service) logUnauthorized(update *models.Update) {
-	chatID, userID, ok := updateIdentity(update)
+	chatID, userID, _, ok := updateIdentity(update)
 	if !ok {
 		s.logger.Warn("telegram update ignored without identity", "update_id", update.ID)
 		return
@@ -671,6 +741,20 @@ func commandName(text string) string {
 	return command
 }
 
+func callbackKind(data string) string {
+	quick := map[string]bool{"quick:home": true, "quick:profiles": true, "quick:limits": true, "quick:profile": true, "quick:grants": true, "quick:health": true, "quick:refresh": true, "quick:radar": true, "quick:stats": true, "quick:settings": true}
+	if quick[data] {
+		return data
+	}
+	if strings.HasPrefix(data, "settings:poll:") {
+		return "settings:poll"
+	}
+	if _, _, ok := parseProfileCallback(data); ok {
+		return "profiles:v1"
+	}
+	return "unknown"
+}
+
 var telegramProfileIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 func commandProfile(fields []string) (string, error) {
@@ -688,6 +772,119 @@ func renderSelectedProfile(profileID, body string) string {
 		return body
 	}
 	return "<b>Configured profile</b> <code>" + html.EscapeString(profileID) + "</code>\n\n" + body
+}
+
+func parseProfileCallback(data string) (string, string, bool) {
+	parts := strings.Split(data, ":")
+	if len(parts) != 4 || parts[0] != "profiles" || parts[1] != "v1" {
+		return "", "", false
+	}
+	action, value := parts[2], parts[3]
+	if action == "list" {
+		if len(value) == 0 || len(value) > 4 {
+			return "", "", false
+		}
+		for _, char := range value {
+			if char < '0' || char > '9' {
+				return "", "", false
+			}
+		}
+		return action, value, true
+	}
+	if action != "open" && action != "limits" && action != "grants" && action != "stats" {
+		return "", "", false
+	}
+	if len(value) > 32 || !telegramProfileIDPattern.MatchString(value) {
+		return "", "", false
+	}
+	return action, value, true
+}
+
+func profileHealthByID(profiles []server.ProfileHealth, id string) (server.ProfileHealth, bool) {
+	for _, profile := range profiles {
+		if profile.Profile.Ref == id {
+			return profile, true
+		}
+	}
+	return server.ProfileHealth{}, false
+}
+
+func renderProfileLanding(profile server.ProfileHealth) string {
+	marker := ""
+	if profile.IsDefault {
+		marker = " · default"
+	}
+	return "<b>Configured profile</b>\n\n<code>" + html.EscapeString(profile.Profile.Ref) + "</code> · " + html.EscapeString(truncateProfileLabel(profile.Profile.Label)) + " · " + html.EscapeString(string(profile.Status)) + marker + "\n\nChoose a view."
+}
+
+func profilesKeyboard(profiles []server.ProfileHealth, page int) models.InlineKeyboardMarkup {
+	pages := max(1, (len(profiles)+profilesPageSize-1)/profilesPageSize)
+	start := min(max(page, 0)*profilesPageSize, len(profiles))
+	end := min(start+profilesPageSize, len(profiles))
+	rows := make([][]models.InlineKeyboardButton, 0, profilesPageSize+2)
+	for _, profile := range profiles[start:end] {
+		label := profileButtonLabel(profile)
+		rows = append(rows, []models.InlineKeyboardButton{{Text: label, CallbackData: "profiles:v1:open:" + profile.Profile.Ref}})
+	}
+	if pages > 1 {
+		var nav []models.InlineKeyboardButton
+		if page > 0 {
+			nav = append(nav, models.InlineKeyboardButton{Text: "‹ Prev", CallbackData: "profiles:v1:list:" + strconv.Itoa(page-1)})
+		}
+		if page+1 < pages {
+			nav = append(nav, models.InlineKeyboardButton{Text: "Next ›", CallbackData: "profiles:v1:list:" + strconv.Itoa(page+1)})
+		}
+		rows = append(rows, nav)
+	}
+	rows = append(rows, []models.InlineKeyboardButton{{Text: "Main menu", CallbackData: "quick:home"}})
+	return models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func profileKeyboard(profileID string) models.InlineKeyboardMarkup {
+	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+		{{Text: "Limits", CallbackData: "profiles:v1:limits:" + profileID}, {Text: "Grants", CallbackData: "profiles:v1:grants:" + profileID}},
+		{{Text: "Profile stats", CallbackData: "profiles:v1:stats:" + profileID}},
+		{{Text: "‹ All profiles", CallbackData: "profiles:v1:list:0"}},
+	}}
+}
+
+func profilesBackKeyboard() models.InlineKeyboardMarkup {
+	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{{Text: "‹ All profiles", CallbackData: "profiles:v1:list:0"}}}}
+}
+
+func selectedProfileKeyboard(profileID string) models.ReplyMarkup {
+	if profileID == "" {
+		return mainKeyboard()
+	}
+	return profileKeyboard(profileID)
+}
+
+func truncateButtonLabel(label string) string {
+	runes := []rune(label)
+	if len(runes) <= 64 {
+		return label
+	}
+	return string(runes[:63]) + "…"
+}
+
+func profileButtonLabel(profile server.ProfileHealth) string {
+	suffix := " · " + profile.Profile.Ref
+	if profile.IsDefault {
+		suffix += " · default"
+	}
+	budget := 64 - len([]rune(suffix))
+	label := []rune(profile.Profile.Label)
+	if budget < 1 {
+		return truncateButtonLabel(strings.TrimSpace(suffix))
+	}
+	if len(label) > budget {
+		if budget == 1 {
+			label = []rune("…")
+		} else {
+			label = append(label[:budget-1], '…')
+		}
+	}
+	return string(label) + suffix
 }
 
 func settingsKeyboard(current time.Duration) models.InlineKeyboardMarkup {
@@ -729,6 +926,7 @@ func mainKeyboard() models.InlineKeyboardMarkup {
 			{Text: "Stats", CallbackData: "quick:stats"},
 			{Text: "Settings", CallbackData: "quick:settings"},
 		},
+		{{Text: "Profiles", CallbackData: "quick:profiles"}},
 	}}
 }
 

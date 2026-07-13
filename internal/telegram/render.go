@@ -19,6 +19,7 @@ import (
 )
 
 const maxRenderedProfiles = 8
+const profilesPageSize = 6
 
 func RenderProfiles(profiles []server.ProfileHealth) string {
 	var b strings.Builder
@@ -43,6 +44,30 @@ func RenderProfiles(profiles []server.ProfileHealth) string {
 		b.WriteString("\n\nUse <code>/limits id</code>, <code>/grants id</code>, or <code>/profile id</code>.")
 	}
 	return b.String()
+}
+
+func RenderProfilesPage(profiles []server.ProfileHealth, page int) (string, int) {
+	pages := max(1, (len(profiles)+profilesPageSize-1)/profilesPageSize)
+	if page < 0 || page >= pages {
+		return "", pages
+	}
+	start := page * profilesPageSize
+	end := min(start+profilesPageSize, len(profiles))
+	var b strings.Builder
+	fmt.Fprintf(&b, "<b>Configured profiles</b> · %d/%d\n", page+1, pages)
+	for _, profile := range profiles[start:end] {
+		marker := ""
+		if profile.IsDefault {
+			marker = " · default"
+		}
+		fmt.Fprintf(&b, "\n<code>%s</code> · %s · %s%s", html.EscapeString(profile.Profile.Ref), html.EscapeString(truncateProfileLabel(profile.Profile.Label)), html.EscapeString(string(profile.Status)), marker)
+	}
+	if len(profiles) == 0 {
+		b.WriteString("\nno enabled profiles available")
+	} else {
+		b.WriteString("\n\nChoose a profile below.")
+	}
+	return b.String(), pages
 }
 
 func truncateProfileLabel(label string) string {

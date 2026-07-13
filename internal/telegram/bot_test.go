@@ -297,10 +297,143 @@ func TestAuthorizationRequiresChatAndAllowedUser(t *testing.T) {
 	}
 }
 
+func TestEmptyAllowlistIsPrivateChatOnlyAndGroupsRequireUserAllowlist(t *testing.T) {
+	private := &models.Update{Message: &models.Message{Chat: models.Chat{ID: 123, Type: models.ChatTypePrivate}, From: &models.User{ID: 7}}}
+	group := &models.Update{Message: &models.Message{Chat: models.Chat{ID: 123, Type: models.ChatTypeSupergroup}, From: &models.User{ID: 7}}}
+	svc := &Service{cfg: BotConfig{ChatID: 123}}
+	if !svc.authorized(private) {
+		t.Fatal("empty allowlist should retain private-chat compatibility")
+	}
+	if svc.authorized(group) {
+		t.Fatal("empty allowlist authorized a group user")
+	}
+	svc.cfg.AllowedUserIDs = []int64{7}
+	if !svc.authorized(group) {
+		t.Fatal("explicitly allowlisted group user was denied")
+	}
+	svc.cfg.AllowedUserIDs = []int64{8}
+	if svc.authorized(group) {
+		t.Fatal("non-allowlisted group user was authorized")
+	}
+}
+
+func TestVersionedProfileCallbacksSelectExactProfile(t *testing.T) {
+	controller := &fakeController{latest: resetwatch.Observation{Account: resetwatch.Account{Label: "Work"}, ObservedAt: time.Now()}, latestOK: true, health: healthFixture()}
+	controller.health.Profiles = []server.ProfileHealth{{Profile: server.ProfileIdentity{Ref: "work", Label: "Work"}, Status: server.HealthOK}}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	if err := svc.handleCallback(t.Context(), &models.CallbackQuery{Data: "profiles:v1:limits:work"}); err != nil {
+		t.Fatal(err)
+	}
+	if controller.latestProfile != "work" {
+		t.Fatalf("selected profile=%q", controller.latestProfile)
+	}
+	if _, _, ok := parseProfileCallback("profiles:v2:limits:work"); ok {
+		t.Fatal("future callback version accepted")
+	}
+	for _, malformed := range []string{"profiles:v1:limits:", "profiles:v1:limits:INVALID", "profiles:v1:list:-1", "profiles:v1:list:10000", "profiles:v1:unknown:work", "profiles:v1:limits:work:extra"} {
+		if _, _, ok := parseProfileCallback(malformed); ok {
+			t.Fatalf("malformed callback accepted: %q", malformed)
+		}
+	}
+}
+
+func TestInaccessibleMessageCallbackRetainsChatAuthorization(t *testing.T) {
+	update := &models.Update{CallbackQuery: &models.CallbackQuery{From: models.User{ID: 7}, Message: models.MaybeInaccessibleMessage{Type: models.MaybeInaccessibleMessageTypeInaccessibleMessage, InaccessibleMessage: &models.InaccessibleMessage{Chat: models.Chat{ID: -100, Type: models.ChatTypeSupergroup}, MessageID: 5}}}}
+	svc := &Service{cfg: BotConfig{ChatID: -100, AllowedUserIDs: []int64{7}}}
+	if !svc.authorized(update) {
+		t.Fatal("chat-backed inaccessible callback was denied")
+	}
+	svc.cfg.AllowedUserIDs = []int64{8}
+	if svc.authorized(update) {
+		t.Fatal("inaccessible callback bypassed user allowlist")
+	}
+}
+
+func TestStaleProfileCallbackRemovesProfileActionsWithoutFallback(t *testing.T) {
+	controller := &fakeController{health: healthFixture(), latest: resetwatch.Observation{Account: resetwatch.Account{Label: "Default"}}, latestOK: true}
+	controller.health.Profiles = []server.ProfileHealth{{Profile: server.ProfileIdentity{Ref: "default", Label: "Default"}, IsDefault: true, Status: server.HealthOK}}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	if err := svc.handleCallback(t.Context(), &models.CallbackQuery{Data: "profiles:v1:limits:removed"}); err != nil {
+		t.Fatal(err)
+	}
+	if controller.latestProfile != "" {
+		t.Fatalf("stale callback reached account lookup: %q", controller.latestProfile)
+	}
+}
+
+func TestCallbackKindUsesClosedLogVocabulary(t *testing.T) {
+	if got := callbackKind("PRIVATE:SECRET:VALUE"); got != "unknown" {
+		t.Fatalf("unknown callback log kind=%q", got)
+	}
+	if got := callbackKind("profiles:v1:limits:work"); got != "profiles:v1" {
+		t.Fatalf("profile callback log kind=%q", got)
+	}
+}
+
+func TestProfileKeyboardPaginationIsBoundedAndCallbackSafe(t *testing.T) {
+	profiles := make([]server.ProfileHealth, 14)
+	for i := range profiles {
+		profiles[i] = server.ProfileHealth{Profile: server.ProfileIdentity{Ref: fmt.Sprintf("profile-%d", i), Label: strings.Repeat("🔥", 80)}, IsDefault: i == 0, Status: server.HealthOK}
+	}
+	text, pages := RenderProfilesPage(profiles, 1)
+	keyboard := profilesKeyboard(profiles, 1)
+	if pages != 3 || len(text) > 4096 || len(keyboard.InlineKeyboard) > profilesPageSize+2 {
+		t.Fatalf("pages=%d text=%d rows=%d", pages, len(text), len(keyboard.InlineKeyboard))
+	}
+	for _, row := range keyboard.InlineKeyboard {
+		for _, button := range row {
+			if len([]byte(button.CallbackData)) > 64 || len([]rune(button.Text)) > 64 {
+				t.Fatalf("unsafe button=%+v", button)
+			}
+		}
+	}
+	if !strings.Contains(keyboard.InlineKeyboard[0][0].Text, "profile-6") {
+		t.Fatalf("profile id missing from button: %q", keyboard.InlineKeyboard[0][0].Text)
+	}
+	if text, _ := RenderProfilesPage(profiles, 3); text != "" {
+		t.Fatalf("out-of-range page rendered: %q", text)
+	}
+}
+
+func TestProfileCallbackAnswersAndEditsExistingMessage(t *testing.T) {
+	var mu sync.Mutex
+	methods := map[string]int{}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods[r.URL.Path]++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/editMessageText") {
+			_, _ = io.WriteString(w, `{"ok":true,"result":{"message_id":5,"date":1,"chat":{"id":123,"type":"private"}}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+	}))
+	t.Cleanup(api.Close)
+	bot, err := tgbot.New("test", tgbot.WithServerURL(api.URL), tgbot.WithSkipGetMe())
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller := &fakeController{health: healthFixture()}
+	controller.health.Profiles = []server.ProfileHealth{{Profile: server.ProfileIdentity{Ref: "work", Label: "Work"}, Status: server.HealthOK}}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller, bot: bot, apiTimeout: time.Second}
+	query := &models.CallbackQuery{ID: "callback-1", Data: "profiles:v1:list:0", From: models.User{ID: 7}, Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: 5, Date: 1, Chat: models.Chat{ID: 123, Type: models.ChatTypePrivate}}}}
+	if err := svc.handleCallback(t.Context(), query); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if methods["/bottest/answerCallbackQuery"] != 1 || methods["/bottest/editMessageText"] != 1 || methods["/bottest/sendMessage"] != 0 {
+		t.Fatalf("methods=%v", methods)
+	}
+}
+
 func TestHandleSettingsCallbackUpdatesPollInterval(t *testing.T) {
 	controller := &fakeController{interval: 5 * time.Minute}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	svc.handleCallback(context.Background(), &models.CallbackQuery{Data: "settings:poll:10m"})
+	if err := svc.handleCallback(context.Background(), &models.CallbackQuery{Data: "settings:poll:10m"}); err != nil {
+		t.Fatal(err)
+	}
 	if controller.interval != 10*time.Minute {
 		t.Fatalf("interval was not updated: %s", controller.interval)
 	}
@@ -322,7 +455,7 @@ func TestLimitsCommandUsesCachedObservation(t *testing.T) {
 		latestOK: true,
 	}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	reply, _ := svc.handleCommand(context.Background(), "/limits work")
+	reply, markup := svc.handleCommand(context.Background(), "/limits work")
 	if !strings.Contains(reply, "<b>Codex limits</b>") {
 		t.Fatalf("unexpected limits reply: %s", reply)
 	}
@@ -334,6 +467,10 @@ func TestLimitsCommandUsesCachedObservation(t *testing.T) {
 	}
 	if controller.latestProfile != "work" || !strings.Contains(reply, "Configured profile</b> <code>work</code>") {
 		t.Fatalf("profile=%q reply=%s", controller.latestProfile, reply)
+	}
+	keyboard, ok := markup.(models.InlineKeyboardMarkup)
+	if !ok || keyboard.InlineKeyboard[0][0].CallbackData != "profiles:v1:limits:work" {
+		t.Fatalf("profile keyboard=%+v", markup)
 	}
 }
 
@@ -421,7 +558,7 @@ func TestProfilesCommandListsSafeBoundedHealthAndProfileUsage(t *testing.T) {
 	}
 	controller.health = health
 	reply, markup := svc.handleCommand(context.Background(), "/profiles")
-	for _, want := range []string{"Configured profiles", "personal", "default", "work", "degraded", "/limits id"} {
+	for _, want := range []string{"Configured profiles", "personal", "default", "work", "degraded", "Choose a profile"} {
 		if !strings.Contains(reply, want) {
 			t.Fatalf("missing %q:\n%s", want, reply)
 		}
@@ -532,7 +669,7 @@ func TestFailedCommandReplyLeavesCursorAndIsBoundedWithoutFallback(t *testing.T)
 	offsets := &fakeOffsetStore{}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, offsets: offsets, botRef: "default", bot: b, logger: slog.Default(), apiTimeout: 30 * time.Millisecond}
 	started := time.Now()
-	svc.handleUpdate(context.Background(), b, &models.Update{ID: 12, Message: &models.Message{Chat: models.Chat{ID: 123}, From: &models.User{ID: 7}, Text: "/help"}})
+	svc.handleUpdate(context.Background(), b, &models.Update{ID: 12, Message: &models.Message{Chat: models.Chat{ID: 123, Type: models.ChatTypePrivate}, From: &models.User{ID: 7}, Text: "/help"}})
 	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
 		t.Fatalf("hanging send was not bounded: %s", elapsed)
 	}
