@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agensfield/scriba/internal/budget"
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
@@ -166,6 +167,15 @@ func TestRenderLimitWarningShowsCheckpoint(t *testing.T) {
 		"used",
 		"96%",
 	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("render missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestRenderPacingWarningExplainsRiskAndDedupe(t *testing.T) {
+	text := RenderPacingWarning(budget.PacingAlert{AccountLabel: "personal", Label: resetwatch.LabelWeeklyLimit, Risk: "high", Confidence: "low", UsedPercent: 40, RemainingPercentPoints: 60, PacePercentPointsPerHour: 1.65, SafePercentPointsPerHour: 0.42, ProjectedExhaustionAt: parseTime("2026-07-15T08:59:00Z"), ResetAt: parseTime("2026-07-19T20:15:00Z")})
+	for _, want := range []string{"<b>Codex pacing warning</b>", "Weekly · spending too fast", "40% used, 60% left", "Current pace 1.65%/h", "sustainable pace 0.42%/h", "before reset", "low confidence estimate", "won’t repeat this warning"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("render missing %q in:\n%s", want, text)
 		}

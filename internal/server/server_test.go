@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/remote"
@@ -658,6 +659,7 @@ type fakeNotifier struct {
 	baselines      []BaselineNotice
 	resets         []resetwatch.Event
 	warnings       []resetwatch.WarningEvent
+	pacingWarnings []budget.PacingAlert
 	grantWarnings  []resetwatch.GrantExpiryWarning
 	resetGrants    []resetwatch.ResetGrantEvent
 	radarAlerts    []radar.ProbabilityAlert
@@ -677,6 +679,11 @@ func (n *fakeNotifier) NotifyReset(_ context.Context, event resetwatch.Event) er
 
 func (n *fakeNotifier) NotifyLimitWarning(_ context.Context, warning resetwatch.WarningEvent) error {
 	n.warnings = append(n.warnings, warning)
+	return nil
+}
+
+func (n *fakeNotifier) NotifyPacingWarning(_ context.Context, warning budget.PacingAlert) error {
+	n.pacingWarnings = append(n.pacingWarnings, warning)
 	return nil
 }
 

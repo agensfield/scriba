@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/policy"
 	"github.com/agensfield/scriba/internal/resetwatch"
 )
@@ -38,6 +39,7 @@ type CodexPollResult struct {
 	WarningEvents            []resetwatch.WarningEvent
 	GrantExpiryWarningEvents []resetwatch.GrantExpiryWarning
 	ResetGrantEvents         []resetwatch.ResetGrantEvent
+	PacingWarnings           []budget.PacingAlert
 }
 
 // ApplyCodexPoll evaluates and persists a complete Codex poll as one atomic unit.
@@ -114,6 +116,10 @@ func (s *Store) ApplyCodexPoll(ctx context.Context, input CodexPollInput) (Codex
 	if err != nil {
 		return empty, err
 	}
+	pacingReport, err := derivePacingReport(ctx, tx, obs)
+	if err != nil {
+		return empty, err
+	}
 	if err = savePollObservation(ctx, tx, obs, input.CommittedAt); err != nil {
 		return empty, err
 	}
@@ -141,6 +147,10 @@ func (s *Store) ApplyCodexPoll(ctx context.Context, input CodexPollInput) (Codex
 		return empty, err
 	}
 	inserted, err := persistPolicyEvents(ctx, tx, obs, legacy, result.Events, currentPolicyRevision, configHash, profileRef, targets, resetOptions.JokeChooser, input.CommittedAt)
+	if err != nil {
+		return empty, err
+	}
+	inserted.PacingWarnings, err = persistPacingAlerts(ctx, tx, obs, pacingReport, profileRef, targets, input.CommittedAt)
 	if err != nil {
 		return empty, err
 	}

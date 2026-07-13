@@ -10,6 +10,7 @@ import (
 
 	"github.com/dustin/go-humanize"
 
+	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/remote"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
@@ -252,6 +253,39 @@ func RenderLimitWarning(warning resetwatch.WarningEvent) string {
 		b.WriteString(html.EscapeString(fmt.Sprintf("%-10s %s", "seen", formatFreshTime(warning.DetectedAt))))
 	}
 	b.WriteString("</pre>")
+	return b.String()
+}
+
+func RenderPacingWarning(warning budget.PacingAlert) string {
+	status := "spending too fast"
+	var b strings.Builder
+	b.WriteString("<b>Codex pacing warning</b>\n")
+	if warning.AccountLabel != "" {
+		fmt.Fprintf(&b, "<b>%s</b>\n\n", html.EscapeString(warning.AccountLabel))
+	}
+	fmt.Fprintf(&b, "<b>%s · %s</b>\n", html.EscapeString(sectionLabel(warning.Label)), status)
+	fmt.Fprintf(&b, "%s used, %s left.\n", formatPercent(warning.UsedPercent), formatPercent(warning.RemainingPercentPoints))
+	fmt.Fprintf(&b, "Current pace %.2f%%/h; sustainable pace %.2f%%/h.\n", warning.PacePercentPointsPerHour, warning.SafePercentPointsPerHour)
+	if !warning.ProjectedExhaustionAt.IsZero() {
+		fmt.Fprintf(&b, "At this pace, the limit runs out %s", formatTime(warning.ProjectedExhaustionAt))
+		if !warning.ResetAt.IsZero() && warning.ProjectedExhaustionAt.Before(warning.ResetAt) {
+			fmt.Fprintf(&b, ", %s before reset", formatGrantTimeLeft(warning.ResetAt.Sub(warning.ProjectedExhaustionAt)))
+		}
+		b.WriteString(".\n")
+	}
+	if !warning.ResetAt.IsZero() {
+		fmt.Fprintf(&b, "Resets %s.\n", formatTime(warning.ResetAt))
+	}
+	if warning.Confidence == "low" || warning.Confidence == "none" {
+		confidence := warning.Confidence
+		if confidence == "none" {
+			confidence = "very low"
+		}
+		fmt.Fprintf(&b, "\n<i>%s confidence estimate. ", html.EscapeString(confidence))
+	} else {
+		b.WriteString("\n<i>")
+	}
+	b.WriteString("I won’t repeat this warning before the window resets.</i>")
 	return b.String()
 }
 

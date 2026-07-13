@@ -13,7 +13,7 @@ import (
 
 func legacySnapshot(t *testing.T, s *Store) string {
 	t.Helper()
-	rows, err := s.db.Query(`select type,name,coalesce(sql,'') from sqlite_master where name not like 'sqlite_%' and name not in ('profiles','profile_accounts','profile_poll_health','profiles_one_default','profiles_provider_identity','profile_accounts_current','profile_accounts_owner') order by type,name`)
+	rows, err := s.db.Query(`select type,name,coalesce(sql,'') from sqlite_master where name not like 'sqlite_%' and name not in ('profiles','profile_accounts','profile_poll_health','profiles_one_default','profiles_provider_identity','profile_accounts_current','profile_accounts_owner','pacing_alert_states','pacing_warning_events','idx_pacing_warning_events_account_detected','idx_pacing_warning_events_retention') order by type,name`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func legacySnapshot(t *testing.T, s *Store) string {
 		t.Fatal(err)
 	}
 	_ = rows.Close()
-	tables, err := s.db.Query(`select name from sqlite_master where type='table' and name not like 'sqlite_%' and name not in ('profiles','profile_accounts','profile_poll_health','schema_migrations') order by name`)
+	tables, err := s.db.Query(`select name from sqlite_master where type='table' and name not like 'sqlite_%' and name not in ('profiles','profile_accounts','profile_poll_health','pacing_alert_states','pacing_warning_events','schema_migrations') order by name`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func legacySnapshot(t *testing.T, s *Store) string {
 
 func makeProfileV10(t *testing.T, s *Store) {
 	t.Helper()
-	if _, err := s.db.Exec(`drop table profile_poll_health; drop table profile_accounts; drop table profiles; delete from schema_migrations where version=11`); err != nil {
+	if _, err := s.db.Exec(`drop table pacing_warning_events; drop table pacing_alert_states; drop table profile_poll_health; drop table profile_accounts; drop table profiles; delete from schema_migrations where version>=11`); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -404,7 +404,7 @@ func TestProfileMigrationFutureSchemaRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.db.Exec(`insert into schema_migrations values(12,'future')`); err != nil {
+	if _, err = s.db.Exec(`insert into schema_migrations values(?,'future')`, SchemaVersion+1); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()

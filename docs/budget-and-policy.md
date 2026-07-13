@@ -20,6 +20,12 @@ hour. Reports include remaining percentage points, cycle and recent burn, a
 conservative pace, safe hourly/daily allowance, projected exhaustion, temporal
 margin, risk, freshness, confidence, and machine-readable reason codes.
 
+The default terminal view translates those fields into an operator-facing
+summary: `on track`, `pace is getting tight`, or `spending too fast`; current
+pace versus sustainable pace; and how long before reset the quota is projected
+to run out. Internal reason codes remain available in `--json` but are omitted
+from human output.
+
 Codex recent burn considers matching durable observations between 10 minutes
 and 24 hours before the current observation. Reset changes, counter decreases,
 and incompatible windows are excluded with explicit reasons. Claude currently
@@ -28,6 +34,26 @@ Derived budget reports are recomputed and never stored in SQLite.
 
 The JSON Schema is
 [`schemas/budget.schema.json`](../schemas/budget.schema.json).
+
+## Pacing Warnings
+
+The resident Codex poller evaluates the same deterministic budget report before
+it stores the current observation. A proactive pacing warning is eligible only
+when a primary five-hour or weekly window is `high` risk, more than 20 percent
+remains, and the report has enough data to project exhaustion. Each window can
+emit at most one warning for a given reset timestamp.
+
+This boundary is deliberately quiet. `critical` pacing does not emit a second
+notification, and the pacing warning does not repeat as estimates fluctuate.
+The existing remaining-quota checkpoints at 20, 10, 5, and 0 percent own the
+late-cycle conversation. A changed reset timestamp starts a new deduplication
+cycle and can emit one new warning if the new window is again at high risk.
+
+Schema v12 stores reset-scoped deduplication state in `pacing_alert_states` and
+typed immutable warnings in `pacing_warning_events`. Warning creation and
+canonical Telegram, webhook, or ntfy outbox intents are one SQLite transaction,
+so restarts and delivery retries cannot duplicate the semantic warning. The
+derived report itself remains recomputed rather than persisted.
 
 ## Schema v8
 

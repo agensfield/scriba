@@ -56,7 +56,15 @@ func OpenReadOnlyContext(ctx context.Context, path string) (*Store, error) {
 // LoadBudgetHistory returns chronological observations isolated to one
 // provider account. Derived budget values are never persisted.
 func (s *Store) LoadBudgetHistory(ctx context.Context, providerID, accountRef string, since time.Time) ([]budget.Observation, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return loadBudgetHistory(ctx, s.db, providerID, accountRef, since)
+}
+
+type budgetHistoryQuerier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func loadBudgetHistory(ctx context.Context, q budgetHistoryQuerier, providerID, accountRef string, since time.Time) ([]budget.Observation, error) {
+	rows, err := q.QueryContext(ctx, `
 select o.id, o.observed_at, w.label, w.used_percent, w.reset_at, w.period_duration_ms
 from limit_observations o
 join observed_windows w on w.observation_id = o.id

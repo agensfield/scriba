@@ -46,7 +46,15 @@ Claude Code and Codex usage tracker.
   local token counts and intentionally have no `--fast` mode. Codex may use up
   to 24 hours of matching durable observations; Claude is current-cycle only.
   Fixed-clock properties prove projected exhaustion never moves later as used
-  percentage increases.
+  percentage increases. Human output now explains the risk, pace, sustainable
+  allowance, projected exhaustion, and lead before reset in ordinary language;
+  machine-readable reason codes remain in the unchanged JSON contract.
+- Schema v12 adds durable, reset-scoped Codex pacing warnings. Primary five-hour
+  and weekly windows warn once when high risk is first observed with more than
+  20 percent remaining. Critical risk does not produce an extra pacing alert;
+  the existing 20/10/5/0-percent remaining checkpoints own late-cycle warnings.
+  Typed pacing events and all configured delivery intents are committed
+  atomically through the canonical outbox.
 - Pricing is embedded from a hash-bound reviewed offline catalog. Maintainer
   refresh writes a candidate only; CI validates provenance, aliases, rates,
   tier thresholds, boundary goldens, and deterministic generation without

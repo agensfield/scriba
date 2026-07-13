@@ -26,7 +26,7 @@ CLI, resident server, Telegram, Unix HTTP/SSE API, and stdio MCP.
 - Resident Telegram bot with `/profiles`, profile-aware `/limits`, `/grants`,
   `/profile`, plus `/refresh`, `/health`,
   `/stats`, `/lastreset`, `/settings`, and radar commands.
-- Telegram notifications for weekly resets, low remaining limits, reset-grant
+- Telegram notifications for weekly resets, deduplicated pacing risk, low remaining limits, reset-grant
   expiry checkpoints, service health, and Codex Radar probability milestones.
 - Local SQLite cache/state. Source logs and provider APIs remain authoritative.
 - JSON-only `scriba context --json [--profile <id>]` for an allowlisted,

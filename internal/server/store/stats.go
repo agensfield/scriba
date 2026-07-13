@@ -143,6 +143,8 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		"notification_deliveries",
 		"limit_warning_events",
 		"limit_warning_deliveries",
+		"pacing_alert_states",
+		"pacing_warning_events",
 		"reset_grant_warning_events",
 		"reset_grant_warning_deliveries",
 		"reset_grant_tracking_state",

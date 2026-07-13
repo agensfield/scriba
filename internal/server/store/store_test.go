@@ -638,6 +638,27 @@ insert into telegram_updates(bot_ref,update_id,raw_json,status,attempts,availabl
 	}
 }
 
+func TestPruneObservationsBoundsPacingWarningsWithoutDeletingActiveWork(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.db.Exec(`
+insert into accounts(account_ref,provider_id,label,email,plan,updated_at) values('pace-retention','codex','retention','','pro','2026-06-01T00:00:00Z');
+insert into pacing_warning_events(id,provider_id,account_ref,account_label,window_key,label,risk,confidence,used_percent,remaining_percent,pace_per_hour,safe_per_hour,projected_exhaustion_at,reset_at,detected_at,created_at) values
+ ('old-terminal','codex','pace-retention','retention','primary.weekly','Weekly limit','high','low',40,60,1.5,.5,'2026-01-03T00:00:00Z','2026-01-07T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
+ ('old-active','codex','pace-retention','retention','primary.five_hour','5h limit','high','low',40,60,20,12,'2026-01-01T02:00:00Z','2026-01-01T05:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
+insert into notification_outbox(id,event_kind,source,profile_ref,account_ref,event_id,target,payload_version,payload_json,status,attempts,available_at,delivered_at,created_at,updated_at) values
+ ('pace-terminal','pacing_warning','budget-v1','default','pace-retention','old-terminal','telegram:1',1,'{}','delivered',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
+ ('pace-active','pacing_warning','budget-v1','default','pace-retention','old-active','telegram:1',1,'{}','pending',0,'2026-01-01T00:00:00Z',null,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');`); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.PruneObservations(t.Context(), parseTime("2026-05-01T00:00:00Z"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DeletedEvents != 1 || result.DeletedDeliveries != 1 || countRows(t, store, "pacing_warning_events") != 1 || countRows(t, store, "notification_outbox") != 1 {
+		t.Fatalf("unexpected pacing retention result: %#v", result)
+	}
+}
+
 func TestPruneObservationsRollsBackEveryTableOnInvalidTimestamp(t *testing.T) {
 	store := openTestStore(t)
 	if _, err := store.db.Exec(`

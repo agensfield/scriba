@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server/store"
@@ -56,6 +57,7 @@ func TestCanonicalEnvelopeSupportsEveryOutboxKind(t *testing.T) {
 	}{
 		{"reset", resetwatch.Event{ID: "reset", Account: account, PrimaryTriggerLabel: "Weekly limit", SecondaryTriggerLabels: []string{}, ResetKind: "scheduled", PreviousResetAt: at, CurrentResetAt: at.Add(7 * 24 * time.Hour), DetectedAt: at, PreviousSnapshotJSON: []byte(`{}`), CurrentSnapshotJSON: []byte(`{}`)}},
 		{"limit_warning", resetwatch.WarningEvent{ID: "warning", Account: account, Label: "Weekly limit", ResetAt: at.Add(time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: at}},
+		{"pacing_warning", budget.PacingAlert{ID: "pacing", AccountRef: account.Ref, AccountLabel: account.Label, WindowKey: "primary.weekly", Label: "Weekly limit", Risk: "high", Confidence: "low", UsedPercent: 40, RemainingPercentPoints: 60, PacePercentPointsPerHour: 1.65, SafePercentPointsPerHour: .42, ProjectedExhaustionAt: at.Add(48 * time.Hour), ResetAt: at.Add(7 * 24 * time.Hour), DetectedAt: at}},
 		{"reset_grant_warning", resetwatch.GrantExpiryWarning{ID: "grant-warning", Account: account, CreditTitle: "Full reset", ExpiresAt: at.Add(24 * time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: at}},
 		{"reset_grant", resetwatch.ResetGrantEvent{ID: "grant", Account: account, CreditTitle: "Full reset", GrantedAt: at, ExpiresAt: at.Add(24 * time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: at}},
 		{"radar_alert", radar.ProbabilityAlert{ID: "radar", Milestone: 50, DetectedAt: at, SnapshotJSON: []byte(`{}`)}},

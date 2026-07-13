@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agensfield/scriba/internal/budget"
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
@@ -184,6 +185,11 @@ func (s *Service) NotifyReset(ctx context.Context, event resetwatch.Event) error
 }
 
 func (s *Service) NotifyLimitWarning(ctx context.Context, warning resetwatch.WarningEvent) error {
+	s.wakeOutbox()
+	return nil
+}
+
+func (s *Service) NotifyPacingWarning(ctx context.Context, warning budget.PacingAlert) error {
 	s.wakeOutbox()
 	return nil
 }
@@ -565,6 +571,8 @@ func (s *Service) retryDeliveriesOnce(ctx context.Context) {
 				text = RenderReset(event)
 			case resetwatch.WarningEvent:
 				text = RenderLimitWarning(event)
+			case budget.PacingAlert:
+				text = RenderPacingWarning(event)
 			case resetwatch.GrantExpiryWarning:
 				text = RenderGrantExpiryWarning(event)
 			case resetwatch.ResetGrantEvent:

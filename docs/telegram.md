@@ -180,6 +180,7 @@ The schema-v7 proof receipt is in `docs/schema-v7-migration.md`.
 The resident server can send:
 
 - weekly reset notifications
+- proactive Codex pacing warnings
 - low limit warnings
 - reset-grant expiry warnings at 5 days, 3 days, and 1 day before expiry
 - Codex Radar probability milestone alerts
@@ -187,6 +188,14 @@ The resident server can send:
 
 Reset-grant warnings are tracked per grant id and expiry timestamp. If multiple
 grants are available, each grant has its own expiry schedule and dedupe key.
+
+Pacing warnings are intentionally sparse. Scriba warns once per primary
+five-hour or weekly reset window when the budget first reaches high risk while
+more than 20 percent remains. The card explains current versus sustainable
+pace, projected exhaustion, and reset time. It does not repeat within that
+window, and it does not send a separate critical-risk warning; the existing
+20/10/5/0-percent remaining alerts take over from there. Delivery uses the same
+durable canonical outbox and retry rules as every other notification.
 
 Wave 3.3 live evidence is stored on the devbox at
 `/home/arda/.local/state/scriba/deployments/wave33-ce03c7a`. The deployed

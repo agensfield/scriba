@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
 )
@@ -77,7 +78,7 @@ func EnqueueOutbox(ctx context.Context, tx *sql.Tx, in OutboxEnqueue, now time.T
 		return errors.New("invalid outbox envelope")
 	}
 	switch in.EventKind {
-	case "reset", "limit_warning", "reset_grant_warning", "reset_grant":
+	case "reset", "limit_warning", "pacing_warning", "reset_grant_warning", "reset_grant":
 		if in.AccountRef == "" || in.ProfileRef == "" {
 			return ErrOutboxScope
 		}
@@ -353,6 +354,10 @@ func EncodeOutboxPayload(kind string, event any) (string, error) {
 			return "", err
 		}
 		m["label"], m["threshold_remaining"], m["used_percent"], m["remaining_percent"], m["reset_at"], m["snapshot"], m["detected_at"] = e.Label, e.ThresholdRemaining, e.UsedPercent, e.RemainingPercent, formatTime(e.ResetAt), s, formatTime(e.DetectedAt)
+	case budget.PacingAlert:
+		m["provider_id"], m["account_label"], m["window_key"], m["label"], m["risk"], m["confidence"] = e.ProviderID, e.AccountLabel, e.WindowKey, e.Label, e.Risk, e.Confidence
+		m["used_percent"], m["remaining_percent"], m["pace_per_hour"], m["safe_per_hour"] = e.UsedPercent, e.RemainingPercentPoints, e.PacePercentPointsPerHour, e.SafePercentPointsPerHour
+		m["projected_exhaustion_at"], m["reset_at"], m["detected_at"] = formatTime(e.ProjectedExhaustionAt), formatTime(e.ResetAt), formatTime(e.DetectedAt)
 	case resetwatch.GrantExpiryWarning:
 		account(e.Account)
 		s, err := raw(e.SnapshotJSON)
@@ -414,6 +419,8 @@ func DecodeOutboxPayload(message OutboxMessage) (any, error) {
 		return resetwatch.Event{ID: message.EventID, Account: account, PrimaryTriggerLabel: str("primary_trigger_label"), SecondaryTriggerLabels: labels, ResetKind: str("reset_kind"), PreviousResetAt: parseDBTime(str("previous_reset_at")), CurrentResetAt: parseDBTime(str("current_reset_at")), PreviousSnapshotJSON: snapshot("previous_snapshot"), CurrentSnapshotJSON: snapshot("current_snapshot"), JokeID: str("joke_id"), DetectedAt: parseDBTime(str("detected_at"))}, nil
 	case "limit_warning":
 		return resetwatch.WarningEvent{ID: message.EventID, Account: account, Label: str("label"), ThresholdRemaining: integer("threshold_remaining"), UsedPercent: num("used_percent"), RemainingPercent: num("remaining_percent"), ResetAt: parseDBTime(str("reset_at")), SnapshotJSON: snapshot("snapshot"), DetectedAt: parseDBTime(str("detected_at"))}, nil
+	case "pacing_warning":
+		return budget.PacingAlert{ID: message.EventID, ProviderID: str("provider_id"), AccountRef: message.AccountRef, AccountLabel: str("account_label"), WindowKey: str("window_key"), Label: str("label"), Risk: str("risk"), Confidence: str("confidence"), UsedPercent: num("used_percent"), RemainingPercentPoints: num("remaining_percent"), PacePercentPointsPerHour: num("pace_per_hour"), SafePercentPointsPerHour: num("safe_per_hour"), ProjectedExhaustionAt: parseDBTime(str("projected_exhaustion_at")), ResetAt: parseDBTime(str("reset_at")), DetectedAt: parseDBTime(str("detected_at"))}, nil
 	case "reset_grant_warning":
 		return resetwatch.GrantExpiryWarning{ID: message.EventID, Account: account, CreditID: str("credit_id"), CreditTitle: str("credit_title"), ThresholdDays: integer("threshold_days"), ExpiresAt: parseDBTime(str("expires_at")), SnapshotJSON: snapshot("snapshot"), DetectedAt: parseDBTime(str("detected_at"))}, nil
 	case "reset_grant":

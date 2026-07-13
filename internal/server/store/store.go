@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 11
+const SchemaVersion = 12
 
 const deliverySendLease = 10 * time.Minute
 
@@ -239,6 +239,9 @@ on conflict(version) do nothing`, 6, formatTime(time.Now()))
 	if err := s.migrateProfiles(ctx); err != nil {
 		return err
 	}
+	if err := s.migratePacingAlerts(ctx); err != nil {
+		return err
+	}
 	return s.ensureRetentionIndexes(ctx)
 }
 
@@ -252,6 +255,7 @@ create index if not exists idx_limit_warning_events_retention on limit_warning_e
 create index if not exists idx_reset_grant_warning_events_retention on reset_grant_warning_events(detected_at);
 create index if not exists idx_reset_grant_events_retention on reset_grant_events(detected_at);
 create index if not exists idx_radar_alert_events_retention on radar_alert_events(detected_at);
+create index if not exists idx_pacing_warning_events_retention on pacing_warning_events(detected_at);
 create index if not exists idx_policy_events_retention on policy_events(detected_at);`)
 	return err
 }
@@ -839,6 +843,15 @@ func (s *Store) PruneObservations(ctx context.Context, cutoff time.Time, compact
 		}
 		result.DeletedEvents += count
 	}
+	pacingIDs, err := expiredRowIDs(ctx, tx, cutoff, `select id,detected_at from pacing_warning_events where detected_at < ? and not exists(select 1 from notification_outbox o where o.event_kind='pacing_warning' and o.event_id=pacing_warning_events.id and o.status in ('pending','leased'))`, candidateBound)
+	if err != nil {
+		return result, err
+	}
+	count, err := deleteRowsByID(ctx, tx, `delete from pacing_warning_events where id in`, pacingIDs)
+	if err != nil {
+		return result, err
+	}
+	result.DeletedEvents += count
 
 	// Deleting policy events turns replay mappings into tombstones. Keep only the
 	// newest tombstone per account as its explicit prune floor. This bounds the
@@ -848,7 +861,7 @@ func (s *Store) PruneObservations(ctx context.Context, cutoff time.Time, compact
 	if err != nil {
 		return result, err
 	}
-	count, err := deleteRowsByID(ctx, tx, `delete from policy_events where id in`, policyIDs)
+	count, err = deleteRowsByID(ctx, tx, `delete from policy_events where id in`, policyIDs)
 	if err != nil {
 		return result, err
 	}

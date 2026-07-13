@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server/store"
@@ -53,6 +54,21 @@ func FromOutbox(message store.OutboxMessage) (Envelope, error) {
 			RemainingPercent   float64   `json:"remainingPercent"`
 			ResetAt            time.Time `json:"resetAt"`
 		}{bounded(event.Account.Label, 128), bounded(event.Label, 128), event.ThresholdRemaining, event.UsedPercent, event.RemainingPercent, event.ResetAt}
+	case budget.PacingAlert:
+		occurredAt = event.DetectedAt
+		data = struct {
+			AccountLabel          string    `json:"accountLabel,omitempty"`
+			WindowKey             string    `json:"windowKey"`
+			Label                 string    `json:"label"`
+			Risk                  string    `json:"risk"`
+			Confidence            string    `json:"confidence"`
+			UsedPercent           float64   `json:"usedPercent"`
+			RemainingPercent      float64   `json:"remainingPercent"`
+			PacePerHour           float64   `json:"pacePercentPointsPerHour"`
+			SafePerHour           float64   `json:"safePercentPointsPerHour"`
+			ProjectedExhaustionAt time.Time `json:"projectedExhaustionAt"`
+			ResetAt               time.Time `json:"resetAt"`
+		}{bounded(event.AccountLabel, 128), bounded(event.WindowKey, 128), bounded(event.Label, 128), event.Risk, event.Confidence, event.UsedPercent, event.RemainingPercentPoints, event.PacePercentPointsPerHour, event.SafePercentPointsPerHour, event.ProjectedExhaustionAt, event.ResetAt}
 	case resetwatch.GrantExpiryWarning:
 		occurredAt = event.DetectedAt
 		data = struct {

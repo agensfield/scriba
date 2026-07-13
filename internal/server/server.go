@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/buildinfo"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/radar"
@@ -76,6 +77,7 @@ type Notifier interface {
 	NotifyBaseline(context.Context, BaselineNotice) error
 	NotifyReset(context.Context, resetwatch.Event) error
 	NotifyLimitWarning(context.Context, resetwatch.WarningEvent) error
+	NotifyPacingWarning(context.Context, budget.PacingAlert) error
 	NotifyGrantExpiryWarning(context.Context, resetwatch.GrantExpiryWarning) error
 	NotifyResetGrant(context.Context, resetwatch.ResetGrantEvent) error
 	NotifyRadarProbability(context.Context, radar.ProbabilityAlert) error
@@ -128,15 +130,16 @@ type BaselineNotice struct {
 }
 
 type PollResult struct {
-	Profile       ProfileIdentity
-	Observation   resetwatch.Observation
-	Decision      resetwatch.Decision
-	Inserted      int
-	Warnings      []resetwatch.WarningEvent
-	GrantWarnings []resetwatch.GrantExpiryWarning
-	ResetGrants   []resetwatch.ResetGrantEvent
-	RadarAlerts   []radar.ProbabilityAlert
-	Baseline      bool
+	Profile        ProfileIdentity
+	Observation    resetwatch.Observation
+	Decision       resetwatch.Decision
+	Inserted       int
+	Warnings       []resetwatch.WarningEvent
+	PacingWarnings []budget.PacingAlert
+	GrantWarnings  []resetwatch.GrantExpiryWarning
+	ResetGrants    []resetwatch.ResetGrantEvent
+	RadarAlerts    []radar.ProbabilityAlert
+	Baseline       bool
 }
 
 type ProfilePollFailure struct {
@@ -596,6 +599,7 @@ func (s *Server) pollProfile(ctx context.Context, profile Profile) (PollResult, 
 		}
 	}
 	warnings := applied.WarningEvents
+	pacingWarnings := applied.PacingWarnings
 	grantWarnings := applied.GrantExpiryWarningEvents
 	resetGrants := applied.ResetGrantEvents
 	if inserted > 0 {
@@ -610,6 +614,11 @@ func (s *Server) pollProfile(ctx context.Context, profile Profile) (PollResult, 
 			s.logger.Warn("scriba limit warning notification failed", "warning_id", warning.ID, "error", err)
 		}
 	}
+	for _, warning := range pacingWarnings {
+		if err := s.notifier.NotifyPacingWarning(ctx, warning); err != nil {
+			s.logger.Warn("scriba pacing warning notification failed", "warning_id", warning.ID, "error", err)
+		}
+	}
 	for _, warning := range grantWarnings {
 		if err := s.notifier.NotifyGrantExpiryWarning(ctx, warning); err != nil {
 			s.logger.Warn("scriba reset grant warning notification failed", "warning_id", warning.ID, "error", err)
@@ -620,7 +629,7 @@ func (s *Server) pollProfile(ctx context.Context, profile Profile) (PollResult, 
 			s.logger.Warn("scriba reset grant loaded notification failed", "event_id", event.ID, "error", err)
 		}
 	}
-	return PollResult{Profile: ProfileIdentity{Ref: profile.Ref, Label: profile.Label}, Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, GrantWarnings: grantWarnings, ResetGrants: resetGrants, Baseline: baseline}, "", nil
+	return PollResult{Profile: ProfileIdentity{Ref: profile.Ref, Label: profile.Label}, Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, PacingWarnings: pacingWarnings, GrantWarnings: grantWarnings, ResetGrants: resetGrants, Baseline: baseline}, "", nil
 }
 
 func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
@@ -805,6 +814,10 @@ func (NoopNotifier) NotifyReset(context.Context, resetwatch.Event) error {
 }
 
 func (NoopNotifier) NotifyLimitWarning(context.Context, resetwatch.WarningEvent) error {
+	return nil
+}
+
+func (NoopNotifier) NotifyPacingWarning(context.Context, budget.PacingAlert) error {
 	return nil
 }
 

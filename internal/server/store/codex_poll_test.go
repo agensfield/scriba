@@ -109,6 +109,55 @@ func TestApplyCodexPollTreatsTemporaryFiveHourDisappearanceAsAbsence(t *testing.
 	}
 }
 
+func TestApplyCodexPollPacingAlertsOnceBeforeQuotaWarningsTakeOver(t *testing.T) {
+	s := openPollStore(t)
+	ctx := context.Background()
+	cycleStart := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
+	resetAt := cycleStart.Add(7 * 24 * time.Hour)
+	period := int64((7 * 24 * time.Hour) / time.Millisecond)
+	observation := func(at time.Time, used float64) resetwatch.Observation {
+		return resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "acct", Label: "Personal"}, ObservedAt: at, SnapshotJSON: []byte(`{"source":"pacing"}`), Windows: []resetwatch.Window{{Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used, ResetAt: resetAt, PeriodDurationMs: &period}}}
+	}
+
+	first, err := s.ApplyCodexPoll(ctx, pollInput(observation(cycleStart.Add(48*time.Hour), 40), "telegram:42"))
+	if err != nil || len(first.PacingWarnings) != 1 || first.PacingWarnings[0].Risk != "high" {
+		t.Fatalf("first pacing warnings=%+v err=%v", first.PacingWarnings, err)
+	}
+	second, err := s.ApplyCodexPoll(ctx, pollInput(observation(cycleStart.Add(49*time.Hour), 42), "telegram:42"))
+	if err != nil || len(second.PacingWarnings) != 0 {
+		t.Fatalf("repeated high warning=%+v err=%v", second.PacingWarnings, err)
+	}
+	critical, err := s.ApplyCodexPoll(ctx, pollInput(observation(cycleStart.Add(50*time.Hour), 100), "telegram:42"))
+	if err != nil || len(critical.PacingWarnings) != 0 || len(critical.WarningEvents) != 1 {
+		t.Fatalf("critical pacing warnings=%+v err=%v", critical.PacingWarnings, err)
+	}
+	repeated, err := s.ApplyCodexPoll(ctx, pollInput(observation(cycleStart.Add(51*time.Hour), 100), "telegram:42"))
+	if err != nil || len(repeated.PacingWarnings) != 0 {
+		t.Fatalf("repeated critical warning=%+v err=%v", repeated.PacingWarnings, err)
+	}
+	resetAt = resetAt.Add(7 * 24 * time.Hour)
+	newCycle, err := s.ApplyCodexPoll(ctx, pollInput(observation(cycleStart.Add(9*24*time.Hour), 40), "telegram:42"))
+	if err != nil || len(newCycle.PacingWarnings) != 1 || newCycle.PacingWarnings[0].Risk != "high" {
+		t.Fatalf("new-cycle pacing warnings=%+v err=%v", newCycle.PacingWarnings, err)
+	}
+
+	var events, outbox, alerted int
+	if err := s.db.QueryRow(`select (select count(*) from pacing_warning_events),(select count(*) from notification_outbox where event_kind='pacing_warning'),(select alerted from pacing_alert_states where window_key='primary.weekly')`).Scan(&events, &outbox, &alerted); err != nil {
+		t.Fatal(err)
+	}
+	if events != 2 || outbox != 2 || alerted != 1 {
+		t.Fatalf("events=%d outbox=%d alerted=%d", events, outbox, alerted)
+	}
+	message := OutboxMessage{EventKind: "pacing_warning", AccountRef: "acct", EventID: first.PacingWarnings[0].ID, PayloadVersion: 1}
+	if err := s.db.QueryRow(`select payload_json from notification_outbox where event_kind='pacing_warning' and event_id=?`, message.EventID).Scan(&message.PayloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeOutboxPayload(message)
+	if err != nil || !reflect.DeepEqual(decoded, first.PacingWarnings[0]) {
+		t.Fatalf("decoded=%+v want=%+v err=%v", decoded, first.PacingWarnings[0], err)
+	}
+}
+
 func TestApplyCodexPollTransitionFixturesPersistExactPolicyAndOutbox(t *testing.T) {
 	s := openPollStore(t)
 	ctx := context.Background()

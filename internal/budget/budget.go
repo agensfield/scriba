@@ -43,6 +43,26 @@ type Report struct {
 	History       History   `json:"history"`
 	Windows       []Window  `json:"windows"`
 }
+
+// PacingAlert is the durable notification projection for a budget risk
+// transition. The full budget report remains the machine-readable source.
+type PacingAlert struct {
+	ID                       string
+	ProviderID               string
+	AccountRef               string
+	AccountLabel             string
+	WindowKey                string
+	Label                    string
+	Risk                     string
+	Confidence               string
+	UsedPercent              float64
+	RemainingPercentPoints   float64
+	PacePercentPointsPerHour float64
+	SafePercentPointsPerHour float64
+	ProjectedExhaustionAt    time.Time
+	ResetAt                  time.Time
+	DetectedAt               time.Time
+}
 type History struct {
 	State       HistoryState `json:"state"`
 	SampleCount int          `json:"sampleCount"`
