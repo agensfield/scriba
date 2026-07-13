@@ -118,6 +118,13 @@ Claude Code and Codex usage tracker.
   navigation, private-only empty-allowlist compatibility, explicit group-user
   allowlisting, inaccessible-message authorization, stale-control retirement,
   closed callback logging, and durable callback failure propagation.
+- Wave 3.3 is deployed on the devbox at `ce03c7a`, schema 11. The Linux amd64
+  artifact SHA-256 is
+  `e4387d92f4525a470a64d9386c73d871071e966d896291037ad25c8e88371b1e`.
+  Health/profile, empty queues, integrity, all 12 Bot API commands, and journal
+  smokes passed. Live evidence is under
+  `/home/arda/.local/state/scriba/deployments/wave33-ce03c7a`; one human inline
+  profile-button tap remains the interactive callback proof.
 - The resident server now evaluates the closed policy kinds
   `remaining_checkpoint`, `reset_transition`, `grant_available`, and
   `grant_expiry_checkpoint`. Its `current` preset preserves the existing

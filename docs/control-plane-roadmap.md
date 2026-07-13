@@ -303,7 +303,9 @@ and real SQLite-to-both-adapters parity are proven. Telegram parity passed
 through `68814b1`: versioned profile pages/actions, bounded callback/HTML
 surfaces, explicit group-user allowlisting, inaccessible-message authorization,
 stale-control retirement, closed logging, and durable API-failure propagation.
-Wave 3.3 is locally complete; live bot deployment/smoke remains.
+Wave 3.3 is deployed at `ce03c7a`; health, schema-11 integrity, queues, command
+registration, and journal smokes passed. One human inline profile-button tap
+remains the interactive callback proof.
 
 ### 3.4 Operational and release parity
 
@@ -421,3 +423,11 @@ CLI/server operational and release work.
   controls or fall back. Chat-backed inaccessible messages remain authorized,
   unknown callback logs are closed, and callback API failures propagate to the
   durable inbox. Two adversarial review rounds and full local gates passed.
+- 2026-07-13: Wave 3.3 deployed at `ce03c7a` after CI run `29215414130`
+  passed every job. Linux amd64 SHA-256 is
+  `e4387d92f4525a470a64d9386c73d871071e966d896291037ad25c8e88371b1e`.
+  Live schema 11 remained healthy with zero pending/leased/dead inbox or outbox
+  work, all 12 Telegram commands registered, `quick_check=ok`, and a clean
+  journal. The previous `538d557` binary is preserved in the deployment
+  evidence directory. The macOS SSE CI flake was fixed at `ce03c7a` by waiting
+  for stream-slot release; the focused test passed 100 normal and 20 race runs.
