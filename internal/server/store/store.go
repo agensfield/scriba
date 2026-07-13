@@ -52,6 +52,10 @@ type PruneResult struct {
 	Cutoff              time.Time
 	DeletedObservations int64
 	DeletedWindows      int64
+	DeletedEvents       int64
+	DeletedDeliveries   int64
+	DeletedReplayRows   int64
+	DeletedInboxRows    int64
 	Checkpointed        bool
 	Vacuumed            bool
 }
@@ -232,7 +236,24 @@ on conflict(version) do nothing`, 6, formatTime(time.Now()))
 	if err := s.migratePolicyEventReplay(ctx); err != nil {
 		return err
 	}
-	return s.migrateProfiles(ctx)
+	if err := s.migrateProfiles(ctx); err != nil {
+		return err
+	}
+	return s.ensureRetentionIndexes(ctx)
+}
+
+func (s *Store) ensureRetentionIndexes(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+create index if not exists idx_limit_observations_retention on limit_observations(observed_at);
+create index if not exists idx_notification_outbox_retention on notification_outbox(status,updated_at);
+create index if not exists idx_telegram_updates_retention on telegram_updates(status,updated_at);
+create index if not exists idx_reset_events_retention on reset_events(detected_at);
+create index if not exists idx_limit_warning_events_retention on limit_warning_events(detected_at);
+create index if not exists idx_reset_grant_warning_events_retention on reset_grant_warning_events(detected_at);
+create index if not exists idx_reset_grant_events_retention on reset_grant_events(detected_at);
+create index if not exists idx_radar_alert_events_retention on radar_alert_events(detected_at);
+create index if not exists idx_policy_events_retention on policy_events(detected_at);`)
+	return err
 }
 
 func (s *Store) migrateNotificationDeliveries(ctx context.Context) error {
@@ -750,32 +771,151 @@ func (s *Store) PruneObservations(ctx context.Context, cutoff time.Time, compact
 		return result, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	cutoffValue := formatTime(cutoff)
-	if err := tx.QueryRowContext(ctx, `
-select count(*)
-from observed_windows
-where observation_id in (select id from limit_observations where observed_at < ?)`, cutoffValue).Scan(&result.DeletedWindows); err != nil {
-		return result, err
-	}
-	deleted, err := tx.ExecContext(ctx, `delete from limit_observations where observed_at < ?`, cutoffValue)
+	candidateBound := formatTime(cutoff.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour))
+	observationIDs, err := expiredRowIDs(ctx, tx, cutoff, `select id,observed_at from limit_observations where observed_at < ?`, candidateBound)
 	if err != nil {
 		return result, err
 	}
-	result.DeletedObservations, _ = deleted.RowsAffected()
+	result.DeletedWindows, err = deleteRowsByID(ctx, tx, `delete from observed_windows where observation_id in`, observationIDs)
+	if err != nil {
+		return result, err
+	}
+	result.DeletedObservations, err = deleteRowsByID(ctx, tx, `delete from limit_observations where id in`, observationIDs)
+	if err != nil {
+		return result, err
+	}
+
+	// Queue work is retained until it reaches a terminal state. Terminal rows use
+	// updated_at so a recently retried or acknowledged item cannot be removed by
+	// an old creation timestamp.
+	outboxIDs, err := expiredRowIDs(ctx, tx, cutoff, `select id,updated_at from notification_outbox where status in ('delivered','dead_letter') and updated_at < ?`, candidateBound)
+	if err != nil {
+		return result, err
+	}
+	result.DeletedDeliveries, err = deleteRowsByID(ctx, tx, `delete from notification_outbox where id in`, outboxIDs)
+	if err != nil {
+		return result, err
+	}
+	inboxIDs, err := expiredRowIDs(ctx, tx, cutoff, `select cast(rowid as text),updated_at from telegram_updates where status in ('processed','dead') and updated_at < ?`, candidateBound)
+	if err != nil {
+		return result, err
+	}
+	result.DeletedInboxRows, err = deleteRowsByID(ctx, tx, `delete from telegram_updates where rowid in`, inboxIDs)
+	if err != nil {
+		return result, err
+	}
+
+	// The canonical outbox is authoritative after schema v7. Legacy delivery
+	// ledgers and their typed source events may be removed only when no active
+	// canonical delivery still refers to the event.
+	for _, pair := range []struct {
+		deliveryTable string
+		deliveryKey   string
+		eventTable    string
+		eventKind     string
+	}{
+		{"notification_deliveries", "event_id", "reset_events", "reset"},
+		{"limit_warning_deliveries", "warning_id", "limit_warning_events", "limit_warning"},
+		{"reset_grant_warning_deliveries", "warning_id", "reset_grant_warning_events", "reset_grant_warning"},
+		{"reset_grant_deliveries", "event_id", "reset_grant_events", "reset_grant"},
+		{"radar_alert_deliveries", "alert_id", "radar_alert_events", "radar_alert"},
+	} {
+		// #nosec G201 -- identifiers and event kinds come from the closed literal list above.
+		query := fmt.Sprintf(`select e.id,e.detected_at from %s e where e.detected_at < ? and not exists(select 1 from notification_outbox o where o.event_kind=? and o.event_id=e.id and o.status in ('pending','leased'))`, pair.eventTable)
+		eventIDs, loadErr := expiredRowIDs(ctx, tx, cutoff, query, candidateBound, pair.eventKind)
+		if loadErr != nil {
+			return result, loadErr
+		}
+		// #nosec G201 -- identifiers come from the closed literal list above.
+		count, deleteErr := deleteRowsByID(ctx, tx, fmt.Sprintf(`delete from %s where %s in`, pair.deliveryTable, pair.deliveryKey), eventIDs)
+		if deleteErr != nil {
+			return result, deleteErr
+		}
+		result.DeletedDeliveries += count
+		// #nosec G201 -- identifier comes from the closed literal list above.
+		count, deleteErr = deleteRowsByID(ctx, tx, fmt.Sprintf(`delete from %s where id in`, pair.eventTable), eventIDs)
+		if deleteErr != nil {
+			return result, deleteErr
+		}
+		result.DeletedEvents += count
+	}
+
+	// Deleting policy events turns replay mappings into tombstones. Keep only the
+	// newest tombstone per account as its explicit prune floor. This bounds the
+	// ledger without confusing valid cursors when other accounts own intervening
+	// values in the global replay sequence.
+	policyIDs, err := expiredRowIDs(ctx, tx, cutoff, `select id,detected_at from policy_events where detected_at < ? and not exists(select 1 from notification_outbox o where o.event_kind=policy_events.event_kind and o.event_id=policy_events.semantic_event_id and o.status in ('pending','leased'))`, candidateBound)
+	if err != nil {
+		return result, err
+	}
+	count, err := deleteRowsByID(ctx, tx, `delete from policy_events where id in`, policyIDs)
+	if err != nil {
+		return result, err
+	}
+	result.DeletedEvents += count
+	deleted, err := tx.ExecContext(ctx, `delete from policy_event_replay as old where policy_event_id is null and exists(select 1 from policy_event_replay newer where newer.provider_id=old.provider_id and newer.account_ref=old.account_ref and newer.policy_event_id is null and newer.replay_seq>old.replay_seq)`)
+	if err != nil {
+		return result, err
+	}
+	result.DeletedReplayRows, _ = deleted.RowsAffected()
 	if err := tx.Commit(); err != nil {
 		return result, err
 	}
-	if compact && (result.DeletedObservations > 0 || result.DeletedWindows > 0) {
+	if compact && (result.DeletedObservations > 0 || result.DeletedWindows > 0 || result.DeletedEvents > 0 || result.DeletedDeliveries > 0 || result.DeletedReplayRows > 0 || result.DeletedInboxRows > 0) {
 		if err := s.Checkpoint(ctx); err != nil {
-			return result, err
+			return result, fmt.Errorf("retention committed but checkpoint failed: %w", err)
 		}
 		result.Checkpointed = true
 		if err := s.Vacuum(ctx); err != nil {
-			return result, err
+			return result, fmt.Errorf("retention committed and checkpointed but vacuum failed: %w", err)
 		}
 		result.Vacuumed = true
 	}
 	return result, nil
+}
+
+func expiredRowIDs(ctx context.Context, tx *sql.Tx, cutoff time.Time, query string, args ...any) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, err
+		}
+		at, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse retained row timestamp %q: %w", raw, err)
+		}
+		if at.Before(cutoff) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, rows.Err()
+}
+
+func deleteRowsByID(ctx context.Context, tx *sql.Tx, query string, ids []string) (int64, error) {
+	var total int64
+	const batchSize = 200
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		args := make([]any, end-start)
+		placeholders := make([]string, end-start)
+		for i, id := range ids[start:end] {
+			args[i] = id
+			placeholders[i] = "?"
+		}
+		result, err := tx.ExecContext(ctx, query+" ("+strings.Join(placeholders, ",")+")", args...)
+		if err != nil {
+			return total, err
+		}
+		count, _ := result.RowsAffected()
+		total += count
+	}
+	return total, nil
 }
 
 func (s *Store) Checkpoint(ctx context.Context) error {

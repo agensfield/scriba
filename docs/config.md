@@ -30,6 +30,7 @@ and accepts an explicit JSON config via `--config`.
   "server": {
     "enabled": false,
     "statePath": "/Users/arda/.local/state/scriba/server.sqlite",
+    "observationRetentionDays": 120,
     "contextAPI": {
       "enabled": false,
       "socketPath": "/Users/arda/.local/state/scriba/context.sock"
@@ -67,6 +68,17 @@ and accepts an explicit JSON config via `--config`.
   }
 }
 ```
+
+`server.observationRetentionDays` is the resident database history horizon and
+defaults to 120 days (accepted range 1-36500). The daily prune removes old
+observations, typed and policy events, superseded replay tombstones, terminal
+canonical and legacy deliveries, and processed/dead Telegram inbox rows.
+Pending or leased work is never
+pruned. Policy replay keeps its monotonic high-water mark plus one explicit
+per-account prune floor, so clients with a cursor older than retained history
+receive `cursor_expired` instead of a silent gap even though replay sequences
+are global across accounts. `scriba server prune` runs the same transaction on
+demand and then checkpoints and vacuums SQLite when rows changed.
 
 Config v2 establishes explicit profile identity and Codex auth routing. Profile
 IDs are stable lowercase slugs up to 32 characters; one enabled profile must be

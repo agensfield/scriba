@@ -238,6 +238,7 @@ type PolicyReplayPage struct {
 	NextCursor      int64
 	HighWater       int64
 	OldestAvailable int64
+	PrunedThrough   int64
 }
 
 func (s *Store) LoadPolicyEventReplay(ctx context.Context, providerID, accountRef string, after, ceiling int64, limit int) (PolicyReplayPage, error) {
@@ -259,7 +260,7 @@ func (s *Store) LoadPolicyEventReplay(ctx context.Context, providerID, accountRe
 		return PolicyReplayPage{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := tx.QueryRowContext(ctx, `select coalesce((select seq from sqlite_sequence where name='policy_event_replay'),0),coalesce(min(replay_seq),0) from policy_event_replay`).Scan(&page.HighWater, &page.OldestAvailable); err != nil {
+	if err := tx.QueryRowContext(ctx, `select coalesce((select seq from sqlite_sequence where name='policy_event_replay'),0),coalesce(min(replay_seq) filter(where provider_id=? and account_ref=? and policy_event_id is not null),0),coalesce(max(replay_seq) filter(where provider_id=? and account_ref=? and policy_event_id is null),0) from policy_event_replay`, providerID, accountRef, providerID, accountRef).Scan(&page.HighWater, &page.OldestAvailable, &page.PrunedThrough); err != nil {
 		return PolicyReplayPage{}, err
 	}
 	if ceiling > 0 && ceiling < page.HighWater {

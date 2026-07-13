@@ -565,6 +565,107 @@ func TestPruneObservationsKeepsEventsAndDeliveries(t *testing.T) {
 	}
 }
 
+func TestPruneObservationsBoundsTerminalQueuesAndEventHistory(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	if _, err := store.db.Exec(`
+insert into accounts(account_ref,provider_id,label,email,plan,updated_at) values('retention','codex','retention','','pro','2026-06-01T00:00:00Z');
+insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values
+ ('terminal-event','terminal-key','limit_warning','terminal-semantic','rule','weekly_limit','remaining_checkpoint','codex','retention','rev','hash',1,'{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
+ ('active-event','active-key','limit_warning','active-semantic','rule','weekly_limit','remaining_checkpoint','codex','retention','rev','hash',1,'{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
+insert into notification_outbox(id,event_kind,source,profile_ref,account_ref,event_id,target,payload_version,payload_json,status,attempts,available_at,delivered_at,created_at,updated_at) values
+ ('terminal-outbox','limit_warning','policy','default','retention','terminal-semantic','telegram:1',1,'{}','delivered',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
+ ('active-outbox','limit_warning','policy','default','retention','active-semantic','telegram:1',1,'{}','pending',0,'2026-01-01T00:00:00Z',null,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
+insert into telegram_updates(bot_ref,update_id,raw_json,status,attempts,available_at,processed_at,created_at,updated_at) values
+ ('bot',1,'{}','processed',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
+ ('bot',2,'{}','pending',0,'2026-01-01T00:00:00Z',null,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');`); err != nil {
+		t.Fatalf("seed retention rows: %v", err)
+	}
+	var highWater int64
+	if err := store.db.QueryRow(`select seq from sqlite_sequence where name='policy_event_replay'`).Scan(&highWater); err != nil {
+		t.Fatalf("load replay high-water: %v", err)
+	}
+	var eligible int
+	if err := store.db.QueryRow(`select count(*) from policy_events where detected_at < ? and not exists(select 1 from notification_outbox o where o.event_kind=policy_events.event_kind and o.event_id=policy_events.semantic_event_id and o.status in ('pending','leased'))`, "2026-05-01T00:00:00.000000000Z").Scan(&eligible); err != nil || eligible != 1 {
+		t.Fatalf("eligible policy events=%d err=%v", eligible, err)
+	}
+
+	result, err := store.PruneObservations(ctx, parseTime("2026-05-01T00:00:00Z"), false)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if result.DeletedEvents != 1 || result.DeletedDeliveries != 1 || result.DeletedReplayRows != 0 || result.DeletedInboxRows != 1 {
+		t.Fatalf("unexpected prune result: %#v", result)
+	}
+	for table, want := range map[string]int{"policy_events": 1, "policy_event_replay": 2, "notification_outbox": 1, "telegram_updates": 1} {
+		if got := countRows(t, store, table); got != want {
+			t.Fatalf("%s rows=%d want=%d", table, got, want)
+		}
+	}
+	var replayHighWater int64
+	if err := store.db.QueryRow(`select seq from sqlite_sequence where name='policy_event_replay'`).Scan(&replayHighWater); err != nil || replayHighWater != highWater {
+		t.Fatalf("replay high-water=%d want=%d err=%v", replayHighWater, highWater, err)
+	}
+	page, err := store.LoadPolicyEventReplay(ctx, "codex", "retention", 0, 0, 10)
+	if err != nil {
+		t.Fatalf("load retained replay: %v", err)
+	}
+	if page.HighWater != highWater || page.OldestAvailable != highWater || page.PrunedThrough != highWater-1 || len(page.Events) != 2 || page.Events[0].PolicyEventID != "" || page.Events[1].PolicyEventID != "active-event" {
+		t.Fatalf("unexpected retained replay: %#v", page)
+	}
+}
+
+func TestPruneObservationsUsesExactTimestampAndTerminalBoundaries(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.db.Exec(`
+insert into telegram_updates(bot_ref,update_id,raw_json,status,attempts,available_at,processed_at,dead_at,created_at,updated_at) values
+ ('bot',1,'{}','processed',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',null,'2026-01-01T00:00:00Z','2026-05-01T00:00:00Z'),
+ ('bot',2,'{}','dead',1,'2026-01-01T00:00:00Z',null,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-05-01T00:00:00.000000001Z'),
+ ('bot',3,'{}','processed',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',null,'2026-01-01T00:00:00Z','2026-05-01T00:00:00.000000002Z'),
+ ('bot',4,'{}','processed',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',null,'2026-01-01T00:00:00Z','2026-05-01T00:00:00.000000003Z'),
+ ('bot',5,'{}','pending',0,'2026-01-01T00:00:00Z',null,null,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');`); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.PruneObservations(t.Context(), parseTime("2026-05-01T00:00:00.000000002Z"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DeletedInboxRows != 2 {
+		t.Fatalf("deleted inbox rows=%d", result.DeletedInboxRows)
+	}
+	if got := countRows(t, store, "telegram_updates"); got != 3 {
+		t.Fatalf("retained inbox rows=%d", got)
+	}
+}
+
+func TestPruneObservationsRollsBackEveryTableOnInvalidTimestamp(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.db.Exec(`
+insert into accounts(account_ref,provider_id,label,email,plan,updated_at) values('rollback','codex','rollback','','pro','2026-01-01T00:00:00Z');
+insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values('malformed','malformed','limit_warning','malformed','rule','weekly_limit','remaining_checkpoint','codex','rollback','rev','hash',1,'{}','2026-01-01bad','2026-01-01T00:00:00Z');
+insert into telegram_updates(bot_ref,update_id,raw_json,status,attempts,available_at,processed_at,created_at,updated_at) values('bot',1,'{}','processed',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PruneObservations(t.Context(), parseTime("2026-05-01T00:00:00Z"), false); err == nil {
+		t.Fatal("prune accepted malformed timestamp")
+	}
+	if got := countRows(t, store, "telegram_updates"); got != 1 {
+		t.Fatalf("committed partial inbox prune: rows=%d", got)
+	}
+	var violations int
+	rows, err := store.db.Query(`pragma foreign_key_check`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		violations++
+	}
+	_ = rows.Close()
+	if violations != 0 {
+		t.Fatalf("foreign-key violations=%d", violations)
+	}
+}
+
 func TestStatsSummarizesStorageDeliveriesAndRecentRows(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)

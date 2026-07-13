@@ -31,3 +31,20 @@ func TestEventsRejectsImplicitModeAndUnboundedLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestCursorExpiryUsesPerAccountPruneFloorAcrossGlobalSequenceGaps(t *testing.T) {
+	// This account consumed sequence 7, another account owns 8 and 9, and its
+	// next retained event is 10. Seven remains a valid cursor; six does not.
+	if cursorExpired(7, 7) {
+		t.Fatal("cursor at the account prune floor expired")
+	}
+	if !cursorExpired(6, 7) {
+		t.Fatal("cursor before the account prune floor remained valid")
+	}
+	if cursorExpired(7, 7) {
+		t.Fatal("cursor at a fully pruned account floor expired")
+	}
+	if cursorExpired(7, 0) {
+		t.Fatal("global sequence gap without an account prune floor expired")
+	}
+}

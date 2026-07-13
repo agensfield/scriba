@@ -413,12 +413,16 @@ func runServerPrune(cfg config.Config, opts options) error {
 	}
 	payload := map[string]any{
 		"cutoff":              result.Cutoff.Format(time.RFC3339),
+		"deletedDeliveries":   result.DeletedDeliveries,
+		"deletedEvents":       result.DeletedEvents,
+		"deletedInboxRows":    result.DeletedInboxRows,
 		"deletedObservations": result.DeletedObservations,
+		"deletedReplayRows":   result.DeletedReplayRows,
 		"deletedWindows":      result.DeletedWindows,
 		"checkpointed":        result.Checkpointed,
 		"vacuumed":            result.Vacuumed,
 	}
-	return output(opts, payload, fmt.Sprintf("pruned %d observations and %d windows before %s", result.DeletedObservations, result.DeletedWindows, result.Cutoff.Format(time.RFC3339)))
+	return output(opts, payload, fmt.Sprintf("pruned %d observations, %d events, %d deliveries, and %d inbox rows before %s", result.DeletedObservations, result.DeletedEvents, result.DeletedDeliveries, result.DeletedInboxRows, result.Cutoff.Format(time.RFC3339)))
 }
 
 func runServerRadar(opts options) error {

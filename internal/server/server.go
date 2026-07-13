@@ -19,19 +19,20 @@ import (
 )
 
 const (
-	DefaultPollInterval     = 5 * time.Minute
-	DefaultBackoff          = 30 * time.Second
-	DefaultRefreshTimeout   = 90 * time.Second
-	SettingPollInterval     = "poll_interval"
-	SettingPollAttemptAt    = "poll_attempt_at"
-	SettingLastPruneAt      = "last_prune_at"
-	SettingPollSuccessAt    = "poll_success_at"
-	SettingPollFailureAt    = "poll_failure_at"
-	SettingPollFailureCount = "poll_failure_count"
-	SettingPollFailureError = "poll_failure_error"
-	SettingHealthAlertState = "health_alert_state"
-	SettingRadarMilestone   = "radar_probability_milestone"
-	FailureAlertThreshold   = 3
+	DefaultPollInterval         = 5 * time.Minute
+	DefaultBackoff              = 30 * time.Second
+	DefaultRefreshTimeout       = 90 * time.Second
+	SettingPollInterval         = "poll_interval"
+	maxObservationRetentionDays = 36500
+	SettingPollAttemptAt        = "poll_attempt_at"
+	SettingLastPruneAt          = "last_prune_at"
+	SettingPollSuccessAt        = "poll_success_at"
+	SettingPollFailureAt        = "poll_failure_at"
+	SettingPollFailureCount     = "poll_failure_count"
+	SettingPollFailureError     = "poll_failure_error"
+	SettingHealthAlertState     = "health_alert_state"
+	SettingRadarMilestone       = "radar_probability_milestone"
+	FailureAlertThreshold       = 3
 )
 
 var (
@@ -678,8 +679,8 @@ func (s *Server) pollRadar(ctx context.Context) ([]radar.ProbabilityAlert, error
 
 func (s *Server) PruneObservations(ctx context.Context, compact bool) (store.PruneResult, error) {
 	days := s.cfg.ObservationRetentionDays
-	if days <= 0 {
-		return store.PruneResult{}, errors.New("observation retention must be positive")
+	if days <= 0 || days > maxObservationRetentionDays {
+		return store.PruneResult{}, errors.New("observation retention must be between 1 and 36500 days")
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 	return s.store.PruneObservations(ctx, cutoff, compact)
@@ -728,8 +729,8 @@ func (s *Server) pruneIfDue(ctx context.Context) error {
 	if err := s.store.SetSetting(ctx, SettingLastPruneAt, now.Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
-	if result.DeletedObservations > 0 || result.DeletedWindows > 0 {
-		s.logger.Info("scriba pruned observations", "observations", result.DeletedObservations, "windows", result.DeletedWindows, "cutoff", result.Cutoff.Format(time.RFC3339))
+	if result.DeletedObservations > 0 || result.DeletedWindows > 0 || result.DeletedEvents > 0 || result.DeletedDeliveries > 0 || result.DeletedReplayRows > 0 || result.DeletedInboxRows > 0 {
+		s.logger.Info("scriba pruned retained history", "observations", result.DeletedObservations, "windows", result.DeletedWindows, "events", result.DeletedEvents, "deliveries", result.DeletedDeliveries, "replay_rows", result.DeletedReplayRows, "inbox_rows", result.DeletedInboxRows, "cutoff", result.Cutoff.Format(time.RFC3339))
 	}
 	return nil
 }

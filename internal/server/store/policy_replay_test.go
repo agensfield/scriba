@@ -181,6 +181,16 @@ func TestPolicyReplayPagingIsolationHighWaterAndCancellation(t *testing.T) {
 	if pruned.HighWater != high || pruned.OldestAvailable == 0 || len(pruned.Events) != 1 || pruned.Events[0].PolicyEventID != "" {
 		t.Fatalf("pruned=%#v high=%d", pruned, high)
 	}
+	if _, err := s.db.Exec(`delete from policy_events where account_ref='a'; delete from policy_event_replay where account_ref='a'`); err != nil {
+		t.Fatal(err)
+	}
+	accountPruned, err := s.LoadPolicyEventReplay(ctx, "codex", "a", 0, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accountPruned.HighWater != high || accountPruned.OldestAvailable != 0 || len(accountPruned.Events) != 0 {
+		t.Fatalf("account-pruned=%#v", accountPruned)
+	}
 	if _, err := s.db.Exec(`delete from policy_events; delete from policy_event_replay`); err != nil {
 		t.Fatal(err)
 	}

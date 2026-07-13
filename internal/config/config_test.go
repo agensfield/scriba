@@ -50,6 +50,16 @@ func TestContextAPISocketPathMustBeAbsolute(t *testing.T) {
 	}
 }
 
+func TestObservationRetentionMustBePositive(t *testing.T) {
+	for _, days := range []int{-1, int(^uint(0) >> 1)} {
+		cfg := Default()
+		cfg.Server.ObservationRetentionDays = days
+		if err := Validate(cfg); err == nil {
+			t.Fatalf("invalid observation retention %d accepted", days)
+		}
+	}
+}
+
 func TestDefaultIsValidV2WithDiscoveredAuthPaths(t *testing.T) {
 	codexHome := t.TempDir()
 	t.Setenv("CODEX_HOME", codexHome)

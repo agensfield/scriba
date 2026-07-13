@@ -87,7 +87,7 @@ func (s *Service) Events(ctx context.Context, request EventPageRequest) (EventPa
 	if after > meta.HighWater {
 		return EventPage{}, pageError("cursor_future")
 	}
-	if cursorExpired(after, meta.OldestAvailable, meta.HighWater) {
+	if cursorExpired(after, meta.PrunedThrough) {
 		return EventPage{}, pageError("cursor_expired")
 	}
 
@@ -98,14 +98,14 @@ func (s *Service) Events(ctx context.Context, request EventPageRequest) (EventPa
 		}
 		return EventPage{}, pageError("read_error")
 	}
-	if cursorExpired(after, batch.OldestAvailable, batch.HighWater) {
+	if cursorExpired(after, batch.PrunedThrough) {
 		return EventPage{}, pageError("cursor_expired")
 	}
 	return publicReplayPage(batch, profile, now), nil
 }
 
-func cursorExpired(after, oldest, high int64) bool {
-	return (oldest > 0 && after < oldest-1) || (oldest == 0 && high > 0 && after < high)
+func cursorExpired(after, prunedThrough int64) bool {
+	return prunedThrough > 0 && after < prunedThrough
 }
 
 func pageError(reason string) error      { return &EventPageError{ReasonCode: reason} }

@@ -49,6 +49,8 @@ type ServerConfig struct {
 	ContextAPI                       ContextAPIConfig `json:"contextAPI"`
 }
 
+const MaxObservationRetentionDays = 36500
+
 type ContextAPIConfig struct {
 	Enabled    bool   `json:"enabled"`
 	SocketPath string `json:"socketPath,omitempty"`
@@ -247,6 +249,9 @@ func Validate(cfg Config) error {
 	}
 	if cfg.Server.ContextAPI.SocketPath != "" && !filepath.IsAbs(cfg.Server.ContextAPI.SocketPath) {
 		return errors.New("server.contextAPI.socketPath must be absolute")
+	}
+	if cfg.Server.ObservationRetentionDays <= 0 || cfg.Server.ObservationRetentionDays > MaxObservationRetentionDays {
+		return fmt.Errorf("server.observationRetentionDays must be between 1 and %d", MaxObservationRetentionDays)
 	}
 	if cfg.DefaultProfileID == "" {
 		return errors.New("defaultProfileId is required")
