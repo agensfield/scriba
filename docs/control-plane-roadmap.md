@@ -482,3 +482,10 @@ CLI/server operational and release work.
   Telegram health and Profiles to `default` to Limits smokes then passed as
   durable processed updates `133548446` and `133548448` through `133548450`;
   inbox state was 10 processed with zero pending or dead work.
+- 2026-07-14: `v0.3.1` deployed reset-scoped pacing warnings and human budget
+  prose on schema 12. Exact-commit CI `29284179907`, full local gates, the
+  stopped-service migration/rollback drill, one real Telegram delivery, one
+  explicit refresh, and two restart dedupe smokes passed. Release publication
+  recovered the fully verified draft after a GitHub eventual-consistency miss;
+  `623d3fd` now consumes the release action's direct ID and CI `29285107517` is
+  green. Homebrew is updated at `7773439`.

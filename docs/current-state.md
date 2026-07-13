@@ -55,6 +55,12 @@ Claude Code and Codex usage tracker.
   the existing 20/10/5/0-percent remaining checkpoints own late-cycle warnings.
   Typed pacing events and all configured delivery intents are committed
   atomically through the canonical outbox.
+- `v0.3.1` is published and deployed on devbox at release commit `9276bd3`,
+  schema 12. Exact-commit CI, local full/race gates, reproducible archives,
+  checksums, attestations, Homebrew `7773439`, stopped-service migration and
+  rollback proof, one real Telegram pacing delivery, explicit refresh, and two
+  restart dedupe smokes passed. See [`release-v0.3.1.md`](release-v0.3.1.md)
+  and [`schema-v12-migration.md`](schema-v12-migration.md).
 - Pricing is embedded from a hash-bound reviewed offline catalog. Maintainer
   refresh writes a candidate only; CI validates provenance, aliases, rates,
   tier thresholds, boundary goldens, and deterministic generation without
