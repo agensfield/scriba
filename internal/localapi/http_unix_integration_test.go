@@ -286,9 +286,23 @@ func TestUnixSSECaptureLiveReconnectHeartbeatAndStreamCap(t *testing.T) {
 	insertWarning(t, f, "event-two", time.Now().UTC().Add(time.Second))
 	req, _ := http.NewRequest(http.MethodGet, "http://unix/v1/events", nil)
 	req.Header.Set("Last-Event-ID", cursor)
-	replay, err := f.client.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	var replay *http.Response
+	deadline := time.Now().Add(time.Second)
+	for {
+		var err error
+		replay, err = f.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if replay.StatusCode == http.StatusOK {
+			break
+		}
+		_, _ = io.Copy(io.Discard, replay.Body)
+		_ = replay.Body.Close()
+		if replay.StatusCode != http.StatusServiceUnavailable || time.Now().After(deadline) {
+			t.Fatalf("reconnect status=%d", replay.StatusCode)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	rr := bufio.NewReader(replay.Body)
 	_ = readSSEFrame(t, replay.Body, rr)
