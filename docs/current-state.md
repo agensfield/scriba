@@ -237,8 +237,9 @@ apps/macos/Scripts/package_zip.sh release
   [`control-plane-roadmap.md`](control-plane-roadmap.md). Reliability,
   migration safety, the canonical outbox, budget surfaces, and the schema-v8
   policy runtime, inspection CLI surfaces, Wave 3.1 agent transports, and Wave
-  3.2 profiles and Wave 3.3 delivery/Telegram parity are completed checkpoints.
-  Operations and release evidence remain. The two-real-account
+  3.2 profiles, Wave 3.3 delivery/Telegram parity, and Wave 3.4 retention,
+  backup, restore, hardened-systemd, linger, and reboot operations are completed
+  checkpoints. Reproducible release/attestation/security evidence remains. The two-real-account
   live profile proof is externally gated by a second Codex auth file.
 - Tighten Go regression tests around frozen TS-era fixtures.
 - Revisit Claude `blocks` for strict bounded-memory behavior.

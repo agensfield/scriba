@@ -316,6 +316,15 @@ remains the interactive callback proof.
 Gate: devbox reboot and restore drills, clean journal inspection, and
 reproducible CLI/server release artifact verification.
 
+Operational status through `eb74648`: bounded daily retention preserves
+pending/leased work, exact timestamp boundaries, global replay high-water, and
+one explicit per-account prune floor. The devbox runs repo-identical hardened
+user units with linger enabled and a persistent daily verified-backup timer.
+An actual stopped-service backup boot and exact live-state restoration both
+passed schema/integrity/queue health, followed by an autonomous reboot with
+zero failed user units or journal error hits. Reproducible tagged artifacts,
+checksums, attestations, security policy, and release evidence remain.
+
 The existing macOS menu app is preserved but explicitly outside this program.
 No menu-app UI parity, packaging, launch-at-login, notarization, or Sparkle work
 is required for completion.
@@ -431,3 +440,19 @@ CLI/server operational and release work.
   journal. The previous `538d557` binary is preserved in the deployment
   evidence directory. The macOS SSE CI flake was fixed at `ce03c7a` by waiting
   for stream-slot release; the focused test passed 100 normal and 20 race runs.
+- 2026-07-13: Wave 3.4 retention and operations passed through `eb74648`.
+  Retention review caught and fixed global-sequence/account-floor expiry,
+  variable-width timestamp comparison, unbounded-duration overflow, and
+  write-lock amplification. Focused race/security gates passed. The live
+  `922d464` Linux amd64 binary SHA-256 is
+  `393fbf666015806aedd35da6e8d82133b37654fe4e5304355bf13cdfcb15f75d`.
+  The first hardening activation failed closed on unsupported user-manager
+  capability changes and automatically rolled back; the corrected repo-identical
+  units then passed. A 35,532,800-byte schema-11 restore candidate with SHA-256
+  `f67582dfde9fb1dfe541372ad4ede8a5e5e90558380be6263a916b3a0febca01`
+  booted healthy with `quick_check=ok`, zero FK violations, 44 delivered outbox
+  rows, and three processed inbox rows; the exact pre-drill state was restored
+  and reverified. After reboot, service/timer were active and enabled, linger
+  was `yes`, queues were empty, no user units failed, and the boot journal had
+  zero failure-pattern hits. Evidence lives at
+  `~/.local/state/scriba/deployments/wave34-922d464` on devbox.
