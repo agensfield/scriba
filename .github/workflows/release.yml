@@ -50,7 +50,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" >/dev/null 2>&1; then
+          release_id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n 1)"
+          if [[ -n "$release_id" ]]; then
             echo "release $GITHUB_REF_NAME already exists" >&2
             exit 1
           fi
@@ -102,7 +104,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           find dist -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/expected-assets"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq '.assets[].name' | sort > "$RUNNER_TEMP/actual-assets"
+          release_id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\" and .draft == true) | .id" | head -n 1)"
+          test -n "$release_id"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" --jq '.assets[].name' | sort > "$RUNNER_TEMP/actual-assets"
           diff -u "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/actual-assets"
           if [[ "${{ steps.version.outputs.prerelease }}" == true ]]; then latest=false; else latest=true; fi
-          gh release edit "$GITHUB_REF_NAME" --verify-tag --draft=false --prerelease="${{ steps.version.outputs.prerelease }}" --latest="$latest"
+          git rev-parse --verify "refs/tags/$GITHUB_REF_NAME^{commit}"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false \
+            -F prerelease="${{ steps.version.outputs.prerelease }}" \
+            -f make_latest="$latest" >/dev/null
