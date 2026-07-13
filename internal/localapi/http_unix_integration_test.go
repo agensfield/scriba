@@ -241,8 +241,17 @@ func TestUnixSSEExpiredCursorBeforeHeaders(t *testing.T) {
 	at := time.Now().UTC()
 	insertWarning(t, f, "expired-one", at)
 	insertWarning(t, f, "expired-two", at.Add(time.Second))
-	execStore(t, f, `delete from policy_event_replay where replay_seq=(select min(replay_seq) from policy_event_replay)`)
-	r := f.get(t, "/v1/events?cursor=v1.0000000000000000")
+	execStore(t, f, `update policy_event_replay set policy_event_id=null where replay_seq=(select min(replay_seq) from policy_event_replay)`)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix/v1/events?cursor=v1.0000000000000000", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := f.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer func() { _ = r.Body.Close() }()
 	if r.StatusCode != http.StatusGone {
 		body, _ := io.ReadAll(r.Body)
