@@ -21,11 +21,12 @@ type Outcome struct {
 	Disposition Disposition
 	ProviderID  string
 	RetryAfter  time.Duration
+	StatusCode  int
 	Err         error
 }
 
 func classifyHTTP(status int, header http.Header, now time.Time) Outcome {
-	out := Outcome{Disposition: Terminal, Err: errors.New(http.StatusText(status))}
+	out := Outcome{Disposition: Terminal, StatusCode: status, Err: errors.New(http.StatusText(status))}
 	if status >= 200 && status < 300 {
 		out.Disposition, out.Err = Delivered, nil
 		return out
@@ -46,13 +47,30 @@ func retryAfter(value string, now time.Time) time.Duration {
 		if seconds <= 0 {
 			return 0
 		}
+		if seconds >= int64(maxRetryAfter/time.Second) {
+			return maxRetryAfter
+		}
 		return min(time.Duration(seconds)*time.Second, maxRetryAfter)
+	}
+	if decimalDelay(value) {
+		return maxRetryAfter
 	}
 	at, err := http.ParseTime(value)
 	if err != nil || !at.After(now) {
 		return 0
 	}
 	return min(at.Sub(now), maxRetryAfter)
+}
+
+func decimalDelay(value string) bool {
+	nonzero := false
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+		nonzero = nonzero || char != '0'
+	}
+	return value != "" && nonzero
 }
 
 func noRedirectClient(base *http.Client) *http.Client {

@@ -184,3 +184,43 @@ func TestProfileValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestDeliveryConfigRoundTripAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Default()
+	cfg.Deliveries = DeliveryConfig{
+		Webhooks: []WebhookConfig{{ID: "deploy", Enabled: true, URL: "https://example.com/scriba", SecretEnv: "SCRIBA_WEBHOOK_DEPLOY_SECRET"}},
+		Ntfy:     []NtfyConfig{{ID: "phone", Enabled: true, URL: "https://ntfy.sh", Topic: "scriba-private", TokenEnv: "SCRIBA_NTFY_TOKEN"}},
+	}
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Deliveries.Webhooks) != 1 || got.Deliveries.Webhooks[0].ID != "deploy" || len(got.Deliveries.Ntfy) != 1 || got.Deliveries.Ntfy[0].Topic != "scriba-private" {
+		t.Fatalf("deliveries=%+v", got.Deliveries)
+	}
+
+	tests := []func(*Config){
+		func(c *Config) { c.Deliveries.Webhooks[0].ID = "Bad_ID" },
+		func(c *Config) { c.Deliveries.Webhooks[0].URL = "/relative" },
+		func(c *Config) { c.Deliveries.Webhooks[0].SecretEnv = "" },
+		func(c *Config) { c.Deliveries.Ntfy[0].Topic = " bad " },
+		func(c *Config) { c.Deliveries.Ntfy[0].Topic = strings.Repeat("a", 65) },
+		func(c *Config) { c.Deliveries.Ntfy[0].URL = "https://user:secret@ntfy.sh" },
+		func(c *Config) { c.Deliveries.Ntfy[0].URL = "https://ntfy.sh?token=secret" },
+		func(c *Config) { c.Deliveries.Ntfy[0].TokenEnv = "BAD ENV" },
+		func(c *Config) { c.Deliveries.Ntfy = append(c.Deliveries.Ntfy, c.Deliveries.Ntfy[0]) },
+	}
+	for i, mutate := range tests {
+		broken := cfg
+		broken.Deliveries.Webhooks = append([]WebhookConfig(nil), cfg.Deliveries.Webhooks...)
+		broken.Deliveries.Ntfy = append([]NtfyConfig(nil), cfg.Deliveries.Ntfy...)
+		mutate(&broken)
+		if err := Validate(broken); err == nil {
+			t.Fatalf("invalid delivery config %d accepted", i)
+		}
+	}
+}

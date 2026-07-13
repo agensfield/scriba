@@ -253,6 +253,25 @@ func TestApplyCodexPollRejectsStaleObservationWithoutWrites(t *testing.T) {
 	assertPollCounts(t, s, 1, 0, 0)
 }
 
+func TestApplyCodexPollDuplicateFanoutTargetRollsBackWholePoll(t *testing.T) {
+	s := openPollStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	input := pollInput(codexPollObservation(base, 81), "")
+	input.NotificationTargets = []string{"webhook:one", "webhook:one"}
+	if _, err := s.ApplyCodexPoll(ctx, input); err == nil {
+		t.Fatal("expected duplicate fanout target error")
+	}
+	assertPollCounts(t, s, 0, 0, 0)
+	var accounts, mappings, states int
+	if err := s.db.QueryRow(`select (select count(*) from accounts),(select count(*) from profile_accounts),(select count(*) from policy_states)`).Scan(&accounts, &mappings, &states); err != nil {
+		t.Fatal(err)
+	}
+	if accounts != 0 || mappings != 0 || states != 0 {
+		t.Fatalf("accounts=%d mappings=%d states=%d", accounts, mappings, states)
+	}
+}
+
 func TestApplyCodexPollRejectsEqualTimeConflictAndExactReplayDoesNotRewrite(t *testing.T) {
 	s := openPollStore(t)
 	ctx := context.Background()

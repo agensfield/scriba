@@ -3,7 +3,9 @@ package delivery
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
@@ -40,7 +42,7 @@ func FromOutbox(message store.OutboxMessage) (Envelope, error) {
 			PreviousResetAt        time.Time `json:"previousResetAt"`
 			CurrentResetAt         time.Time `json:"currentResetAt"`
 			JokeID                 string    `json:"jokeId,omitempty"`
-		}{event.Account.Label, event.PrimaryTriggerLabel, event.SecondaryTriggerLabels, event.ResetKind, event.PreviousResetAt, event.CurrentResetAt, event.JokeID}
+		}{bounded(event.Account.Label, 128), bounded(event.PrimaryTriggerLabel, 128), boundedStrings(event.SecondaryTriggerLabels, 8, 128), bounded(event.ResetKind, 64), event.PreviousResetAt, event.CurrentResetAt, bounded(event.JokeID, 128)}
 	case resetwatch.WarningEvent:
 		occurredAt = event.DetectedAt
 		data = struct {
@@ -50,7 +52,7 @@ func FromOutbox(message store.OutboxMessage) (Envelope, error) {
 			UsedPercent        float64   `json:"usedPercent"`
 			RemainingPercent   float64   `json:"remainingPercent"`
 			ResetAt            time.Time `json:"resetAt"`
-		}{event.Account.Label, event.Label, event.ThresholdRemaining, event.UsedPercent, event.RemainingPercent, event.ResetAt}
+		}{bounded(event.Account.Label, 128), bounded(event.Label, 128), event.ThresholdRemaining, event.UsedPercent, event.RemainingPercent, event.ResetAt}
 	case resetwatch.GrantExpiryWarning:
 		occurredAt = event.DetectedAt
 		data = struct {
@@ -58,7 +60,7 @@ func FromOutbox(message store.OutboxMessage) (Envelope, error) {
 			CreditTitle   string    `json:"creditTitle,omitempty"`
 			ThresholdDays int       `json:"thresholdDays"`
 			ExpiresAt     time.Time `json:"expiresAt"`
-		}{event.Account.Label, event.CreditTitle, event.ThresholdDays, event.ExpiresAt}
+		}{bounded(event.Account.Label, 128), bounded(event.CreditTitle, 128), event.ThresholdDays, event.ExpiresAt}
 	case resetwatch.ResetGrantEvent:
 		occurredAt = event.DetectedAt
 		data = struct {
@@ -68,7 +70,7 @@ func FromOutbox(message store.OutboxMessage) (Envelope, error) {
 			GrantedAt      time.Time `json:"grantedAt"`
 			ExpiresAt      time.Time `json:"expiresAt"`
 			AvailableCount int       `json:"availableCount"`
-		}{event.Account.Label, event.CreditTitle, event.ResetType, event.GrantedAt, event.ExpiresAt, event.AvailableCount}
+		}{bounded(event.Account.Label, 128), bounded(event.CreditTitle, 128), bounded(event.ResetType, 64), event.GrantedAt, event.ExpiresAt, event.AvailableCount}
 	case radar.ProbabilityAlert:
 		occurredAt = event.DetectedAt
 		data = struct {
@@ -79,7 +81,7 @@ func FromOutbox(message store.OutboxMessage) (Envelope, error) {
 			ExpectedWindow   string  `json:"expectedWindow,omitempty"`
 			ReasoningSummary string  `json:"reasoningSummary,omitempty"`
 			CheckedAt        string  `json:"checkedAt,omitempty"`
-		}{event.Milestone, event.Probability24H, event.Probability48H, event.Level, event.ExpectedWindow, event.ReasoningSummary, event.CheckedAt}
+		}{event.Milestone, event.Probability24H, event.Probability48H, bounded(event.Level, 64), bounded(event.ExpectedWindow, 256), bounded(event.ReasoningSummary, 2048), bounded(event.CheckedAt, 128)}
 	default:
 		return Envelope{}, errors.New("unsupported notification payload")
 	}
@@ -98,4 +100,27 @@ func Marshal(envelope Envelope) ([]byte, error) {
 		return nil, errors.New("invalid notification envelope")
 	}
 	return json.Marshal(envelope)
+}
+
+func bounded(value string, limit int) string {
+	value = strings.ToValidUTF8(value, "�")
+	if len(value) <= limit {
+		return value
+	}
+	end := limit
+	for end > 0 && !utf8.ValidString(value[:end]) {
+		end--
+	}
+	return value[:end]
+}
+
+func boundedStrings(values []string, count, size int) []string {
+	if len(values) > count {
+		values = values[:count]
+	}
+	out := make([]string, len(values))
+	for i, value := range values {
+		out[i] = bounded(value, size)
+	}
+	return out
 }

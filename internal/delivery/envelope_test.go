@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
@@ -66,9 +67,10 @@ func TestCanonicalEnvelopeSupportsEveryOutboxKind(t *testing.T) {
 				t.Fatal(err)
 			}
 			eventID := test.kind
-			if test.kind == "reset_grant_warning" {
+			switch test.kind {
+			case "reset_grant_warning":
 				eventID = "grant-warning"
-			} else if test.kind == "radar_alert" {
+			case "radar_alert":
 				eventID = "radar"
 			}
 			envelope, err := FromOutbox(store.OutboxMessage{EventKind: test.kind, Source: "test", ProfileRef: "default", AccountRef: account.Ref, EventID: eventID, PayloadVersion: 1, PayloadJSON: payload})
@@ -79,5 +81,25 @@ func TestCanonicalEnvelopeSupportsEveryOutboxKind(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestCanonicalEnvelopeBoundsProviderAndOperatorStrings(t *testing.T) {
+	at := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	event := radar.ProbabilityAlert{ID: "radar", Milestone: 50, ReasoningSummary: strings.Repeat("🔥", 2000), DetectedAt: at, SnapshotJSON: []byte(`{}`)}
+	payload, err := store.EncodeOutboxPayload("radar_alert", event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := FromOutbox(store.OutboxMessage{EventKind: "radar_alert", EventID: "radar", Source: "test", PayloadVersion: 1, PayloadJSON: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) > 4096 || !utf8.Valid(body) {
+		t.Fatalf("body length=%d valid=%t", len(body), utf8.Valid(body))
 	}
 }

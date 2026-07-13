@@ -198,10 +198,26 @@ func (s *Store) FinishOutboxSuccess(ctx context.Context, id, token, providerID s
 }
 
 func (s *Store) FinishOutboxFailure(ctx context.Context, claim OutboxMessage, message string, now time.Time) (bool, error) {
+	return s.FinishOutboxRetry(ctx, claim, message, now, 0)
+}
+
+func (s *Store) FinishOutboxRetry(ctx context.Context, claim OutboxMessage, message string, now time.Time, retryAfter time.Duration) (bool, error) {
 	if claim.Attempts < 1 || claim.LeaseToken == "" {
 		return false, errors.New("invalid outbox claim")
 	}
-	r, err := s.db.ExecContext(ctx, `update notification_outbox set status=case when attempts>=? then 'dead_letter' else 'pending' end,available_at=case when attempts>=? then available_at else ? end,dead_lettered_at=case when attempts>=? then ? else null end,last_error=?,lease_token=null,lease_expires_at=null,updated_at=? where id=? and status='leased' and lease_token=? and attempts=?`, OutboxMaxAttempts, OutboxMaxAttempts, formatTime(now.Add(OutboxBackoff(claim.Attempts))), OutboxMaxAttempts, formatTime(now), message, formatTime(now), claim.ID, claim.LeaseToken, claim.Attempts)
+	if retryAfter < 0 || retryAfter > time.Hour {
+		return false, errors.New("outbox retry-after must be between zero and one hour")
+	}
+	delay := max(OutboxBackoff(claim.Attempts), retryAfter)
+	r, err := s.db.ExecContext(ctx, `update notification_outbox set status=case when attempts>=? then 'dead_letter' else 'pending' end,available_at=case when attempts>=? then available_at else ? end,dead_lettered_at=case when attempts>=? then ? else null end,last_error=?,lease_token=null,lease_expires_at=null,updated_at=? where id=? and status='leased' and lease_token=? and attempts=?`, OutboxMaxAttempts, OutboxMaxAttempts, formatTime(now.Add(delay)), OutboxMaxAttempts, formatTime(now), message, formatTime(now), claim.ID, claim.LeaseToken, claim.Attempts)
+	return changed(r, err)
+}
+
+func (s *Store) FinishOutboxTerminal(ctx context.Context, claim OutboxMessage, message string, now time.Time) (bool, error) {
+	if claim.Attempts < 1 || claim.LeaseToken == "" {
+		return false, errors.New("invalid outbox claim")
+	}
+	r, err := s.db.ExecContext(ctx, `update notification_outbox set status='dead_letter',dead_lettered_at=?,last_error=?,lease_token=null,lease_expires_at=null,updated_at=? where id=? and status='leased' and lease_token=? and attempts=?`, formatTime(now), message, formatTime(now), claim.ID, claim.LeaseToken, claim.Attempts)
 	return changed(r, err)
 }
 

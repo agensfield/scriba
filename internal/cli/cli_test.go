@@ -7,6 +7,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -149,6 +150,27 @@ func TestTelegramDeliveryTarget(t *testing.T) {
 	cfg.Telegram.ChatID = "bad"
 	if _, _, err = telegramDeliveryTarget(cfg); err == nil {
 		t.Fatal("expected invalid chat id error")
+	}
+}
+
+func TestDeliveryRuntimeUsesStableTargetsAndEnvironmentSecrets(t *testing.T) {
+	t.Setenv("SCRIBA_WEBHOOK_TEST_SECRET", "webhook-secret")
+	t.Setenv("SCRIBA_NTFY_TEST_TOKEN", "ntfy-token")
+	cfg := config.Default()
+	cfg.Telegram.Enabled = true
+	cfg.Telegram.ChatID = "123"
+	cfg.Deliveries = config.DeliveryConfig{
+		Webhooks: []config.WebhookConfig{{ID: "deploy", Enabled: true, URL: "https://example.com/hook", SecretEnv: "SCRIBA_WEBHOOK_TEST_SECRET"}},
+		Ntfy:     []config.NtfyConfig{{ID: "phone", Enabled: true, URL: "https://ntfy.sh", Topic: "scriba", TokenEnv: "SCRIBA_NTFY_TEST_TOKEN"}},
+	}
+	chatID, targets, adapters, err := deliveryRuntime(cfg)
+	if err != nil || chatID != 123 || !reflect.DeepEqual(targets, []string{"telegram:123", "webhook:deploy", "ntfy:phone"}) || len(adapters) != 2 || adapters[0].Target() != "webhook:deploy" || adapters[1].Target() != "ntfy:phone" {
+		t.Fatalf("chat=%d targets=%v adapters=%v err=%v", chatID, targets, adapters, err)
+	}
+
+	t.Setenv("SCRIBA_WEBHOOK_TEST_SECRET", "")
+	if _, _, _, err := deliveryRuntime(cfg); err == nil || strings.Contains(err.Error(), "webhook-secret") {
+		t.Fatalf("missing or unsafe webhook secret error: %v", err)
 	}
 }
 

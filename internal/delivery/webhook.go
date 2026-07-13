@@ -15,11 +15,14 @@ import (
 )
 
 type Webhook struct {
+	ID     string
 	URL    string
 	Secret []byte
 	Client *http.Client
 	Now    func() time.Time
 }
+
+func (w Webhook) Target() string { return "webhook:" + w.ID }
 
 func (w Webhook) Deliver(ctx context.Context, envelope Envelope) Outcome {
 	body, err := Marshal(envelope)
@@ -27,7 +30,7 @@ func (w Webhook) Deliver(ctx context.Context, envelope Envelope) Outcome {
 		return Outcome{Disposition: Terminal, Err: err}
 	}
 	endpoint, err := url.Parse(w.URL)
-	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || len(w.Secret) == 0 {
+	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || endpoint.User != nil || endpoint.Fragment != "" || len(w.Secret) == 0 {
 		return Outcome{Disposition: Terminal, Err: errors.New("invalid webhook configuration")}
 	}
 	now := time.Now().UTC()

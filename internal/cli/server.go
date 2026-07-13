@@ -16,6 +16,7 @@ import (
 
 	"github.com/agensfield/scriba/internal/buildinfo"
 	"github.com/agensfield/scriba/internal/config"
+	"github.com/agensfield/scriba/internal/delivery"
 	"github.com/agensfield/scriba/internal/localapi"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/resetwatch"
@@ -113,13 +114,13 @@ func runServerRun(cfg config.Config, opts options) error {
 	if err != nil {
 		return err
 	}
-	chatID, notificationTarget, err := telegramDeliveryTarget(cfg)
+	chatID, notificationTargets, deliveryAdapters, err := deliveryRuntime(cfg)
 	if err != nil {
 		return err
 	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
 		Profiles:                 profiles,
-		NotificationTarget:       notificationTarget,
+		NotificationTargets:      notificationTargets,
 		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		StartupHeartbeat:         heartbeat,
@@ -127,6 +128,10 @@ func runServerRun(cfg config.Config, opts options) error {
 	})
 	srv.SetRadarFetcher(radar.Client{})
 	children := []func(context.Context) error{srv.Run}
+	for _, adapter := range deliveryAdapters {
+		dispatcher := delivery.Dispatcher{Store: st, Adapter: adapter}
+		children = append(children, dispatcher.Run)
+	}
 	if cfg.Server.ContextAPI.Enabled {
 		socketPath := resolveContextAPISocketPath(st.Path(), cfg.Server.ContextAPI.SocketPath)
 		listener, err := localapi.Listen(ctx, socketPath)
@@ -323,13 +328,13 @@ func runServerRefresh(cfg config.Config, opts options) error {
 	if err := st.SyncProfiles(context.Background(), specs); err != nil {
 		return fmt.Errorf("sync server profiles: %w", err)
 	}
-	_, notificationTarget, err := telegramDeliveryTarget(cfg)
+	_, notificationTargets, _, err := deliveryRuntime(cfg)
 	if err != nil {
 		return err
 	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
 		Profiles:                 profiles,
-		NotificationTarget:       notificationTarget,
+		NotificationTargets:      notificationTargets,
 		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
@@ -350,6 +355,44 @@ func telegramDeliveryTarget(cfg config.Config) (int64, string, error) {
 		return 0, "", fmt.Errorf("invalid telegram.chatId: %q", cfg.Telegram.ChatID)
 	}
 	return chatID, fmt.Sprintf("telegram:%d", chatID), nil
+}
+
+func deliveryRuntime(cfg config.Config) (int64, []string, []delivery.Adapter, error) {
+	chatID, telegramTarget, err := telegramDeliveryTarget(cfg)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	targets := make([]string, 0, 1+len(cfg.Deliveries.Webhooks)+len(cfg.Deliveries.Ntfy))
+	if telegramTarget != "" {
+		targets = append(targets, telegramTarget)
+	}
+	adapters := make([]delivery.Adapter, 0, len(cfg.Deliveries.Webhooks)+len(cfg.Deliveries.Ntfy))
+	for _, webhook := range cfg.Deliveries.Webhooks {
+		if !webhook.Enabled {
+			continue
+		}
+		secret := os.Getenv(webhook.SecretEnv)
+		if secret == "" {
+			return 0, nil, nil, fmt.Errorf("missing webhook secret; set env %s", webhook.SecretEnv)
+		}
+		adapter := delivery.Webhook{ID: webhook.ID, URL: webhook.URL, Secret: []byte(secret)}
+		targets, adapters = append(targets, adapter.Target()), append(adapters, adapter)
+	}
+	for _, ntfy := range cfg.Deliveries.Ntfy {
+		if !ntfy.Enabled {
+			continue
+		}
+		token := ""
+		if ntfy.TokenEnv != "" {
+			token = os.Getenv(ntfy.TokenEnv)
+			if token == "" {
+				return 0, nil, nil, fmt.Errorf("missing ntfy token; set env %s", ntfy.TokenEnv)
+			}
+		}
+		adapter := delivery.Ntfy{ID: ntfy.ID, URL: ntfy.URL, Topic: ntfy.Topic, Token: token}
+		targets, adapters = append(targets, adapter.Target()), append(adapters, adapter)
+	}
+	return chatID, targets, adapters, nil
 }
 
 func runServerPrune(cfg config.Config, opts options) error {

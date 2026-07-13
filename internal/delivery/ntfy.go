@@ -13,6 +13,7 @@ import (
 )
 
 type Ntfy struct {
+	ID     string
 	URL    string
 	Topic  string
 	Token  string
@@ -20,13 +21,15 @@ type Ntfy struct {
 	Now    func() time.Time
 }
 
+func (n Ntfy) Target() string { return "ntfy:" + n.ID }
+
 func (n Ntfy) Deliver(ctx context.Context, envelope Envelope) Outcome {
 	canonical, err := Marshal(envelope)
 	if err != nil {
 		return Outcome{Disposition: Terminal, Err: err}
 	}
 	endpoint, err := url.Parse(n.URL)
-	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || strings.TrimSpace(n.Topic) == "" || strings.TrimSpace(n.Topic) != n.Topic {
+	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || strings.TrimSpace(n.Topic) == "" || strings.TrimSpace(n.Topic) != n.Topic {
 		return Outcome{Disposition: Terminal, Err: errors.New("invalid ntfy configuration")}
 	}
 	payload, err := json.Marshal(struct {

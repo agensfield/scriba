@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +14,8 @@ import (
 )
 
 var profileIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var ntfyTopicPattern = regexp.MustCompile(`^[-_A-Za-z0-9]{1,64}$`)
 
 type ProviderConfig struct {
 	Enabled bool     `json:"enabled"`
@@ -51,6 +54,26 @@ type ContextAPIConfig struct {
 	SocketPath string `json:"socketPath,omitempty"`
 }
 
+type WebhookConfig struct {
+	ID        string `json:"id"`
+	Enabled   bool   `json:"enabled"`
+	URL       string `json:"url"`
+	SecretEnv string `json:"secretEnv"`
+}
+
+type NtfyConfig struct {
+	ID       string `json:"id"`
+	Enabled  bool   `json:"enabled"`
+	URL      string `json:"url"`
+	Topic    string `json:"topic"`
+	TokenEnv string `json:"tokenEnv,omitempty"`
+}
+
+type DeliveryConfig struct {
+	Webhooks []WebhookConfig `json:"webhooks,omitempty"`
+	Ntfy     []NtfyConfig    `json:"ntfy,omitempty"`
+}
+
 type Config struct {
 	SchemaVersion    int       `json:"schemaVersion"`
 	DefaultProfileID string    `json:"defaultProfileId"`
@@ -62,8 +85,9 @@ type Config struct {
 		Claude ProviderConfig `json:"claude"`
 		Codex  ProviderConfig `json:"codex"`
 	} `json:"providers"`
-	Server   ServerConfig   `json:"server"`
-	Telegram TelegramConfig `json:"telegram"`
+	Server     ServerConfig   `json:"server"`
+	Telegram   TelegramConfig `json:"telegram"`
+	Deliveries DeliveryConfig `json:"deliveries,omitempty"`
 }
 
 type Profile struct {
@@ -265,6 +289,62 @@ func Validate(cfg Config) error {
 	}
 	if !defaultEnabled {
 		return errors.New("defaultProfileId must identify an enabled profile")
+	}
+	if err := validateDeliveries(cfg.Deliveries); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDeliveries(cfg DeliveryConfig) error {
+	seen := make(map[string]struct{}, len(cfg.Webhooks)+len(cfg.Ntfy))
+	validateID := func(kind, id string) error {
+		if len(id) > 32 || !profileIDPattern.MatchString(id) {
+			return fmt.Errorf("%s id must be a lowercase slug of at most 32 characters", kind)
+		}
+		target := kind + ":" + id
+		if _, ok := seen[target]; ok {
+			return fmt.Errorf("duplicate delivery target %q", target)
+		}
+		seen[target] = struct{}{}
+		return nil
+	}
+	validateURL := func(kind, value string) error {
+		u, err := url.Parse(value)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
+			return fmt.Errorf("%s url must be an absolute HTTP(S) URL", kind)
+		}
+		return nil
+	}
+	for i, webhook := range cfg.Webhooks {
+		kind := fmt.Sprintf("deliveries.webhooks[%d]", i)
+		if err := validateID("webhook", webhook.ID); err != nil {
+			return fmt.Errorf("%s: %w", kind, err)
+		}
+		if err := validateURL(kind, webhook.URL); err != nil {
+			return err
+		}
+		if webhook.Enabled && !envNamePattern.MatchString(webhook.SecretEnv) {
+			return fmt.Errorf("%s.secretEnv is required and must name an environment variable", kind)
+		}
+	}
+	for i, ntfy := range cfg.Ntfy {
+		kind := fmt.Sprintf("deliveries.ntfy[%d]", i)
+		if err := validateID("ntfy", ntfy.ID); err != nil {
+			return fmt.Errorf("%s: %w", kind, err)
+		}
+		if err := validateURL(kind, ntfy.URL); err != nil {
+			return err
+		}
+		if u, _ := url.Parse(ntfy.URL); u.RawQuery != "" {
+			return fmt.Errorf("%s.url must not contain a query string", kind)
+		}
+		if !ntfyTopicPattern.MatchString(ntfy.Topic) {
+			return fmt.Errorf("%s.topic must contain 1-64 letters, numbers, underscores, or dashes", kind)
+		}
+		if ntfy.TokenEnv != "" && !envNamePattern.MatchString(ntfy.TokenEnv) {
+			return fmt.Errorf("%s.tokenEnv must name an environment variable", kind)
+		}
 	}
 	return nil
 }

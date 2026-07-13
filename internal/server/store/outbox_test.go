@@ -182,6 +182,63 @@ func TestOutboxFailureBackoffAndDeadLetter(t *testing.T) {
 	}
 }
 
+func TestOutboxRetryAfterIsCappedValidatedAndCannotShortenBackoff(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	enqueueTestOutbox(t, s, "retry-after", now)
+	claims, err := s.ClaimOutboxForTarget(ctx, "telegram:1", now, time.Minute, 1)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claims=%+v err=%v", claims, err)
+	}
+	if ok, err := s.FinishOutboxRetry(ctx, claims[0], "retryable", now, 30*time.Minute); err != nil || !ok {
+		t.Fatalf("ok=%t err=%v", ok, err)
+	}
+	var available string
+	if err := s.db.QueryRow(`select available_at from notification_outbox where id=?`, claims[0].ID).Scan(&available); err != nil {
+		t.Fatal(err)
+	}
+	if parseDBTime(available) != now.Add(30*time.Minute) {
+		t.Fatalf("available_at=%s", available)
+	}
+	claims, err = s.ClaimOutboxForTarget(ctx, "telegram:1", now.Add(30*time.Minute), time.Minute, 1)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("second claims=%+v err=%v", claims, err)
+	}
+	if ok, err := s.FinishOutboxRetry(ctx, claims[0], "retryable", now, time.Hour+time.Second); err == nil || ok {
+		t.Fatalf("invalid retry-after ok=%t err=%v", ok, err)
+	}
+	var status string
+	if err := s.db.QueryRow(`select status from notification_outbox where id=?`, claims[0].ID).Scan(&status); err != nil || status != "leased" {
+		t.Fatalf("status=%s err=%v", status, err)
+	}
+}
+
+func TestOutboxTerminalFailureDeadLettersImmediatelyWithFence(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	enqueueTestOutbox(t, s, "terminal", now)
+	claims, err := s.ClaimOutboxForTarget(ctx, "telegram:1", now, time.Minute, 1)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claims=%+v err=%v", claims, err)
+	}
+	if ok, err := s.FinishOutboxTerminal(ctx, claims[0], "terminal http status", now); err != nil || !ok {
+		t.Fatalf("ok=%t err=%v", ok, err)
+	}
+	var status string
+	var dead sql.NullString
+	if err := s.db.QueryRow(`select status,dead_lettered_at from notification_outbox where id=?`, claims[0].ID).Scan(&status, &dead); err != nil {
+		t.Fatal(err)
+	}
+	if status != "dead_letter" || !dead.Valid {
+		t.Fatalf("status=%s dead=%v", status, dead)
+	}
+	if ok, err := s.FinishOutboxSuccess(ctx, claims[0].ID, claims[0].LeaseToken, "late", now); err != nil || ok {
+		t.Fatalf("stale finish ok=%t err=%v", ok, err)
+	}
+}
+
 func TestV6MigrationBackfillsOnlyDeliveryRows(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "v6.db")

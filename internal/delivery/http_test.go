@@ -58,6 +58,8 @@ func TestHTTPDispositionAndRetryAfterAreClosedAndCapped(t *testing.T) {
 		{408, "5", Retryable, 5 * time.Second},
 		{425, "", Retryable, 0},
 		{429, "7200", Retryable, time.Hour},
+		{429, "9223372036854775807", Retryable, time.Hour},
+		{429, "999999999999999999999999999999999999", Retryable, time.Hour},
 		{500, now.Add(30 * time.Minute).Format(http.TimeFormat), Retryable, 30 * time.Minute},
 		{599, "invalid", Retryable, 0},
 	}
