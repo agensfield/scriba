@@ -76,8 +76,8 @@ Deployment evidence and the preserved `v0.3.1` binary live under
 The startup poll and two explicit refreshes accepted the previously failing
 shape: raw weekly reset `20:15:45Z` while durable pacing state remained at
 `20:15:46Z`. Pacing event/outbox counts remained `3/3`, queues were empty,
-health recovered to `ok`, and the service had zero restarts. The first
-untouched resident poll then succeeded at `2026-07-14T12:47:41Z`; event/outbox
-counts still remained `3/3`, `quick_check` passed, foreign-key checks were
-empty, queues stayed empty, and the post-deploy journal had no failure-pattern
-hits.
+health recovered to `ok`, and the service had zero restarts. Two untouched
+resident polls then succeeded at `2026-07-14T12:47:41Z` and `12:52:42Z`;
+event/outbox counts still remained `3/3`, `quick_check` passed, foreign-key
+checks were empty, queues stayed empty, and the post-deploy journal had no
+failure-pattern hits.

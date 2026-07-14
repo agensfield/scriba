@@ -496,5 +496,6 @@ CLI/server operational and release work.
   both ordinary jitter and the exact deployed conflict state. Exact-commit CI
   `29332564726`, release workflow `29332840366`, full local race/check gates,
   Homebrew `5bb1171`, verified backup, and exact-artifact devbox activation
-  passed. Startup plus explicit refreshes accepted the formerly hostile state
-  without another event or outbox row. See `docs/release-v0.3.2.md`.
+  passed. Startup, explicit refreshes, and two normal resident polls accepted
+  the formerly hostile state without another event or outbox row. See
+  `docs/release-v0.3.2.md`.
