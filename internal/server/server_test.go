@@ -434,6 +434,26 @@ func TestRunDoesNotLogShutdownCancellationAsPollFailure(t *testing.T) {
 	}
 }
 
+func TestRefreshProfilesLogsSanitizedFailureClassification(t *testing.T) {
+	ctx := context.Background()
+	fetcher := fakeFetcherFunc(func(context.Context) (remote.ProbeResult, error) {
+		return remote.ProbeResult{}, context.DeadlineExceeded
+	})
+	srv := New(openStore(t), fetcher, nil, Config{})
+	var logs bytes.Buffer
+	srv.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	if _, err := srv.RefreshProfilesNow(ctx); !errors.Is(err, ErrAllProfilesFailed) {
+		t.Fatalf("refresh err=%v", err)
+	}
+	got := logs.String()
+	for _, field := range []string{"msg=\"scriba profile poll failed\"", "profile_ref=default", "stage=fetch", "failure_kind=network", "error_code=timeout"} {
+		if !strings.Contains(got, field) {
+			t.Fatalf("missing %q in log: %s", field, got)
+		}
+	}
+}
+
 func TestHealthMarksExpiredAttemptInterrupted(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)

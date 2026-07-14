@@ -158,6 +158,94 @@ func TestApplyCodexPollPacingAlertsOnceBeforeQuotaWarningsTakeOver(t *testing.T)
 	}
 }
 
+func TestApplyCodexPollPacingAlertsIgnoreResetClockJitter(t *testing.T) {
+	s := openPollStore(t)
+	ctx := context.Background()
+	cycleStart := time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)
+	canonicalReset := time.Date(2026, 7, 19, 20, 15, 45, 0, time.UTC)
+	period := int64((7 * 24 * time.Hour) / time.Millisecond)
+	observation := func(at, resetAt time.Time, used float64) resetwatch.Observation {
+		return resetwatch.Observation{
+			ProviderID:   resetwatch.ProviderCodex,
+			Account:      resetwatch.Account{Ref: "acct", Label: "Personal"},
+			ObservedAt:   at,
+			SnapshotJSON: []byte(`{"source":"pacing-jitter"}`),
+			Windows: []resetwatch.Window{{
+				Label:            resetwatch.LabelWeeklyLimit,
+				UsedPercent:      &used,
+				ResetAt:          resetAt,
+				PeriodDurationMs: &period,
+			}},
+		}
+	}
+
+	first, err := s.ApplyCodexPoll(ctx, pollInput(observation(cycleStart.Add(48*time.Hour), canonicalReset, 40), "telegram:42"))
+	if err != nil || len(first.PacingWarnings) != 1 {
+		t.Fatalf("first pacing warnings=%+v err=%v", first.PacingWarnings, err)
+	}
+	forward, err := s.ApplyCodexPoll(ctx, pollInput(observation(cycleStart.Add(49*time.Hour), canonicalReset.Add(time.Second), 42), "telegram:42"))
+	if err != nil || len(forward.PacingWarnings) != 0 {
+		t.Fatalf("forward jitter pacing warnings=%+v err=%v", forward.PacingWarnings, err)
+	}
+	back, err := s.ApplyCodexPoll(ctx, pollInput(observation(cycleStart.Add(50*time.Hour), canonicalReset, 44), "telegram:42"))
+	if err != nil || len(back.PacingWarnings) != 0 {
+		t.Fatalf("backward jitter pacing warnings=%+v err=%v", back.PacingWarnings, err)
+	}
+
+	var events, outbox, observations int
+	var stateReset string
+	if err := s.db.QueryRow(`select (select count(*) from pacing_warning_events),(select count(*) from notification_outbox where event_kind='pacing_warning'),(select count(*) from limit_observations),(select reset_at from pacing_alert_states where window_key='primary.weekly')`).Scan(&events, &outbox, &observations, &stateReset); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 || outbox != 1 || observations != 3 || stateReset != formatTime(canonicalReset) {
+		t.Fatalf("events=%d outbox=%d observations=%d state_reset=%s", events, outbox, observations, stateReset)
+	}
+}
+
+func TestApplyCodexPollPacingAlertsAcceptDeployedJitterState(t *testing.T) {
+	s := openPollStore(t)
+	ctx := context.Background()
+	observedAt := time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC)
+	resetAt := time.Date(2026, 7, 19, 20, 15, 45, 0, time.UTC)
+	period := int64((7 * 24 * time.Hour) / time.Millisecond)
+	used := 58.0
+	observation := func(at time.Time) resetwatch.Observation {
+		return resetwatch.Observation{
+			ProviderID:   resetwatch.ProviderCodex,
+			Account:      resetwatch.Account{Ref: "acct", Label: "Personal"},
+			ObservedAt:   at,
+			SnapshotJSON: []byte(`{"source":"deployed-jitter"}`),
+			Windows: []resetwatch.Window{{
+				Label:            resetwatch.LabelWeeklyLimit,
+				UsedPercent:      &used,
+				ResetAt:          resetAt,
+				PeriodDurationMs: &period,
+			}},
+		}
+	}
+
+	first, err := s.ApplyCodexPoll(ctx, pollInput(observation(observedAt), "telegram:42"))
+	if err != nil || len(first.PacingWarnings) != 1 {
+		t.Fatalf("first pacing warnings=%+v err=%v", first.PacingWarnings, err)
+	}
+	if _, err := s.db.Exec(`update pacing_alert_states set reset_at=? where window_key='primary.weekly'`, formatTime(resetAt.Add(time.Second))); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := s.ApplyCodexPoll(ctx, pollInput(observation(observedAt.Add(time.Hour)), "telegram:42"))
+	if err != nil || len(recovered.PacingWarnings) != 0 {
+		t.Fatalf("recovered pacing warnings=%+v err=%v", recovered.PacingWarnings, err)
+	}
+	var events, observations int
+	var stateReset string
+	if err := s.db.QueryRow(`select (select count(*) from pacing_warning_events),(select count(*) from limit_observations),(select reset_at from pacing_alert_states where window_key='primary.weekly')`).Scan(&events, &observations, &stateReset); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 || observations != 2 || stateReset != formatTime(resetAt.Add(time.Second)) {
+		t.Fatalf("events=%d observations=%d state_reset=%s", events, observations, stateReset)
+	}
+}
+
 func TestApplyCodexPollTransitionFixturesPersistExactPolicyAndOutbox(t *testing.T) {
 	s := openPollStore(t)
 	ctx := context.Background()

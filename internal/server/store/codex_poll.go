@@ -125,6 +125,9 @@ func (s *Store) ApplyCodexPoll(ctx context.Context, input CodexPollInput) (Codex
 	}
 	// Keep the v6 read model current for compatibility while policy v1 owns emission.
 	resetOptions := input.ResetOptions
+	if resetOptions.ClockJitter <= 0 {
+		resetOptions.ClockJitter = resetwatch.DefaultOptions().ClockJitter
+	}
 	if resetOptions.JokeChooser == nil {
 		resetOptions.JokeChooser = resetwatch.DefaultOptions().JokeChooser
 	}
@@ -150,7 +153,7 @@ func (s *Store) ApplyCodexPoll(ctx context.Context, input CodexPollInput) (Codex
 	if err != nil {
 		return empty, err
 	}
-	inserted.PacingWarnings, err = persistPacingAlerts(ctx, tx, obs, pacingReport, profileRef, targets, input.CommittedAt)
+	inserted.PacingWarnings, err = persistPacingAlerts(ctx, tx, obs, pacingReport, profileRef, targets, resetOptions.ClockJitter, input.CommittedAt)
 	if err != nil {
 		return empty, err
 	}

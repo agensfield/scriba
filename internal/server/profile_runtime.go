@@ -154,6 +154,7 @@ func (s *Server) refreshProfiles(ctx context.Context) (RefreshResult, error) {
 				return result, ctx.Err()
 			}
 			kind, code := profileFailure(pollErr, stage)
+			s.logger.Warn("scriba profile poll failed", "profile_ref", profile.Ref, "stage", stage, "failure_kind", kind, "error_code", code)
 			if recordErr := s.store.RecordProfilePollFailure(bookkeepingCtx, profile.Ref, attempt, completed, kind, code); recordErr != nil {
 				bookkeepingCancel()
 				if isProfileScopedStoreError(recordErr) {
