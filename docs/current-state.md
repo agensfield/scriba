@@ -1,6 +1,6 @@
 # Scriba Current State
 
-Date: 2026-07-13
+Date: 2026-07-14
 
 Scriba is the first child project under Agensfield. It is a fast, minimal
 Claude Code and Codex usage tracker.
@@ -61,6 +61,13 @@ Claude Code and Codex usage tracker.
   rollback proof, one real Telegram pacing delivery, explicit refresh, and two
   restart dedupe smokes passed. See [`release-v0.3.1.md`](release-v0.3.1.md)
   and [`schema-v12-migration.md`](schema-v12-migration.md).
+- `v0.3.2` is published and deployed at `c5cd5b2`. It stabilizes pacing event
+  identity across second-level Codex reset-clock jitter while continuing to use
+  the live reset for budget math. The release also adds sanitized per-profile
+  failure classification to resident logs. Exact-commit CI, full local gates,
+  reproducible release publication, Homebrew upgrade/test, verified backup,
+  exact-artifact deployment, and the previously failing live jitter shape all
+  passed. See [`release-v0.3.2.md`](release-v0.3.2.md).
 - Pricing is embedded from a hash-bound reviewed offline catalog. Maintainer
   refresh writes a candidate only; CI validates provenance, aliases, rates,
   tier thresholds, boundary goldens, and deterministic generation without

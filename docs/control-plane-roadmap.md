@@ -489,3 +489,12 @@ CLI/server operational and release work.
   recovered the fully verified draft after a GitHub eventual-consistency miss;
   `623d3fd` now consumes the release action's direct ID and CI `29285107517` is
   green. Homebrew is updated at `7773439`.
+- 2026-07-14: `v0.3.2` fixed production health flapping caused by upstream
+  weekly reset timestamps moving by one or two seconds inside one quota cycle.
+  Stable pacing identity now shares reset detection's jitter tolerance, while
+  budget math retains the live provider timestamp. Regression tests reproduce
+  both ordinary jitter and the exact deployed conflict state. Exact-commit CI
+  `29332564726`, release workflow `29332840366`, full local race/check gates,
+  Homebrew `5bb1171`, verified backup, and exact-artifact devbox activation
+  passed. Startup plus explicit refreshes accepted the formerly hostile state
+  without another event or outbox row. See `docs/release-v0.3.2.md`.
