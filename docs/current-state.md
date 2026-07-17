@@ -68,6 +68,14 @@ Claude Code and Codex usage tracker.
   reproducible release publication, Homebrew upgrade/test, verified backup,
   exact-artifact deployment, and the previously failing live jitter shape all
   passed. See [`release-v0.3.2.md`](release-v0.3.2.md).
+- `v0.3.3` is published and deployed at `a3d3d68`. The CLI can now preview
+  and explicitly redeem the oldest-expiring Codex reset grant, while Telegram
+  `/reset [profile]` adds an owner-bound, ten-minute Confirm/Cancel flow.
+  Duplicate callbacks and transient retries preserve one logical idempotency
+  key. Exact-commit CI, reproducible release publication, Homebrew
+  upgrade/test, verified backup, exact-artifact deployment, Telegram command
+  registration, and a live non-mutating dry run all passed. See
+  [`release-v0.3.3.md`](release-v0.3.3.md).
 - Pricing is embedded from a hash-bound reviewed offline catalog. Maintainer
   refresh writes a candidate only; CI validates provenance, aliases, rates,
   tier thresholds, boundary goldens, and deterministic generation without
