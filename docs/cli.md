@@ -104,6 +104,7 @@ scriba codex monthly
 scriba codex sessions
 scriba codex limits
 scriba codex reset-grants
+scriba codex reset --dry-run
 scriba codex profile
 scriba codex budget
 scriba codex limits --fast
@@ -154,6 +155,17 @@ is passed, appends the same live Codex limits and reset-grant metadata.
 view, including every available grant's `grantedAt` and `expiresAt` timestamp
 when OpenAI exposes the read-only reset-credit metadata. The short alias is
 `scriba codex grants`.
+
+`scriba codex reset` fetches current usage and grant metadata, selects the
+available credit expiring soonest, prints the exact credit, and requires an
+explicit `y` confirmation before redeeming it. Use `--credit <id>` to pin a
+specific available grant, `--dry-run` to stop before the redeeming POST, or
+`--yes` for deliberate noninteractive use. JSON redemption requires `--yes`;
+JSON previews use `--dry-run`. Each attempt sends one UUID idempotency key and
+the selected credit ID, then reports one of `reset`, `nothing_to_reset`,
+`no_credit`, or `already_redeemed`. Scriba does not retry a timed-out mutation
+with a new key: it retries one transient failure with the same key and never
+exposes grant redemption through Telegram or MCP.
 
 `scriba codex profile` shows the ChatGPT/Codex profile token-activity backend:
 lifetime and peak tokens, streaks, longest turn duration, reasoning/fast-mode

@@ -20,6 +20,8 @@ CLI, resident server, Telegram, Unix HTTP/SSE API, and stdio MCP.
 - Live Codex limit windows from the logged-in ChatGPT/Codex backend.
 - `scriba codex reset-grants` for available reset grants and each grant's
   expiration timestamp.
+- `scriba codex reset` for an explicitly confirmed redemption of the available
+  grant expiring soonest, with a non-mutating `--dry-run` preview.
 - `scriba codex profile` for ChatGPT/Codex profile token activity, streaks,
   reasoning mix, and top skills/plugins.
 - Explicit additional Codex buckets, including Spark when OpenAI exposes it.
@@ -84,6 +86,7 @@ scriba codex summary
 scriba codex daily --timezone Europe/Istanbul
 scriba codex limits
 scriba codex reset-grants
+scriba codex reset --dry-run
 scriba codex profile
 scriba context --json
 scriba context --json --profile work
@@ -95,10 +98,11 @@ Use `--json` when another program is consuming the output:
 ```sh
 scriba codex limits --json
 scriba codex reset-grants --json
+scriba codex reset --dry-run --json
 scriba codex profile --json
 ```
 
-`scriba codex limits`, `scriba codex reset-grants`, and
+`scriba codex limits`, `scriba codex reset-grants`, `scriba codex reset`, and
 `scriba codex profile` use local Codex OAuth state from
 `${CODEX_HOME:-~/.codex}/auth.json`. An OpenAI API key cannot expose these
 ChatGPT subscription windows or profile stats.
@@ -135,6 +139,7 @@ just check
 just install-cli
 just cli codex limits
 just cli codex reset-grants
+just cli codex reset --dry-run
 ```
 
 `just check` is the core Go gate. macOS menu bar recipes remain available:

@@ -405,7 +405,7 @@ func fetchResetCredits(ctx context.Context, client *http.Client, auth remote.Aut
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resetCreditsResponse{}, fmt.Errorf("codex reset credits request failed: %d", resp.StatusCode)
+		return resetCreditsResponse{}, resetCreditsHTTPError{status: resp.StatusCode, operation: "list"}
 	}
 	var parsed resetCreditsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -518,6 +518,15 @@ type usageHTTPError struct {
 	status int
 }
 
+type resetCreditsHTTPError struct {
+	status    int
+	operation string
+}
+
+func (e resetCreditsHTTPError) Error() string {
+	return fmt.Sprintf("codex reset credits %s request failed: %d", e.operation, e.status)
+}
+
 func (e usageHTTPError) Error() string {
 	return fmt.Sprintf("codex usage request failed: %d", e.status)
 }
@@ -619,7 +628,11 @@ func isAuthHTTPError(err error) bool {
 		return true
 	}
 	var profileErr profileHTTPError
-	return err != nil && errors.As(err, &profileErr) && (profileErr.status == http.StatusUnauthorized || profileErr.status == http.StatusForbidden)
+	if err != nil && errors.As(err, &profileErr) && (profileErr.status == http.StatusUnauthorized || profileErr.status == http.StatusForbidden) {
+		return true
+	}
+	var resetErr resetCreditsHTTPError
+	return err != nil && errors.As(err, &resetErr) && (resetErr.status == http.StatusUnauthorized || resetErr.status == http.StatusForbidden)
 }
 
 func loadAuth(ctx context.Context, client *http.Client, forceRefresh bool, paths []string) (remote.AuthState, error) {

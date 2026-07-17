@@ -10,7 +10,7 @@ import (
 )
 
 var publicOutputSchemaNames = []string{
-	"status", "codex-limits", "codex-profile", "codex-reset-grants", "budget",
+	"status", "codex-limits", "codex-profile", "codex-reset-grants", "codex-reset", "budget",
 	"policy-validate", "policy-list", "policy-explain", "outbox-list",
 	"context", "event", "events", "local-health", "local-error",
 	"profiles",
@@ -59,6 +59,7 @@ func TestPublicOutputSchemasAllowOptionalOmissions(t *testing.T) {
 		"codex-limits":       map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "status-cache", "mode": "fast", "lines": []any{}},
 		"codex-profile":      map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-profile-backend", "profile": map[string]any{}, "stats": map[string]any{}, "metadata": map[string]any{}, "authState": map[string]any{"ok": false}},
 		"codex-reset-grants": map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-backend", "mode": "live", "authState": map[string]any{"ok": false}, "resetCredits": []any{}, "summary": map[string]any{"available": 0}},
+		"codex-reset":        map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-backend", "dryRun": true, "outcome": "planned", "windowsReset": 0, "availableBefore": 1, "credit": map[string]any{"id": "credit-1"}, "authState": map[string]any{"ok": true}},
 		"policy-validate":    map[string]any{"schemaVersion": "scriba.policy-validate.v1", "valid": false, "file": "invalid.json", "rules": []any{}, "errors": []any{"invalid policy"}},
 		"context": map[string]any{"schemaVersion": "scriba.context.v1", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{
 			map[string]any{"sourceId": "codex-quota", "kind": "quota", "availability": "unavailable", "provenance": []any{map[string]any{"source": "status-cache"}}, "reasonCode": "missing"},

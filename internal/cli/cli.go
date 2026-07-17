@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -73,6 +76,9 @@ type options struct {
 	target          string
 	profile         string
 	profileSet      bool
+	credit          string
+	yes             bool
+	dryRun          bool
 }
 
 func Run(args []string) int {
@@ -187,6 +193,19 @@ func dispatch(args []string) error {
 				return err
 			}
 			return runCodexResetGrants(opts)
+		}
+		if args[0] == "codex" && args[1] == "reset" {
+			opts, rest, err := parse(args[2:], flagSpec{
+				Use:   "scriba codex reset [flags]",
+				Flags: []string{"json", "credit", "dry-run", "yes"},
+			})
+			if err != nil {
+				return err
+			}
+			if len(rest) > 0 {
+				return fmt.Errorf("scriba codex reset does not accept positional arguments")
+			}
+			return runCodexReset(opts)
 		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use:   fmt.Sprintf("scriba %s %s [flags]", args[0], args[1]),
@@ -365,6 +384,9 @@ var flagHelp = map[string]flagMeta{
 	"status":            {Name: "status", Value: "status", Usage: "outbox status"},
 	"target":            {Name: "target", Value: "target", Usage: "delivery target"},
 	"profile":           {Name: "profile", Value: "id", Usage: "configured profile id"},
+	"credit":            {Name: "credit", Value: "id", Usage: "redeem a specific reset credit"},
+	"dry-run":           {Name: "dry-run", Usage: "select and show a reset credit without redeeming it"},
+	"yes":               {Name: "yes", Usage: "confirm reset redemption without prompting"},
 }
 
 func parse(args []string, spec flagSpec) (options, []string, error) {
@@ -458,6 +480,12 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 				opts.profile = value
 				return nil
 			})
+		case "credit":
+			fs.StringVar(&opts.credit, name, "", flagHelp[name].Usage)
+		case "dry-run":
+			fs.BoolVar(&opts.dryRun, name, false, flagHelp[name].Usage)
+		case "yes":
+			fs.BoolVar(&opts.yes, name, false, flagHelp[name].Usage)
 		}
 	}
 	fs.SetOutput(io.Discard)
@@ -677,6 +705,136 @@ func runCodexResetGrants(opts options) error {
 		return err
 	}
 	return output(opts, resetGrantsPayload(payload), renderResetGrants(payload))
+}
+
+type codexResetPayload struct {
+	SchemaVersion    string             `json:"schemaVersion"`
+	ProviderID       string             `json:"providerId"`
+	Source           string             `json:"source"`
+	DryRun           bool               `json:"dryRun"`
+	Outcome          string             `json:"outcome"`
+	WindowsReset     int64              `json:"windowsReset"`
+	AvailableBefore  int                `json:"availableBefore"`
+	WeeklyUsedBefore *float64           `json:"weeklyUsedPercentBefore,omitempty"`
+	WeeklyResetsAt   string             `json:"weeklyResetsAt,omitempty"`
+	Credit           remote.ResetCredit `json:"credit"`
+	AuthState        remote.AuthState   `json:"authState"`
+}
+
+func runCodexReset(opts options) error {
+	if opts.dryRun && opts.yes {
+		return errors.New("--dry-run and --yes cannot be used together")
+	}
+	plan, err := remotecodex.PlanRateLimitReset(context.Background(), nil, remotecodex.FetchOptions{}, opts.credit)
+	if err != nil {
+		return err
+	}
+	payload := codexResetPayload{
+		SchemaVersion:    model.SchemaVersion,
+		ProviderID:       plan.ProviderID,
+		Source:           plan.Source,
+		DryRun:           true,
+		Outcome:          "planned",
+		AvailableBefore:  plan.AvailableCount,
+		WeeklyUsedBefore: plan.WeeklyUsed,
+		WeeklyResetsAt:   plan.WeeklyResetsAt,
+		Credit:           plan.Credit,
+		AuthState:        plan.AuthState,
+	}
+	if opts.dryRun {
+		return output(opts, payload, renderCodexReset(payload))
+	}
+	if opts.jsonOut && !opts.yes {
+		return errors.New("scriba codex reset --json requires --yes or --dry-run")
+	}
+	if !opts.yes {
+		fmt.Println(renderCodexReset(payload))
+		confirmed, err := confirmCodexReset(os.Stdin, os.Stdout)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Println("reset cancelled")
+			return nil
+		}
+	}
+	requestID, err := newResetRequestID()
+	if err != nil {
+		return err
+	}
+	result, err := remotecodex.ConsumeRateLimitResetCredit(context.Background(), nil, remotecodex.FetchOptions{}, plan.Credit, requestID)
+	if err != nil {
+		return err
+	}
+	payload.DryRun = false
+	payload.Outcome = result.Outcome
+	payload.WindowsReset = result.WindowsReset
+	payload.AuthState = result.AuthState
+	return output(opts, payload, renderCodexReset(payload))
+}
+
+func renderCodexReset(payload codexResetPayload) string {
+	var b strings.Builder
+	b.WriteString(cliHeader("Codex reset"))
+	b.WriteString("\n")
+	status := payload.Outcome
+	renderStatus := cliValue
+	switch payload.Outcome {
+	case "planned":
+		status = "dry run · no credit redeemed"
+		renderStatus = cliYellow
+	case remotecodex.ResetOutcomeReset:
+		status = fmt.Sprintf("reset complete · %d windows reset", payload.WindowsReset)
+		renderStatus = cliGreen
+	case remotecodex.ResetOutcomeNothingToReset:
+		status = "nothing eligible to reset"
+	case remotecodex.ResetOutcomeNoCredit:
+		status = "no reset credit available"
+	case remotecodex.ResetOutcomeAlreadyRedeemed:
+		status = "this reset attempt was already redeemed"
+	}
+	fmt.Fprintf(&b, "%s\n", renderStatus(status))
+	if payload.WeeklyUsedBefore != nil {
+		fmt.Fprintf(&b, "%-13s %.0f%% used\n", cliLabel("weekly"), *payload.WeeklyUsedBefore)
+	}
+	if payload.AvailableBefore > 0 {
+		fmt.Fprintf(&b, "%-13s %d before reset\n", cliLabel("grants"), payload.AvailableBefore)
+	}
+	title := payload.Credit.Title
+	if title == "" {
+		title = "Reset grant"
+	}
+	fmt.Fprintf(&b, "%-13s %s\n", cliLabel("credit"), cliBold(title))
+	if payload.Credit.ExpiresAt != "" {
+		fmt.Fprintf(&b, "%-13s %s\n", cliLabel("expires"), formatGrantExpiry(payload.Credit.ExpiresAt, time.Now().UTC()))
+	}
+	fmt.Fprintf(&b, "%-13s %s", cliLabel("id"), cliMuted(payload.Credit.ID))
+	return b.String()
+}
+
+func confirmCodexReset(r io.Reader, w io.Writer) (bool, error) {
+	_, _ = fmt.Fprint(w, "Redeem this reset credit now? [y/N] ")
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func newResetRequestID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	raw[6] = (raw[6] & 0x0f) | 0x40
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	encoded := hex.EncodeToString(raw[:])
+	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
 }
 
 func renderCodexProfile(profile remotecodex.ProfileResult) string {
@@ -1565,7 +1723,7 @@ func commands() map[string][]string {
 	return map[string][]string{
 		"root":     {"doctor", "status", "context", "mcp", "claude", "codex", "schema", "config", "policy", "outbox", "cache", "bench", "telegram", "server", "update", "version"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks", "budget"},
-		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "profile", "budget"},
+		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "reset", "profile", "budget"},
 		"config":   {"path", "show", "init", "telegram"},
 		"policy":   {"validate", "list", "explain"},
 		"outbox":   {"list"},
@@ -1610,12 +1768,14 @@ Commands:
   scriba codex sessions
   scriba codex limits
   scriba codex reset-grants
+  scriba codex reset
   scriba codex profile
   scriba codex budget
 
 Live commands:
   limits           fetch current Codex windows from ChatGPT/Codex auth
   reset-grants     show available reset grants and their expirations
+  reset            redeem the available reset grant expiring soonest
   profile          show ChatGPT/Codex profile token activity
   budget           derive quota pacing and exhaustion risk from live limits
 
@@ -1630,6 +1790,7 @@ Examples:
   scriba codex limits --json
   scriba codex budget
   scriba codex reset-grants
+  scriba codex reset --dry-run
   scriba codex profile`
 	case "config":
 		return `scriba config - Manage Scriba configuration.

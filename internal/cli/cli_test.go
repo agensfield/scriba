@@ -239,6 +239,55 @@ func TestCodexGroupHelpListsResetGrants(t *testing.T) {
 	if !strings.Contains(text, "scriba codex profile") {
 		t.Fatalf("codex help missing profile command:\n%s", text)
 	}
+	if !strings.Contains(text, "scriba codex reset --dry-run") {
+		t.Fatalf("codex help missing reset command:\n%s", text)
+	}
+}
+
+func TestCodexResetFlagsParseSafely(t *testing.T) {
+	opts, rest, err := parse([]string{"--credit", "credit-1", "--dry-run", "--json"}, flagSpec{
+		Use: "scriba codex reset [flags]", Flags: []string{"json", "credit", "dry-run", "yes"},
+	})
+	if err != nil || len(rest) != 0 || opts.credit != "credit-1" || !opts.dryRun || !opts.jsonOut || opts.yes {
+		t.Fatalf("opts=%+v rest=%v err=%v", opts, rest, err)
+	}
+}
+
+func TestConfirmCodexResetDefaultsNoAndRequiresExplicitYes(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{{"yes\n", true}, {"Y\n", true}, {"\n", false}, {"no\n", false}, {"", false}} {
+		var prompt strings.Builder
+		got, err := confirmCodexReset(strings.NewReader(tc.input), &prompt)
+		if err != nil || got != tc.want || prompt.String() != "Redeem this reset credit now? [y/N] " {
+			t.Fatalf("input=%q got=%t want=%t prompt=%q err=%v", tc.input, got, tc.want, prompt.String(), err)
+		}
+	}
+}
+
+func TestRenderCodexResetMakesDryRunAndSelectedCreditExplicit(t *testing.T) {
+	used := 99.0
+	text := stripANSI(renderCodexReset(codexResetPayload{
+		SchemaVersion: model.SchemaVersion, ProviderID: "codex", Source: "chatgpt-codex-backend",
+		DryRun: true, Outcome: "planned", AvailableBefore: 2, WeeklyUsedBefore: &used,
+		Credit: remote.ResetCredit{ID: "credit-oldest", Title: "Full reset", ExpiresAt: "2026-07-18T00:29:25Z"},
+	}))
+	for _, want := range []string{"Codex reset", "dry run · no credit redeemed", "99% used", "2 before reset", "Full reset", "credit-oldest"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestNewResetRequestIDIsUUID(t *testing.T) {
+	id, err := newResetRequestID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(id) {
+		t.Fatalf("id=%q", id)
+	}
 }
 
 func TestServerGroupHelpListsBackup(t *testing.T) {
