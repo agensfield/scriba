@@ -179,10 +179,11 @@ func evalRemaining(out *Result, rule Rule, in Input, windows map[string]WindowOb
 			continue
 		}
 		next := cloneState(prev)
-		if !sameTime(prev.LastResetAt, w.ResetAt) {
+		cycleReset, sameCycle := checkpointCycleReset(prev, w.ResetAt, time.Duration(rule.ClockJitterSec)*time.Second)
+		if !sameCycle {
 			next.ReachedCheckpoints = nil
 		}
-		next.LastResetAt, next.LastObservedAt, next.LastUsedPercent = w.ResetAt.UTC(), in.ObservedAt.UTC(), floatPtr(clamp(*w.UsedPercent))
+		next.StableResetAt, next.LastResetAt, next.LastObservedAt, next.LastUsedPercent = cycleReset, w.ResetAt.UTC(), in.ObservedAt.UTC(), floatPtr(clamp(*w.UsedPercent))
 		remaining := clamp(100 - clamp(*w.UsedPercent))
 		cp, matched := checkpoint(rule.Checkpoints, remaining)
 		reason, emit := ReasonNoMatch, false
@@ -199,10 +200,35 @@ func evalRemaining(out *Result, rule Rule, in Input, windows map[string]WindowOb
 		}
 		out.States[key] = next
 		if emit {
-			out.Events = append(out.Events, Event{ID: semanticID("warning", in.ProviderID, in.AccountRef, w.Label, w.ResetAt.UTC().Format(time.RFC3339Nano), fmt.Sprint(cp)), RuleID: rule.ID, Kind: EventRemainingCheckpoint, Subject: subject, LegacyLabel: w.Label, Checkpoint: cp, UsedPercent: clamp(*w.UsedPercent), RemainingPercent: remaining, ResetAt: w.ResetAt.UTC(), DetectedAt: in.ObservedAt.UTC()})
+			out.Events = append(out.Events, Event{ID: semanticID("warning", in.ProviderID, in.AccountRef, w.Label, cycleReset.Format(time.RFC3339Nano), fmt.Sprint(cp)), RuleID: rule.ID, Kind: EventRemainingCheckpoint, Subject: subject, LegacyLabel: w.Label, Checkpoint: cp, UsedPercent: clamp(*w.UsedPercent), RemainingPercent: remaining, ResetAt: cycleReset, DetectedAt: in.ObservedAt.UTC()})
 		}
 		explain(out, rule, subject, emit, reason)
 	}
+}
+
+func checkpointCycleReset(prev State, current time.Time, jitter time.Duration) (time.Time, bool) {
+	current = current.UTC()
+	stable := prev.StableResetAt.UTC()
+	if !stable.IsZero() {
+		if current.After(stable.Add(jitter)) {
+			return current, false
+		}
+		return stable, true
+	}
+	last := prev.LastResetAt.UTC()
+	if last.IsZero() {
+		return current, false
+	}
+	if current.Before(last) {
+		if last.Sub(current) <= jitter {
+			return current, true
+		}
+		return last, true
+	}
+	if current.Sub(last) <= jitter {
+		return last, true
+	}
+	return current, false
 }
 
 func evalReset(out *Result, rule Rule, in Input, windows map[string]WindowObservation) {
@@ -436,8 +462,7 @@ func copyFloat(v *float64) *float64 {
 	}
 	return floatPtr(clamp(*v))
 }
-func floatPtr(v float64) *float64  { return &v }
-func sameTime(a, b time.Time) bool { return !a.IsZero() && a.Equal(b) }
+func floatPtr(v float64) *float64 { return &v }
 func addInt(v []int, n int) []int {
 	if !slices.Contains(v, n) {
 		v = append(v, n)

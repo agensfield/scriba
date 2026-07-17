@@ -45,7 +45,7 @@ type Rule struct {
 
 func CurrentPreset() Config {
 	return Config{Rules: []Rule{
-		{ID: "current.remaining.primary", Kind: KindRemainingCheckpoint, WindowKeys: []string{"primary.five_hour", "primary.weekly"}, Checkpoints: []int{20, 10, 5, 0}},
+		{ID: "current.remaining.primary", Kind: KindRemainingCheckpoint, WindowKeys: []string{"primary.five_hour", "primary.weekly"}, Checkpoints: []int{20, 10, 5, 0}, ClockJitterSec: 300},
 		{ID: "current.reset.weekly", Kind: KindResetTransition, WindowKeys: []string{"primary.weekly"}, SecondaryWindowKeys: []string{"spark.weekly", "review.weekly"}, ClockJitterSec: 300, DueJitterSec: 600},
 		{ID: "current.grant.available", Kind: KindGrantAvailable},
 		{ID: "current.grant.expiry", Kind: KindGrantExpiryCheckpoint, Checkpoints: []int{5, 3, 1}},
@@ -113,8 +113,8 @@ func (r Rule) validate() error {
 		if len(r.WindowKeys) == 0 || !validCheckpoints(r.Checkpoints, 0, 100) {
 			return errors.New("remaining checkpoint requires unique windowKeys and descending checkpoints in [0,100]")
 		}
-		if r.ClockJitterSec != 0 || r.DueJitterSec != 0 {
-			return errors.New("remaining checkpoint does not accept jitter")
+		if r.ClockJitterSec < 0 || r.DueJitterSec != 0 || int64(r.ClockJitterSec) > maxJitterSeconds {
+			return errors.New("remaining checkpoint accepts non-negative clock jitter only")
 		}
 		if len(r.SecondaryWindowKeys) != 0 {
 			return errors.New("remaining checkpoint does not accept secondaryWindowKeys")

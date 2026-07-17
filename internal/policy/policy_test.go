@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -59,6 +60,73 @@ func TestCurrentRemainingMatchesResetwatchCandidate(t *testing.T) {
 	e := got.Events[0]
 	if e.ID != legacy[0].ID || e.Checkpoint != legacy[0].ThresholdRemaining || e.RemainingPercent != legacy[0].RemainingPercent {
 		t.Fatalf("policy=%#v legacy=%#v", e, legacy[0])
+	}
+}
+
+func TestRemainingCheckpointIgnoresResetClockJitter(t *testing.T) {
+	now := time.Date(2026, 7, 17, 13, 27, 0, 0, time.UTC)
+	resetAt := time.Date(2026, 7, 23, 4, 15, 55, 0, time.UTC)
+	previous := map[StateKey]State{}
+	evaluate := func(at, reset time.Time, used float64, bootstrap bool) Result {
+		t.Helper()
+		result, err := Evaluate(CurrentPreset(), Input{
+			ProviderID: "codex", AccountRef: "acct", ObservedAt: at, Bootstrap: bootstrap,
+			Windows:  []WindowObservation{{Key: "primary.weekly", Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used, ResetAt: reset}},
+			Previous: previous,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous = result.States
+		return result
+	}
+
+	if first := evaluate(now, resetAt, 94, true); len(first.Events) != 0 {
+		t.Fatalf("bootstrap events=%+v", first.Events)
+	}
+	checkpoint := evaluate(now.Add(5*time.Minute), resetAt, 95, false)
+	if len(checkpoint.Events) != 1 || !checkpoint.Events[0].ResetAt.Equal(resetAt) {
+		t.Fatalf("checkpoint events=%+v", checkpoint.Events)
+	}
+	if forward := evaluate(now.Add(10*time.Minute), resetAt.Add(2*time.Second), 95, false); len(forward.Events) != 0 {
+		t.Fatalf("forward jitter events=%+v", forward.Events)
+	}
+	back := evaluate(now.Add(15*time.Minute), resetAt, 96, false)
+	if len(back.Events) != 0 {
+		t.Fatalf("backward jitter events=%+v", back.Events)
+	}
+	state := back.States[StateKey{RuleID: "current.remaining.primary", Subject: "primary.weekly"}]
+	if !state.StableResetAt.Equal(resetAt) || !slices.Contains(state.ReachedCheckpoints, 5) {
+		t.Fatalf("state=%+v", state)
+	}
+}
+
+func TestRemainingCheckpointRepairsLegacyJitterState(t *testing.T) {
+	now := time.Date(2026, 7, 17, 13, 52, 0, 0, time.UTC)
+	resetAt := time.Date(2026, 7, 23, 4, 15, 55, 0, time.UTC)
+	used := 96.0
+	key := StateKey{RuleID: "current.remaining.primary", Subject: "primary.weekly"}
+	previous := map[StateKey]State{
+		key: {
+			LastResetAt:        resetAt.Add(2 * time.Second),
+			LastObservedAt:     now.Add(-5 * time.Minute),
+			LastUsedPercent:    floatPtr(95),
+			ReachedCheckpoints: []int{5},
+		},
+	}
+	result, err := Evaluate(CurrentPreset(), Input{
+		ProviderID: "codex", AccountRef: "acct", ObservedAt: now,
+		Windows:  []WindowObservation{{Key: "primary.weekly", Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used, ResetAt: resetAt}},
+		Previous: previous,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Events) != 0 {
+		t.Fatalf("repair events=%+v", result.Events)
+	}
+	if state := result.States[key]; !state.StableResetAt.Equal(resetAt) || !slices.Contains(state.ReachedCheckpoints, 5) {
+		t.Fatalf("repaired state=%+v", state)
 	}
 }
 

@@ -246,6 +246,56 @@ func TestApplyCodexPollPacingAlertsAcceptDeployedJitterState(t *testing.T) {
 	}
 }
 
+func TestApplyCodexPollRemainingCheckpointIgnoresProductionResetJitter(t *testing.T) {
+	s := openPollStore(t)
+	ctx := context.Background()
+	observedAt := time.Date(2026, 7, 17, 13, 27, 14, 0, time.UTC)
+	resetAt := time.Date(2026, 7, 23, 4, 15, 55, 0, time.UTC)
+	period := int64((7 * 24 * time.Hour) / time.Millisecond)
+	observation := func(at, reset time.Time, used float64) resetwatch.Observation {
+		return resetwatch.Observation{
+			ProviderID: resetwatch.ProviderCodex,
+			Account:    resetwatch.Account{Ref: "acct", Label: "Personal"},
+			ObservedAt: at,
+			Windows: []resetwatch.Window{{
+				Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used,
+				ResetAt: reset, PeriodDurationMs: &period,
+			}},
+			SnapshotJSON: []byte(fmt.Sprintf(`{"used":%.0f,"reset":%q}`, used, reset.Format(time.RFC3339))),
+		}
+	}
+
+	steps := []struct {
+		at    time.Time
+		reset time.Time
+		used  float64
+		want  int
+	}{
+		{observedAt, resetAt, 94, 0},
+		{observedAt.Add(5 * time.Minute), resetAt, 95, 1},
+		{observedAt.Add(20 * time.Minute), resetAt.Add(2 * time.Second), 95, 0},
+		{observedAt.Add(25 * time.Minute), resetAt, 96, 0},
+	}
+	for _, step := range steps {
+		got, err := s.ApplyCodexPoll(ctx, pollInput(observation(step.at, step.reset, step.used), "telegram:42"))
+		if err != nil || len(got.WarningEvents) != step.want {
+			t.Fatalf("at=%s warnings=%+v err=%v", step.at, got.WarningEvents, err)
+		}
+	}
+
+	var warnings, policyEvents, outbox, observations int
+	if err := s.db.QueryRow(`select
+		(select count(*) from limit_warning_events),
+		(select count(*) from policy_events where event_kind='limit_warning'),
+		(select count(*) from notification_outbox where event_kind='limit_warning'),
+		(select count(*) from limit_observations)`).Scan(&warnings, &policyEvents, &outbox, &observations); err != nil {
+		t.Fatal(err)
+	}
+	if warnings != 1 || policyEvents != 1 || outbox != 1 || observations != 4 {
+		t.Fatalf("warnings=%d policy=%d outbox=%d observations=%d", warnings, policyEvents, outbox, observations)
+	}
+}
+
 func TestApplyCodexPollTransitionFixturesPersistExactPolicyAndOutbox(t *testing.T) {
 	s := openPollStore(t)
 	ctx := context.Background()
@@ -649,7 +699,7 @@ func TestApplyCodexPollSemanticConflictRollsBackTypedEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := codexPollObservation(base.Add(time.Minute), 81)
-	eventID := resetwatch.WarningEventID("codex", "acct", resetwatch.LabelFiveHour, second.Windows[0].ResetAt, 20)
+	eventID := resetwatch.WarningEventID("codex", "acct", resetwatch.LabelFiveHour, first.Windows[0].ResetAt, 20)
 	now := formatTime(base)
 	_, err := s.db.Exec(`insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "conflict", "conflict", "limit_warning", eventID, "current.remaining.primary", "primary.five_hour", "remaining_checkpoint", "codex", "acct", "other", "other", 1, `{}`, now, now)
 	if err != nil {
