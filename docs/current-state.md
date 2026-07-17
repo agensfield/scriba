@@ -76,6 +76,14 @@ Claude Code and Codex usage tracker.
   upgrade/test, verified backup, exact-artifact deployment, Telegram command
   registration, and a live non-mutating dry run all passed. See
   [`release-v0.3.3.md`](release-v0.3.3.md).
+- `v0.3.4` is published and deployed at `2b8fcd4`. It stabilizes ordinary
+  remaining-checkpoint state, event identity, and payloads across second-level
+  Codex reset-clock jitter, including repair of the exact deployed dirty state.
+  The previously wedged live database recovered immediately without duplicate
+  warnings or queue writes. Full and race gates, exact-commit CI, reproducible
+  publication, Homebrew upgrade/test, copied-production drill, verified backup,
+  and exact-artifact deployment passed. See
+  [`release-v0.3.4.md`](release-v0.3.4.md).
 - Pricing is embedded from a hash-bound reviewed offline catalog. Maintainer
   refresh writes a candidate only; CI validates provenance, aliases, rates,
   tier thresholds, boundary goldens, and deterministic generation without
