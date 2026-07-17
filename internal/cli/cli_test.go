@@ -281,7 +281,7 @@ func TestRenderCodexResetMakesDryRunAndSelectedCreditExplicit(t *testing.T) {
 }
 
 func TestNewResetRequestIDIsUUID(t *testing.T) {
-	id, err := newResetRequestID()
+	id, err := remotecodex.NewRateLimitResetRequestID()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,8 +3,6 @@ package cli
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -758,7 +756,7 @@ func runCodexReset(opts options) error {
 			return nil
 		}
 	}
-	requestID, err := newResetRequestID()
+	requestID, err := remotecodex.NewRateLimitResetRequestID()
 	if err != nil {
 		return err
 	}
@@ -824,17 +822,6 @@ func confirmCodexReset(r io.Reader, w io.Writer) (bool, error) {
 	default:
 		return false, nil
 	}
-}
-
-func newResetRequestID() (string, error) {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	raw[6] = (raw[6] & 0x0f) | 0x40
-	raw[8] = (raw[8] & 0x3f) | 0x80
-	encoded := hex.EncodeToString(raw[:])
-	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
 }
 
 func renderCodexProfile(profile remotecodex.ProfileResult) string {

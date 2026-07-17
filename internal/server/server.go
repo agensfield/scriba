@@ -386,11 +386,48 @@ func (s *Server) CodexProfileForProfile(ctx context.Context, profileRef string) 
 	return sanitizeCodexProfileResult(result), nil
 }
 
+func (s *Server) PlanCodexReset(ctx context.Context, profileRef string) (remotecodex.RateLimitResetPlan, error) {
+	profile, err := s.configuredProfile(profileRef)
+	if err != nil {
+		return remotecodex.RateLimitResetPlan{}, err
+	}
+	if len(profile.AuthPaths) == 0 && !profile.AllowAuthDiscovery {
+		return remotecodex.RateLimitResetPlan{}, ErrProfileAuthPaths
+	}
+	plan, err := remotecodex.PlanRateLimitReset(ctx, nil, remotecodex.FetchOptions{AuthPaths: append([]string(nil), profile.AuthPaths...)}, "")
+	if err != nil {
+		return remotecodex.RateLimitResetPlan{}, err
+	}
+	plan.AuthState = sanitizeCodexAuthState(plan.AuthState)
+	return plan, nil
+}
+
+func (s *Server) ConsumeCodexReset(ctx context.Context, profileRef string, credit remote.ResetCredit, requestID string) (remotecodex.RateLimitResetResult, error) {
+	profile, err := s.configuredProfile(profileRef)
+	if err != nil {
+		return remotecodex.RateLimitResetResult{}, err
+	}
+	if len(profile.AuthPaths) == 0 && !profile.AllowAuthDiscovery {
+		return remotecodex.RateLimitResetResult{}, ErrProfileAuthPaths
+	}
+	result, err := remotecodex.ConsumeRateLimitResetCredit(ctx, nil, remotecodex.FetchOptions{AuthPaths: append([]string(nil), profile.AuthPaths...)}, credit, requestID)
+	if err != nil {
+		return remotecodex.RateLimitResetResult{}, err
+	}
+	result.AuthState = sanitizeCodexAuthState(result.AuthState)
+	return result, nil
+}
+
+func sanitizeCodexAuthState(auth remote.AuthState) remote.AuthState {
+	auth.Source = ""
+	auth.Error = ""
+	auth.AccessToken = ""
+	auth.AccountID = ""
+	return auth
+}
+
 func sanitizeCodexProfileResult(result remotecodex.ProfileResult) remotecodex.ProfileResult {
-	result.AuthState.Source = ""
-	result.AuthState.Error = ""
-	result.AuthState.AccessToken = ""
-	result.AuthState.AccountID = ""
+	result.AuthState = sanitizeCodexAuthState(result.AuthState)
 	if result.Metadata.StatsError != nil {
 		result.Metadata.StatsError = "profile stats unavailable"
 	}

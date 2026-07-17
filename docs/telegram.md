@@ -37,6 +37,8 @@ In Telegram:
 /limits work
 /grants
 /grants work
+/reset
+/reset work
 /profile
 /profile work
 /refresh
@@ -45,14 +47,15 @@ In Telegram:
 ```
 
 `/profiles` lists enabled stable config IDs with labels, health, and
-the default marker. `/limits [profile]`, `/grants [profile]`, and
-`/profile [profile]` resolve only that profile's durable current account;
+the default marker. `/limits [profile]`, `/grants [profile]`,
+`/reset [profile]`, and `/profile [profile]` resolve only that configured profile;
 omission selects the configured default. Unknown, disabled, malformed, or
 extra arguments fail without falling back to another account.
 
 The main keyboard and `/profiles` expose versioned inline profile navigation.
 Profile lists use bounded six-row pages; choosing a profile opens exact
-profile-scoped Limits, Grants, and Profile stats controls. Callback data stays
+profile-scoped Limits, Grants, Reset limits, and Profile stats controls.
+Callback data stays
 under Telegram's 64-byte limit and rendered HTML stays under 4096 bytes. Stale
 or removed profile controls retire themselves rather than falling back to the
 default account. Callback API/edit failures remain visible to the durable inbox
@@ -73,6 +76,16 @@ latest durable observation: title, reset type, status, granted time, expiry,
 remaining lifetime, and full credit id for every available grant. It is also
 available as a dedicated Grants button in the main inline keyboard. Run
 `/refresh` first when a newly fetched provider observation is required.
+
+`/reset [profile]` and the Reset limits buttons fetch a fresh provider preview
+and select the available credit expiring soonest. The preview shows weekly
+usage, available grant count, the exact credit id, and expiry. Redemption only
+happens after Confirm reset is pressed by the same allowed user in the same
+chat. Cancel spends nothing. Confirmation tokens contain no credit or auth
+data, remain below Telegram's callback limit, and expire after ten minutes.
+Transient retries reuse the original UUID idempotency key; duplicate callbacks
+return the stored result instead of consuming again. Restarting the resident
+service intentionally expires outstanding confirmations.
 
 ## systemd User Service
 

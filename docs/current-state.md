@@ -94,6 +94,11 @@ Claude Code and Codex usage tracker.
 - Telegram `/grants` and its dedicated inline keyboard button render every
   available reset grant from the latest durable server observation, including
   title, type, status, granted time, expiry, remaining lifetime, and full id.
+- Telegram `/reset [profile]` and Reset limits buttons use a fresh,
+  profile-isolated preview followed by an owner-bound ten-minute confirmation.
+  The callback contains only an opaque short token; the exact credit and stable
+  idempotency UUID remain resident. Cancel, expiry, foreign users, and duplicate
+  callbacks cannot spend another grant.
 - Schema v7 stores reset, limit-warning, grant-warning, reset-grant, and Radar
   notification intents in one canonical outbox, atomically with their typed
   business events. Telegram claims one target-filtered row at a time with a
@@ -217,7 +222,7 @@ The devbox server and Telegram bot lane is implemented:
   reset-grant expiry warnings, health/recovery alerts, stats, and radar
   probability milestone alerts.
 - Telegram `/profiles` exposes bounded safe configured-profile health;
-  `/limits [profile]`, `/grants [profile]`, and `/profile [profile]` select the
+  `/limits [profile]`, `/grants [profile]`, `/reset [profile]`, and `/profile [profile]` select the
   mapped account while omission uses the configured default.
 - Radar probability alerts fire on upward 24h probability checkpoint crossings
   at 25%, 50%, and 75%; drops update the stored checkpoint silently so later

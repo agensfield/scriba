@@ -42,7 +42,7 @@ func RenderProfiles(profiles []server.ProfileHealth) string {
 	if len(profiles) == 0 {
 		b.WriteString("\nno enabled profiles available")
 	} else {
-		b.WriteString("\n\nUse <code>/limits id</code>, <code>/grants id</code>, or <code>/profile id</code>.")
+		b.WriteString("\n\nUse <code>/limits id</code>, <code>/grants id</code>, <code>/reset id</code>, or <code>/profile id</code>.")
 	}
 	return b.String()
 }
@@ -132,6 +132,49 @@ func RenderResetGrantDetails(obs resetwatch.Observation) string {
 		fmt.Fprintf(&b, "\n\n<b>%d. %s</b>\n<pre>%s</pre>", i+1, html.EscapeString(title), html.EscapeString(strings.Join(rows, "\n")))
 	}
 	return b.String()
+}
+
+func RenderCodexResetConfirmation(profileID string, plan remotecodex.RateLimitResetPlan) string {
+	rows := []string{}
+	if plan.WeeklyUsed != nil {
+		rows = append(rows, fmt.Sprintf("%-9s %.0f%% used", "weekly", *plan.WeeklyUsed))
+	}
+	rows = append(rows, fmt.Sprintf("%-9s %d", "grants", plan.AvailableCount))
+	if plan.Credit.Title != "" {
+		rows = append(rows, fmt.Sprintf("%-9s %s", "credit", plan.Credit.Title))
+	}
+	if expiresAt, err := time.Parse(time.RFC3339Nano, plan.Credit.ExpiresAt); err == nil {
+		rows = append(rows, fmt.Sprintf("%-9s %s", "expires", formatGrantExpiry(expiresAt)))
+	}
+	rows = append(rows, fmt.Sprintf("%-9s %s", "id", plan.Credit.ID))
+	return renderSelectedProfile(profileID, "<b>Confirm Codex limit reset?</b>\n\n<pre>"+html.EscapeString(strings.Join(rows, "\n"))+"</pre>\n\nThis spends one reset grant. Confirmation expires in 10 minutes.")
+}
+
+func RenderCodexResetResult(profileID string, result remotecodex.RateLimitResetResult) string {
+	status := result.Outcome
+	switch result.Outcome {
+	case remotecodex.ResetOutcomeReset:
+		status = fmt.Sprintf("reset complete · %d windows reset", result.WindowsReset)
+	case remotecodex.ResetOutcomeNothingToReset:
+		status = "nothing was eligible to reset"
+	case remotecodex.ResetOutcomeNoCredit:
+		status = "no reset credit was available"
+	case remotecodex.ResetOutcomeAlreadyRedeemed:
+		status = "this reset attempt was already completed"
+	}
+	body := "<b>Codex reset result</b>\n\n" + html.EscapeString(status)
+	if result.Credit.ID != "" {
+		body += "\n<code>" + html.EscapeString(result.Credit.ID) + "</code>"
+	}
+	return renderSelectedProfile(profileID, body)
+}
+
+func RenderCodexResetCancelled(profileID string) string {
+	return renderSelectedProfile(profileID, "<b>Codex reset cancelled</b>\nNo reset grant was spent.")
+}
+
+func RenderCodexResetRetry(profileID string) string {
+	return renderSelectedProfile(profileID, "<b>Codex reset failed</b>\nThe same confirmation can be retried safely with its original idempotency key.")
 }
 
 func RenderProfile(profile remotecodex.ProfileResult) string {

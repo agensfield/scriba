@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -530,6 +531,167 @@ func TestGrantsCommandShowsDetailedCachedCredits(t *testing.T) {
 	}
 }
 
+func TestResetCommandRequiresBoundConfirmationAndReusesCompletedResult(t *testing.T) {
+	used := 99.0
+	credit := remote.ResetCredit{ID: "RateLimitResetCredit_oldest", Status: "available", Title: "Full reset", ExpiresAt: "2026-07-18T00:29:25Z"}
+	controller := &fakeController{
+		resetPlan:   remotecodex.RateLimitResetPlan{ProviderID: "codex", AvailableCount: 2, Credit: credit, WeeklyUsed: &used},
+		resetResult: remotecodex.RateLimitResetResult{ProviderID: "codex", Outcome: remotecodex.ResetOutcomeReset, WindowsReset: 2, Credit: credit},
+	}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	reply, markup := svc.handleCommandFor(t.Context(), "/reset work", 123, 7)
+	if controller.resetConsumes != 0 || controller.resetProfile != "work" {
+		t.Fatalf("preview mutated or selected wrong profile: consumes=%d profile=%q", controller.resetConsumes, controller.resetProfile)
+	}
+	for _, want := range []string{"Confirm Codex limit reset?", "99% used", "RateLimitResetCredit_oldest", "spends one reset grant"} {
+		if !strings.Contains(reply, want) {
+			t.Fatalf("preview missing %q:\n%s", want, reply)
+		}
+	}
+	keyboard, ok := markup.(models.InlineKeyboardMarkup)
+	if !ok || len(keyboard.InlineKeyboard) != 2 {
+		t.Fatalf("keyboard=%+v", markup)
+	}
+	confirm := keyboard.InlineKeyboard[0][0].CallbackData
+	cancel := keyboard.InlineKeyboard[1][0].CallbackData
+	if len([]byte(confirm)) > 64 || len([]byte(cancel)) > 64 {
+		t.Fatalf("callbacks exceed Telegram limit: %q %q", confirm, cancel)
+	}
+	query := resetTestQuery(confirm, 123, 7)
+	if err := svc.handleResetCallback(t.Context(), query); err != nil {
+		t.Fatal(err)
+	}
+	if controller.resetConsumes != 1 || controller.resetCredit.ID != credit.ID || controller.resetProfile != "work" || !regexp.MustCompile(`^[0-9a-f-]{36}$`).MatchString(controller.resetRequestID) {
+		t.Fatalf("consume=%d profile=%q credit=%+v request=%q", controller.resetConsumes, controller.resetProfile, controller.resetCredit, controller.resetRequestID)
+	}
+	if err := svc.handleResetCallback(t.Context(), query); err != nil {
+		t.Fatal(err)
+	}
+	if controller.resetConsumes != 1 {
+		t.Fatalf("completed callback consumed again: %d", controller.resetConsumes)
+	}
+}
+
+func TestResetConfirmationIsOwnerBoundCancellableAndExpires(t *testing.T) {
+	credit := remote.ResetCredit{ID: "credit", Status: "available"}
+	controller := &fakeController{resetPlan: remotecodex.RateLimitResetPlan{Credit: credit}, resetResult: remotecodex.RateLimitResetResult{Outcome: remotecodex.ResetOutcomeReset, Credit: credit}}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	_, markup := svc.handleCommandFor(t.Context(), "/reset", 123, 7)
+	keyboard := markup.(models.InlineKeyboardMarkup)
+	confirm := keyboard.InlineKeyboard[0][0].CallbackData
+	cancel := keyboard.InlineKeyboard[1][0].CallbackData
+	if err := svc.handleResetCallback(t.Context(), resetTestQuery(confirm, 123, 8)); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.handleResetCallback(t.Context(), resetTestQuery(confirm, 999, 7)); err != nil {
+		t.Fatal(err)
+	}
+	if controller.resetConsumes != 0 {
+		t.Fatal("foreign callback consumed reset")
+	}
+	if err := svc.handleResetCallback(t.Context(), resetTestQuery(cancel, 123, 7)); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.handleResetCallback(t.Context(), resetTestQuery(confirm, 123, 7)); err != nil {
+		t.Fatal(err)
+	}
+	if controller.resetConsumes != 0 {
+		t.Fatal("cancelled callback consumed reset")
+	}
+
+	_, markup = svc.handleCommandFor(t.Context(), "/reset", 123, 7)
+	confirm = markup.(models.InlineKeyboardMarkup).InlineKeyboard[0][0].CallbackData
+	_, token, _ := parseResetCallback(confirm)
+	svc.pendingResets[token].ExpiresAt = time.Now().Add(-time.Second)
+	if err := svc.handleResetCallback(t.Context(), resetTestQuery(confirm, 123, 7)); err != nil {
+		t.Fatal(err)
+	}
+	if controller.resetConsumes != 0 {
+		t.Fatal("expired callback consumed reset")
+	}
+}
+
+func TestResetConfirmationRetryKeepsOriginalIdempotencyKey(t *testing.T) {
+	credit := remote.ResetCredit{ID: "credit", Status: "available"}
+	controller := &fakeController{resetPlan: remotecodex.RateLimitResetPlan{Credit: credit}, resetConsumeErr: errors.New("temporary")}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	_, markup := svc.handleCommandFor(t.Context(), "/reset", 123, 7)
+	confirm := markup.(models.InlineKeyboardMarkup).InlineKeyboard[0][0].CallbackData
+	query := resetTestQuery(confirm, 123, 7)
+	if err := svc.handleResetCallback(t.Context(), query); err != nil {
+		t.Fatal(err)
+	}
+	firstRequestID := controller.resetRequestID
+	controller.resetConsumeErr = nil
+	controller.resetResult = remotecodex.RateLimitResetResult{Outcome: remotecodex.ResetOutcomeAlreadyRedeemed, Credit: credit}
+	if err := svc.handleResetCallback(t.Context(), query); err != nil {
+		t.Fatal(err)
+	}
+	if controller.resetConsumes != 2 || controller.resetRequestID != firstRequestID {
+		t.Fatalf("consumes=%d first=%q second=%q", controller.resetConsumes, firstRequestID, controller.resetRequestID)
+	}
+}
+
+func TestResetCallbacksUseClosedVersionedShape(t *testing.T) {
+	valid := "reset:v1:confirm:0123456789abcdef0123"
+	if action, token, ok := parseResetCallback(valid); !ok || action != "confirm" || token != "0123456789abcdef0123" || callbackKind(valid) != "reset:v1" {
+		t.Fatalf("valid callback rejected: action=%q token=%q ok=%t kind=%q", action, token, ok, callbackKind(valid))
+	}
+	for _, value := range []string{"reset:v2:confirm:0123456789abcdef0123", "reset:v1:spend:0123456789abcdef0123", "reset:v1:confirm:SHORT", "reset:v1:confirm:0123456789abcdef0123:extra"} {
+		if _, _, ok := parseResetCallback(value); ok || callbackKind(value) != "unknown" {
+			t.Fatalf("malformed callback accepted: %q", value)
+		}
+	}
+}
+
+func TestResetCommandIsDiscoverableFromHelpAndKeyboards(t *testing.T) {
+	if !strings.Contains(helpText(), "/reset [profile]") {
+		t.Fatalf("help missing reset command:\n%s", helpText())
+	}
+	main := mainKeyboard()
+	profile := profileKeyboard("work")
+	if !keyboardHasCallback(main, "quick:reset") || !keyboardHasCallback(profile, "profiles:v1:reset:work") {
+		t.Fatalf("reset callbacks missing: main=%+v profile=%+v", main, profile)
+	}
+}
+
+func TestRegisterCommandsIncludesReset(t *testing.T) {
+	var requestBody string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+	}))
+	defer api.Close()
+	bot, err := tgbot.New("test", tgbot.WithServerURL(api.URL), tgbot.WithSkipGetMe())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, bot: bot, apiTimeout: time.Second}
+	if err := svc.RegisterCommands(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(requestBody, `"command":"reset"`) || !strings.Contains(requestBody, "preview and confirm") {
+		t.Fatalf("setMyCommands missing reset: %s", requestBody)
+	}
+}
+
+func keyboardHasCallback(keyboard models.InlineKeyboardMarkup, callback string) bool {
+	for _, row := range keyboard.InlineKeyboard {
+		for _, button := range row {
+			if button.CallbackData == callback {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resetTestQuery(data string, chatID, userID int64) *models.CallbackQuery {
+	return &models.CallbackQuery{ID: "callback", Data: data, From: models.User{ID: userID}, Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: 5, Chat: models.Chat{ID: chatID, Type: models.ChatTypePrivate}}}}
+}
+
 func TestProfileCommandUsesControllerProfile(t *testing.T) {
 	controller := &fakeController{
 		profile: remotecodex.ProfileResult{
@@ -576,7 +738,7 @@ func TestProfilesCommandListsSafeBoundedHealthAndProfileUsage(t *testing.T) {
 	if markup == nil {
 		t.Fatal("expected main keyboard")
 	}
-	for _, command := range []string{"/limits INVALID", "/grants one two", "/profile " + strings.Repeat("a", 33), "/profiles extra"} {
+	for _, command := range []string{"/limits INVALID", "/grants one two", "/reset one two", "/profile " + strings.Repeat("a", 33), "/profiles extra"} {
 		reply, _ := svc.handleCommand(context.Background(), command)
 		if !strings.HasPrefix(reply, "usage:") {
 			t.Fatalf("%q reply=%q", command, reply)
@@ -604,9 +766,9 @@ func TestRenderProfilesEscapesAndBoundsOutput(t *testing.T) {
 
 func TestProfileCommandsBoundPrivateControllerErrorsAndDefaultSelection(t *testing.T) {
 	privateErr := errors.New("open /secret/auth.json: bearer PRIVATE_ACCOUNT")
-	controller := &fakeController{latestErr: privateErr, profileErr: privateErr, healthErr: privateErr}
+	controller := &fakeController{latestErr: privateErr, profileErr: privateErr, healthErr: privateErr, resetPlanErr: privateErr}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	for _, command := range []string{"/limits", "/grants", "/profile", "/profiles"} {
+	for _, command := range []string{"/limits", "/grants", "/reset", "/profile", "/profiles"} {
 		reply, _ := svc.handleCommand(context.Background(), command)
 		if strings.Contains(reply, "/secret/") || strings.Contains(reply, "PRIVATE_ACCOUNT") || !strings.Contains(reply, "failed") {
 			t.Fatalf("%q leaked private error: %q", command, reply)
@@ -616,9 +778,9 @@ func TestProfileCommandsBoundPrivateControllerErrorsAndDefaultSelection(t *testi
 		t.Fatalf("default selectors latest=%q profile=%q", controller.latestProfile, controller.codexProfileID)
 	}
 
-	controller = &fakeController{latestErr: server.ErrProfileUnavailable, profileErr: server.ErrProfileUnavailable}
+	controller = &fakeController{latestErr: server.ErrProfileUnavailable, profileErr: server.ErrProfileUnavailable, resetPlanErr: server.ErrProfileUnavailable}
 	svc.controller = controller
-	for _, command := range []string{"/limits missing", "/grants missing", "/profile missing"} {
+	for _, command := range []string{"/limits missing", "/grants missing", "/reset missing", "/profile missing"} {
 		reply, _ := svc.handleCommand(context.Background(), command)
 		if reply != "unknown or disabled profile." {
 			t.Fatalf("%q reply=%q", command, reply)
@@ -744,18 +906,26 @@ func TestCommandNameNormalizesBotSuffix(t *testing.T) {
 }
 
 type fakeController struct {
-	interval       time.Duration
-	latest         resetwatch.Observation
-	latestOK       bool
-	refreshes      int
-	profile        remotecodex.ProfileResult
-	profileCalls   int
-	latestProfile  string
-	codexProfileID string
-	health         server.Health
-	latestErr      error
-	profileErr     error
-	healthErr      error
+	interval        time.Duration
+	latest          resetwatch.Observation
+	latestOK        bool
+	refreshes       int
+	profile         remotecodex.ProfileResult
+	profileCalls    int
+	latestProfile   string
+	codexProfileID  string
+	health          server.Health
+	latestErr       error
+	profileErr      error
+	healthErr       error
+	resetPlan       remotecodex.RateLimitResetPlan
+	resetResult     remotecodex.RateLimitResetResult
+	resetPlanErr    error
+	resetConsumeErr error
+	resetProfile    string
+	resetCredit     remote.ResetCredit
+	resetRequestID  string
+	resetConsumes   int
 }
 
 func (f *fakeController) RefreshNow(context.Context) (server.PollResult, error) {
@@ -794,6 +964,19 @@ func (f *fakeController) CodexProfileForProfile(_ context.Context, profile strin
 	f.profileCalls++
 	f.codexProfileID = profile
 	return f.profile, f.profileErr
+}
+
+func (f *fakeController) PlanCodexReset(_ context.Context, profile string) (remotecodex.RateLimitResetPlan, error) {
+	f.resetProfile = profile
+	return f.resetPlan, f.resetPlanErr
+}
+
+func (f *fakeController) ConsumeCodexReset(_ context.Context, profile string, credit remote.ResetCredit, requestID string) (remotecodex.RateLimitResetResult, error) {
+	f.resetConsumes++
+	f.resetProfile = profile
+	f.resetCredit = credit
+	f.resetRequestID = requestID
+	return f.resetResult, f.resetConsumeErr
 }
 
 func (f *fakeController) Stats(context.Context) (server.Stats, error) {

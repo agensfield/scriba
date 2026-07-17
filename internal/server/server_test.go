@@ -537,6 +537,12 @@ func TestProfileReadSelectionUsesConfiguredDefaultAndMappedAccount(t *testing.T)
 	if _, err := withoutAuth.CodexProfileForProfile(ctx, ""); !errors.Is(err, ErrProfileAuthPaths) {
 		t.Fatalf("missing auth paths err=%v", err)
 	}
+	if _, err := withoutAuth.PlanCodexReset(ctx, ""); !errors.Is(err, ErrProfileAuthPaths) {
+		t.Fatalf("reset plan missing auth paths err=%v", err)
+	}
+	if _, err := withoutAuth.ConsumeCodexReset(ctx, "", remote.ResetCredit{ID: "credit"}, "request"); !errors.Is(err, ErrProfileAuthPaths) {
+		t.Fatalf("reset consume missing auth paths err=%v", err)
+	}
 }
 
 func TestSanitizeCodexProfileResultRemovesPrivateDiagnostics(t *testing.T) {
@@ -553,6 +559,13 @@ func TestSanitizeCodexProfileResultRemovesPrivateDiagnostics(t *testing.T) {
 	}
 	if result.Metadata.StatsError != "profile stats unavailable" {
 		t.Fatalf("stats error=%v", result.Metadata.StatsError)
+	}
+}
+
+func TestSanitizeCodexAuthStateRemovesPrivateDiagnostics(t *testing.T) {
+	result := sanitizeCodexAuthState(remote.AuthState{OK: true, Source: "/secret/auth.json", Error: "bearer secret", AccessToken: "token", AccountID: "acct", Email: "safe@example.com"})
+	if !result.OK || result.Email != "safe@example.com" || result.Source != "" || result.Error != "" || result.AccessToken != "" || result.AccountID != "" {
+		t.Fatalf("result=%+v", result)
 	}
 }
 

@@ -26,7 +26,7 @@ CLI, resident server, Telegram, Unix HTTP/SSE API, and stdio MCP.
   reasoning mix, and top skills/plugins.
 - Explicit additional Codex buckets, including Spark when OpenAI exposes it.
 - Resident Telegram bot with `/profiles`, profile-aware `/limits`, `/grants`,
-  `/profile`, plus `/refresh`, `/health`,
+  confirmed `/reset`, `/profile`, plus `/refresh`, `/health`,
   `/stats`, `/lastreset`, `/settings`, and radar commands.
 - Telegram notifications for weekly resets, deduplicated pacing risk, low remaining limits, reset-grant
   expiry checkpoints, service health, and Codex Radar probability milestones.
@@ -123,9 +123,15 @@ remaining lifetime, and full credit id. Use `/refresh` first when you need a
 new live provider observation rather than the resident server's latest stored
 poll.
 
+`/reset [profile]` and the Reset limits buttons fetch a fresh reset preview,
+select the available grant expiring soonest, and show its exact id and expiry.
+No grant is spent until the originating Telegram user presses Confirm reset.
+Confirmations are bound to that chat and user, expire after ten minutes, and
+reuse one idempotency key across safe retries. Cancel never redeems.
+
 With config v2 profiles, `/profiles` lists enabled IDs and health. Use
-`/limits work`, `/grants work`, or `/profile work` to select one mapped Codex
-account; omitting the argument selects the configured default. Telegram never
+`/limits work`, `/grants work`, `/reset work`, or `/profile work` to select one
+mapped Codex account; omitting the argument selects the configured default. Telegram never
 accepts provider account references or auth paths as selectors.
 
 For systemd user service setup, scheduled backups, restore drills, and linger,

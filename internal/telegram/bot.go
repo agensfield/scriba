@@ -18,6 +18,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/agensfield/scriba/internal/radar"
+	"github.com/agensfield/scriba/internal/remote"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server"
@@ -37,6 +38,8 @@ type Controller interface {
 	LastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LatestObservationForProfile(context.Context, string) (resetwatch.Observation, bool, error)
 	CodexProfileForProfile(context.Context, string) (remotecodex.ProfileResult, error)
+	PlanCodexReset(context.Context, string) (remotecodex.RateLimitResetPlan, error)
+	ConsumeCodexReset(context.Context, string, remote.ResetCredit, string) (remotecodex.RateLimitResetResult, error)
 	Stats(context.Context) (server.Stats, error)
 	Health(context.Context) (server.Health, error)
 }
@@ -71,6 +74,7 @@ type Service struct {
 	logger            *slog.Logger
 	mu                sync.Mutex
 	lastManualRefresh time.Time
+	pendingResets     map[string]*pendingCodexReset
 	apiTimeout        time.Duration
 	updates           UpdateStore
 	updateWake        chan struct{}
@@ -80,10 +84,23 @@ type Service struct {
 	inboxLoop         func(context.Context)
 }
 
+type pendingCodexReset struct {
+	ProfileID string
+	Plan      remotecodex.RateLimitResetPlan
+	RequestID string
+	ChatID    int64
+	UserID    int64
+	ExpiresAt time.Time
+	InFlight  bool
+	Cancelled bool
+	Result    *remotecodex.RateLimitResetResult
+}
+
 const (
 	telegramPollTimeout = 30 * time.Second
 	telegramHTTPTimeout = 35 * time.Second
 	telegramAPITimeout  = 12 * time.Second
+	resetConfirmTTL     = 10 * time.Minute
 )
 
 func NewBotService(cfg BotConfig, controller Controller, offsets OffsetStore, deliveries DeliveryStore, radarClient radar.Client) (*Service, error) {
@@ -163,6 +180,7 @@ func (s *Service) RegisterCommands(ctx context.Context) error {
 		{Command: "stats", Description: "storage and delivery stats"},
 		{Command: "limits", Description: "show current Codex limits"},
 		{Command: "grants", Description: "show detailed Codex reset grants"},
+		{Command: "reset", Description: "preview and confirm a Codex limit reset"},
 		{Command: "profile", Description: "show Codex profile stats"},
 		{Command: "profiles", Description: "list configured Codex profiles"},
 		{Command: "refresh", Description: "force a live Codex poll"},
@@ -246,7 +264,8 @@ func (s *Service) dispatchUpdate(ctx context.Context, update *models.Update) err
 	}
 	text := strings.TrimSpace(update.Message.Text)
 	s.logger.Info("telegram command received", "update_id", update.ID, "command", commandName(text))
-	reply, markup := s.handleCommand(ctx, text)
+	chatID, userID, _, _ := updateIdentity(update)
+	reply, markup := s.handleCommandFor(ctx, text, chatID, userID)
 	if reply != "" {
 		if _, err := s.send(ctx, reply, markup); err != nil {
 			s.logger.Warn("telegram command reply failed", "update_id", update.ID, "command", commandName(text), "error", err)
@@ -257,6 +276,10 @@ func (s *Service) dispatchUpdate(ctx context.Context, update *models.Update) err
 }
 
 func (s *Service) handleCommand(ctx context.Context, text string) (string, models.ReplyMarkup) {
+	return s.handleCommandFor(ctx, text, s.cfg.ChatID, 0)
+}
+
+func (s *Service) handleCommandFor(ctx context.Context, text string, chatID, userID int64) (string, models.ReplyMarkup) {
 	command := strings.Fields(text)
 	if len(command) == 0 {
 		return "", nil
@@ -321,6 +344,12 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 			return "no cached reset grants yet. use /refresh to fetch live Codex limits.", nil
 		}
 		return renderSelectedProfile(profile, RenderResetGrantDetails(obs)), selectedProfileKeyboard(profile)
+	case "/reset":
+		profile, err := commandProfile(command)
+		if err != nil {
+			return "usage: /reset [profile]", nil
+		}
+		return s.beginCodexReset(ctx, profile, chatID, userID)
 	case "/profile":
 		profileID, err := commandProfile(command)
 		if err != nil {
@@ -380,6 +409,9 @@ func (s *Service) handleCommand(ctx context.Context, text string) (string, model
 }
 
 func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuery) error {
+	if strings.HasPrefix(query.Data, "reset:v1:") {
+		return s.handleResetCallback(ctx, query)
+	}
 	if strings.HasPrefix(query.Data, "profiles:v1:") {
 		return s.handleProfileCallback(ctx, query)
 	}
@@ -406,6 +438,11 @@ func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuer
 		reply, _ := s.handleCommand(ctx, "/grants")
 		_, err := s.send(ctx, reply, mainKeyboard())
 		return err
+	case "quick:reset":
+		_ = s.answerCallback(ctx, query.ID, "preparing reset confirmation")
+		chatID, _ := callbackChatID(query)
+		reply, markup := s.beginCodexReset(ctx, "", chatID, query.From.ID)
+		return s.editCallbackMessage(ctx, query, reply, markup)
 	case "quick:health":
 		_ = s.answerCallback(ctx, query.ID, "checking health")
 		reply, _ := s.handleCommand(ctx, "/health")
@@ -490,13 +527,121 @@ func (s *Service) handleProfileCallback(ctx context.Context, query *models.Callb
 		return s.editCallbackMessage(ctx, query, "unknown or disabled profile.", profilesBackKeyboard())
 	}
 
-	command := map[string]string{"limits": "/limits ", "grants": "/grants ", "stats": "/profile "}[action]
+	command := map[string]string{"limits": "/limits ", "grants": "/grants ", "reset": "/reset ", "stats": "/profile "}[action]
 	if command == "" {
 		return s.answerCallback(ctx, query.ID, "expired or invalid profile control")
 	}
 	_ = s.answerCallback(ctx, query.ID, "loading "+action)
-	reply, _ := s.handleCommand(ctx, command+profileID)
-	return s.editCallbackMessage(ctx, query, reply, profileKeyboard(profileID))
+	chatID, _ := callbackChatID(query)
+	reply, markup := s.handleCommandFor(ctx, command+profileID, chatID, query.From.ID)
+	if markup == nil {
+		markup = profileKeyboard(profileID)
+	}
+	return s.editCallbackMessage(ctx, query, reply, markup)
+}
+
+func (s *Service) beginCodexReset(ctx context.Context, profileID string, chatID, userID int64) (string, models.ReplyMarkup) {
+	plan, err := s.controller.PlanCodexReset(ctx, profileID)
+	if err != nil {
+		if errors.Is(err, server.ErrProfileUnavailable) {
+			return "unknown or disabled profile.", nil
+		}
+		return "reset preview failed.", nil
+	}
+	requestID, err := remotecodex.NewRateLimitResetRequestID()
+	if err != nil {
+		return "reset preview failed.", nil
+	}
+	token := strings.ReplaceAll(requestID, "-", "")[:20]
+	pending := &pendingCodexReset{ProfileID: profileID, Plan: plan, RequestID: requestID, ChatID: chatID, UserID: userID, ExpiresAt: time.Now().Add(resetConfirmTTL)}
+	s.mu.Lock()
+	if s.pendingResets == nil {
+		s.pendingResets = map[string]*pendingCodexReset{}
+	}
+	s.prunePendingResetsLocked(time.Now())
+	s.pendingResets[token] = pending
+	s.mu.Unlock()
+	return RenderCodexResetConfirmation(profileID, plan), resetConfirmationKeyboard(token)
+}
+
+func (s *Service) handleResetCallback(ctx context.Context, query *models.CallbackQuery) error {
+	action, token, ok := parseResetCallback(query.Data)
+	if !ok {
+		return s.answerCallback(ctx, query.ID, "expired or invalid reset control")
+	}
+	chatID, ok := callbackChatID(query)
+	if !ok {
+		return s.answerCallback(ctx, query.ID, "reset confirmation unavailable")
+	}
+	now := time.Now()
+	s.mu.Lock()
+	s.prunePendingResetsLocked(now)
+	pending := s.pendingResets[token]
+	if pending == nil || pending.ChatID != chatID || pending.UserID != query.From.ID {
+		s.mu.Unlock()
+		return s.answerCallback(ctx, query.ID, "expired or invalid reset control")
+	}
+	if action == "cancel" {
+		profileID := pending.ProfileID
+		if pending.InFlight {
+			s.mu.Unlock()
+			return s.answerCallback(ctx, query.ID, "reset already in progress")
+		}
+		var result *remotecodex.RateLimitResetResult
+		if pending.Result != nil {
+			value := *pending.Result
+			result = &value
+		} else {
+			pending.Cancelled = true
+		}
+		s.mu.Unlock()
+		if result != nil {
+			_ = s.answerCallback(ctx, query.ID, "reset already completed")
+			return s.editCallbackMessage(ctx, query, RenderCodexResetResult(profileID, *result), selectedProfileKeyboard(profileID))
+		}
+		_ = s.answerCallback(ctx, query.ID, "reset cancelled")
+		return s.editCallbackMessage(ctx, query, RenderCodexResetCancelled(profileID), selectedProfileKeyboard(profileID))
+	}
+	if pending.Cancelled {
+		s.mu.Unlock()
+		return s.answerCallback(ctx, query.ID, "reset confirmation was cancelled")
+	}
+	if pending.Result != nil {
+		result := *pending.Result
+		profileID := pending.ProfileID
+		s.mu.Unlock()
+		_ = s.answerCallback(ctx, query.ID, "reset already completed")
+		return s.editCallbackMessage(ctx, query, RenderCodexResetResult(profileID, result), selectedProfileKeyboard(profileID))
+	}
+	if pending.InFlight {
+		s.mu.Unlock()
+		return s.answerCallback(ctx, query.ID, "reset already in progress")
+	}
+	pending.InFlight = true
+	profileID, credit, requestID := pending.ProfileID, pending.Plan.Credit, pending.RequestID
+	s.mu.Unlock()
+
+	result, err := s.controller.ConsumeCodexReset(ctx, profileID, credit, requestID)
+	s.mu.Lock()
+	pending.InFlight = false
+	if err == nil {
+		pending.Result = &result
+	}
+	s.mu.Unlock()
+	if err != nil {
+		_ = s.answerCallback(ctx, query.ID, "reset failed; confirmation remains retryable")
+		return s.editCallbackMessage(ctx, query, RenderCodexResetRetry(profileID), resetConfirmationKeyboard(token))
+	}
+	_ = s.answerCallback(ctx, query.ID, resetCallbackAnswer(result.Outcome))
+	return s.editCallbackMessage(ctx, query, RenderCodexResetResult(profileID, result), selectedProfileKeyboard(profileID))
+}
+
+func (s *Service) prunePendingResetsLocked(now time.Time) {
+	for token, pending := range s.pendingResets {
+		if now.After(pending.ExpiresAt) {
+			delete(s.pendingResets, token)
+		}
+	}
 }
 
 func (s *Service) answerCallback(ctx context.Context, id, text string) error {
@@ -750,7 +895,7 @@ func commandName(text string) string {
 }
 
 func callbackKind(data string) string {
-	quick := map[string]bool{"quick:home": true, "quick:profiles": true, "quick:limits": true, "quick:profile": true, "quick:grants": true, "quick:health": true, "quick:refresh": true, "quick:radar": true, "quick:stats": true, "quick:settings": true}
+	quick := map[string]bool{"quick:home": true, "quick:profiles": true, "quick:limits": true, "quick:profile": true, "quick:grants": true, "quick:reset": true, "quick:health": true, "quick:refresh": true, "quick:radar": true, "quick:stats": true, "quick:settings": true}
 	if quick[data] {
 		return data
 	}
@@ -759,6 +904,9 @@ func callbackKind(data string) string {
 	}
 	if _, _, ok := parseProfileCallback(data); ok {
 		return "profiles:v1"
+	}
+	if _, _, ok := parseResetCallback(data); ok {
+		return "reset:v1"
 	}
 	return "unknown"
 }
@@ -799,13 +947,57 @@ func parseProfileCallback(data string) (string, string, bool) {
 		}
 		return action, value, true
 	}
-	if action != "open" && action != "limits" && action != "grants" && action != "stats" {
+	if action != "open" && action != "limits" && action != "grants" && action != "reset" && action != "stats" {
 		return "", "", false
 	}
 	if len(value) > 32 || !telegramProfileIDPattern.MatchString(value) {
 		return "", "", false
 	}
 	return action, value, true
+}
+
+var resetCallbackTokenPattern = regexp.MustCompile(`^[0-9a-f]{20}$`)
+
+func parseResetCallback(data string) (string, string, bool) {
+	parts := strings.Split(data, ":")
+	if len(parts) != 4 || parts[0] != "reset" || parts[1] != "v1" {
+		return "", "", false
+	}
+	if parts[2] != "confirm" && parts[2] != "cancel" {
+		return "", "", false
+	}
+	if !resetCallbackTokenPattern.MatchString(parts[3]) {
+		return "", "", false
+	}
+	return parts[2], parts[3], true
+}
+
+func callbackChatID(query *models.CallbackQuery) (int64, bool) {
+	if query == nil {
+		return 0, false
+	}
+	if query.Message.Message != nil {
+		return query.Message.Message.Chat.ID, true
+	}
+	if query.Message.InaccessibleMessage != nil {
+		return query.Message.InaccessibleMessage.Chat.ID, true
+	}
+	return 0, false
+}
+
+func resetCallbackAnswer(outcome string) string {
+	switch outcome {
+	case remotecodex.ResetOutcomeReset:
+		return "Codex limits reset"
+	case remotecodex.ResetOutcomeNothingToReset:
+		return "nothing eligible to reset"
+	case remotecodex.ResetOutcomeNoCredit:
+		return "no reset credit available"
+	case remotecodex.ResetOutcomeAlreadyRedeemed:
+		return "reset already completed"
+	default:
+		return "reset response received"
+	}
 }
 
 func profileHealthByID(profiles []server.ProfileHealth, id string) (server.ProfileHealth, bool) {
@@ -851,13 +1043,20 @@ func profilesKeyboard(profiles []server.ProfileHealth, page int) models.InlineKe
 func profileKeyboard(profileID string) models.InlineKeyboardMarkup {
 	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
 		{{Text: "Limits", CallbackData: "profiles:v1:limits:" + profileID}, {Text: "Grants", CallbackData: "profiles:v1:grants:" + profileID}},
-		{{Text: "Profile stats", CallbackData: "profiles:v1:stats:" + profileID}},
+		{{Text: "Reset limits", CallbackData: "profiles:v1:reset:" + profileID}, {Text: "Profile stats", CallbackData: "profiles:v1:stats:" + profileID}},
 		{{Text: "‹ All profiles", CallbackData: "profiles:v1:list:0"}},
 	}}
 }
 
 func profilesBackKeyboard() models.InlineKeyboardMarkup {
 	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{{Text: "‹ All profiles", CallbackData: "profiles:v1:list:0"}}}}
+}
+
+func resetConfirmationKeyboard(token string) models.InlineKeyboardMarkup {
+	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+		{{Text: "Confirm reset", CallbackData: "reset:v1:confirm:" + token}},
+		{{Text: "Cancel", CallbackData: "reset:v1:cancel:" + token}},
+	}}
 }
 
 func selectedProfileKeyboard(profileID string) models.ReplyMarkup {
@@ -923,9 +1122,10 @@ func mainKeyboard() models.InlineKeyboardMarkup {
 			{Text: "Grants", CallbackData: "quick:grants"},
 		},
 		{
-			{Text: "Profile", CallbackData: "quick:profile"},
+			{Text: "Reset limits", CallbackData: "quick:reset"},
 			{Text: "Refresh", CallbackData: "quick:refresh"},
 		},
+		{{Text: "Profile", CallbackData: "quick:profile"}},
 		{
 			{Text: "Radar", CallbackData: "quick:radar"},
 			{Text: "Health", CallbackData: "quick:health"},
@@ -951,6 +1151,7 @@ func helpText() string {
 		"<code>/profiles</code> configured Codex profiles",
 		"<code>/limits [profile]</code> current Codex limits",
 		"<code>/grants [profile]</code> detailed Codex reset grants",
+		"<code>/reset [profile]</code> preview and confirm a Codex limit reset",
 		"<code>/profile [profile]</code> Codex profile stats",
 		"<code>/refresh</code> force a live poll",
 		"<code>/lastreset</code> latest reset event",

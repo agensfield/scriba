@@ -164,8 +164,9 @@ specific available grant, `--dry-run` to stop before the redeeming POST, or
 JSON previews use `--dry-run`. Each attempt sends one UUID idempotency key and
 the selected credit ID, then reports one of `reset`, `nothing_to_reset`,
 `no_credit`, or `already_redeemed`. Scriba does not retry a timed-out mutation
-with a new key: it retries one transient failure with the same key and never
-exposes grant redemption through Telegram or MCP.
+with a new key: it retries one transient failure with the same key. Telegram
+exposes the same operation only through an owner-bound, expiring confirmation
+callback; MCP remains read-only.
 
 `scriba codex profile` shows the ChatGPT/Codex profile token-activity backend:
 lifetime and peak tokens, streaks, longest turn duration, reasoning/fast-mode
