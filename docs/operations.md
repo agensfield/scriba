@@ -16,12 +16,12 @@ systemctl --user status scriba.service scriba-backup.timer
 journalctl --user -u scriba.service -u scriba-backup.service --since today
 ```
 
-The service sandbox leaves the config and home directory read-only. Scriba can
-write only its state, cache, and Codex authentication directories; the backup
-job can write only under `~/.local/state`. Both units use an owner-only umask,
-restricted address families, a read-only system and home baseline, and the
-process restrictions supported by unprivileged user managers. Validate edits
-on the target system before reloading:
+The service sandbox leaves the config and home directory read-only. The shipped
+unit lets Scriba write only its state, cache, and `%h/.codex` authentication
+directory; the backup job can write only under `~/.local/state`. Both units use
+an owner-only umask, restricted address families, a read-only system and home
+baseline, and the process restrictions supported by unprivileged user managers.
+Validate edits on the target system before reloading:
 
 ```sh
 systemd-analyze --user verify \
@@ -31,6 +31,20 @@ systemd-analyze --user verify \
 systemd-analyze --user security scriba.service
 systemd-analyze --user security scriba-backup.service
 ```
+
+Config v3 can point `codexAuthPaths` at other absolute paths. Reading works
+through the read-only home baseline, but OAuth refresh needs write access to the
+auth file's directory for its lock and atomic replacement. For each configured
+path outside `%h/.codex`, add only that parent directory to the service's
+`ReadWritePaths`, for example:
+
+```ini
+[Service]
+ReadWritePaths=%h/.local/state %h/.cache %h/.codex %h/.config/codex
+```
+
+Do not grant the whole home directory. Re-run both `systemd-analyze` checks
+after changing the unit.
 
 User services stop at logout unless lingering is enabled. An administrator can
 make the server and persistent timer independent of interactive SSH sessions:

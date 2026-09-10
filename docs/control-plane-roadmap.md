@@ -1,5 +1,10 @@
 # Scriba Control-Plane Roadmap
 
+> Historical program record through the 0.3.x product. Profile terminology and
+> deployment claims below describe their dated milestones, not candidate 0.4.0
+> usage. See [`current-state.md`](current-state.md), [`cli.md`](cli.md), and
+> [`config.md`](config.md) for the account-centered candidate.
+
 Status: accepted for execution on 2026-07-12
 
 Scriba is evolving from a local usage reporter and Telegram bot into a

@@ -2,6 +2,10 @@
 
 Scriba is distributed as one Go binary named `scriba`.
 
+The latest confirmed published release is v0.3.4. Account-centered 0.4.0
+behavior documented on `main` is a candidate until its release is published;
+install from source only when deliberately testing that candidate.
+
 ## Homebrew
 
 Recommended for macOS developers:
@@ -129,7 +133,14 @@ ChatGPT/Codex subscription windows.
 
 - Claude logs: `~/.config/claude/projects`, `~/.claude/projects`
 - Codex logs: `${CODEX_HOME:-~/.codex}/sessions`
-- Codex OAuth: `${CODEX_HOME:-~/.codex}/auth.json`
+- Codex OAuth sources: `codexAuthPaths` from config when present; otherwise
+  `$CODEX_HOME/auth.json`, or standard discovery at
+  `~/.config/codex/auth.json` and `~/.codex/auth.json`
 - Scriba config: `~/.config/scriba/config.json`
 - Scriba cache: `${XDG_CACHE_HOME:-~/.cache}/scriba`
 - Scriba server state: `${XDG_STATE_HOME:-~/.local/state}/scriba`
+
+Multiple OAuth sources are independent. Scriba discovers stable accounts from
+them automatically; adding an auth file does not require creating an account or
+alias first. OpenAI API-key auth cannot expose ChatGPT/Codex subscription
+windows or activity statistics.

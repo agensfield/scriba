@@ -5,15 +5,10 @@ and accepts an explicit JSON config via `--config`.
 
 ```json
 {
-  "schemaVersion": 2,
-  "defaultProfileId": "default",
-  "profiles": [
-    {
-      "id": "default",
-      "label": "Personal",
-      "enabled": true,
-      "codexAuthPaths": ["/Users/arda/.codex/auth.json"]
-    }
+  "schemaVersion": 3,
+  "codexAuthPaths": [
+    "/Users/arda/.codex/auth.json",
+    "/Users/arda/.codex-work/auth.json"
   ],
   "cacheDir": "/Users/arda/.cache/scriba",
   "timezone": "Europe/Istanbul",
@@ -80,18 +75,25 @@ receive `cursor_expired` instead of a silent gap even though replay sequences
 are global across accounts. `scriba server prune` runs the same transaction on
 demand and then checkpoints and vacuums SQLite when rows changed.
 
-Config v2 establishes explicit profile identity and Codex auth routing. Profile
-IDs are stable lowercase slugs up to 32 characters; one enabled profile must be
-the default, and every enabled profile needs at least one absolute auth-file
-path. Cleaned auth paths cannot be duplicated across profiles. Scriba never
-persists these paths into server SQLite or exposes them through public JSON.
+Config v3 treats Codex auth files as ordered sources. `codexAuthPaths` must be a
+non-empty list of distinct absolute paths when present. Each source is observed
+independently; the first usable source is the default for live commands. Paths
+stay in memory and config only: Scriba persists stable private source hashes and
+public account IDs, never auth paths, in server SQLite.
 
-Existing schema-v1 files continue to load without being rewritten. Scriba
-normalizes them in memory to one implicit `default` profile using the existing
-`server.accountLabel` and legacy Codex auth discovery. Explicit schema-v2 files
-never fall back to ambient `CODEX_HOME` discovery. Multi-profile resident
-polling and public selectors are active across CLI, Unix HTTP/SSE, MCP, and
-Telegram.
+Omitting `codexAuthPaths` uses standard discovery: `$CODEX_HOME/auth.json` when
+`CODEX_HOME` is set, otherwise `~/.config/codex/auth.json` and
+`~/.codex/auth.json`. An explicitly configured missing path never falls back to
+ambient discovery. Accounts are discovered automatically from strong local
+account identity and remain queryable after a source logs out or switches.
+Optional account aliases are metadata managed with `scriba accounts alias`, not
+configuration and not login controls.
+
+Schema-v1 and schema-v2 files load through an in-memory compatibility reader and
+are never rewritten merely by reading. V1 uses standard auth discovery. V2
+flattens enabled profile auth paths into ordered v3 sources, with the former
+default paths first; old labels are not copied into account aliases. Saving
+configuration writes v3.
 
 Enabled webhook and ntfy deliveries receive their own stable outbox targets,
 `webhook:<id>` and `ntfy:<id>`. IDs are lowercase slugs up to 32 characters.

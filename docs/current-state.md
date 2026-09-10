@@ -1,305 +1,128 @@
 # Scriba Current State
 
-Date: 2026-07-14
+Date: 2026-09-10
 
-Scriba is the first child project under Agensfield. It is a fast, minimal
-Claude Code and Codex usage tracker.
+Scriba is a local-first Claude Code and Codex usage tracker. The maintained
+product is the Go CLI, resident server, Telegram bot, owner-only Unix HTTP/SSE
+API, and stdio MCP server. The macOS app remains archived under `apps/macos`
+and is outside the active roadmap.
 
-## Current Shape
+## Release status
 
-- Go CLI at `cmd/scriba`.
-- Implementation under `internal/`.
-- The existing Swift/AppKit/SwiftUI menu bar app remains under `apps/macos` but
-  is outside the active roadmap and will not receive parity or packaging work.
-- SQLite derived cache under `~/.cache/scriba` by default.
-- JSON status snapshot supports `scriba status --fast`.
-- Codex local reports preserve full traffic while exposing effective tokens
-  (`input - cached input + output`) separately. Report totals derive from input
-  plus output instead of trusting inconsistent JSONL `total_tokens` values.
-- Codex reports calculate standard-tier API-equivalent cost for GPT-5.4,
-  GPT-5.5, and GPT-5.6 Sol/Terra/Luna. GPT-5.6 pricing is selected per request,
-  with the whole request switching to long-context rates above 272K input.
-- Human reports show up to three exact model names, so secondary GPT-5.6 models
-  are no longer hidden behind the dominant model. JSON keeps every model.
-- Daily/weekly/monthly reports and status use the configured/system timezone;
-  `--timezone` provides a per-command override and JSON records the resolved
-  zone.
-- The Codex parsed-event cache key is versioned with scanner semantics, so an
-  upgrade cannot silently reuse incompatible historical events.
-- Codex token payloads decode integers exactly beyond JavaScript's safe-integer
-  boundary and reject fractional/overflow counters. Claude counters are clamped
-  nonnegative without conflating cache-read tokens with uncached input.
-- Both provider parser caches use explicit semantic namespaces. Frozen corpus
-  fixtures, including oversized-line policy and Codex fork/replayed-history
-  markers, cumulative-reset properties, and native fuzzers guard parsing.
-- Stable `scriba.v1` status, Codex limits, profile, and reset-grant JSON outputs,
-  plus `scriba.budget.v1` reports, have checked-in Draft 2020-12 schemas and
-  canonical validation goldens.
-- Wave 3.1 shared agent context CLI is deployed.
-  `scriba context --json` emits the allowlisted `scriba.context.v1` projection
-  from read-only cache/store inputs, with independent freshness and absence per
-  source, the `default` profile, and minimized durable policy events. The
-  owner-only Unix HTTP/SSE API and two-tool stdio MCP adapter are deployed and
-  cross-surface parity-tested.
-- `scriba codex budget` and `scriba claude budget` derive provider-neutral quota
-  pacing from fresh provider windows. They use percentage points rather than
-  local token counts and intentionally have no `--fast` mode. Codex may use up
-  to 24 hours of matching durable observations; Claude is current-cycle only.
-  Fixed-clock properties prove projected exhaustion never moves later as used
-  percentage increases. Human output now explains the risk, pace, sustainable
-  allowance, projected exhaustion, and lead before reset in ordinary language;
-  machine-readable reason codes remain in the unchanged JSON contract.
-- Schema v12 adds durable, reset-scoped Codex pacing warnings. Primary five-hour
-  and weekly windows warn once when high risk is first observed with more than
-  20 percent remaining. Critical risk does not produce an extra pacing alert;
-  the existing 20/10/5/0-percent remaining checkpoints own late-cycle warnings.
-  Typed pacing events and all configured delivery intents are committed
-  atomically through the canonical outbox.
-- `v0.3.1` is published and deployed on devbox at release commit `9276bd3`,
-  schema 12. Exact-commit CI, local full/race gates, reproducible archives,
-  checksums, attestations, Homebrew `7773439`, stopped-service migration and
-  rollback proof, one real Telegram pacing delivery, explicit refresh, and two
-  restart dedupe smokes passed. See [`release-v0.3.1.md`](release-v0.3.1.md)
-  and [`schema-v12-migration.md`](schema-v12-migration.md).
-- `v0.3.2` is published and deployed at `c5cd5b2`. It stabilizes pacing event
-  identity across second-level Codex reset-clock jitter while continuing to use
-  the live reset for budget math. The release also adds sanitized per-profile
-  failure classification to resident logs. Exact-commit CI, full local gates,
-  reproducible release publication, Homebrew upgrade/test, verified backup,
-  exact-artifact deployment, and the previously failing live jitter shape all
-  passed. See [`release-v0.3.2.md`](release-v0.3.2.md).
-- `v0.3.3` is published and deployed at `a3d3d68`. The CLI can now preview
-  and explicitly redeem the oldest-expiring Codex reset grant, while Telegram
-  `/reset [profile]` adds an owner-bound, ten-minute Confirm/Cancel flow.
-  Duplicate callbacks and transient retries preserve one logical idempotency
-  key. Exact-commit CI, reproducible release publication, Homebrew
-  upgrade/test, verified backup, exact-artifact deployment, Telegram command
-  registration, and a live non-mutating dry run all passed. See
-  [`release-v0.3.3.md`](release-v0.3.3.md).
-- `v0.3.4` is published and deployed at `2b8fcd4`. It stabilizes ordinary
-  remaining-checkpoint state, event identity, and payloads across second-level
-  Codex reset-clock jitter, including repair of the exact deployed dirty state.
-  The previously wedged live database recovered immediately without duplicate
-  warnings or queue writes. Full and race gates, exact-commit CI, reproducible
-  publication, Homebrew upgrade/test, copied-production drill, verified backup,
-  and exact-artifact deployment passed. See
-  [`release-v0.3.4.md`](release-v0.3.4.md).
-- Pricing is embedded from a hash-bound reviewed offline catalog. Maintainer
-  refresh writes a candidate only; CI validates provenance, aliases, rates,
-  tier thresholds, boundary goldens, and deterministic generation without
-  network access.
-- The macOS app resolves a system `scriba` when same/newer than the bundled
-  helper, otherwise it uses the bundled native Go helper.
-- The macOS app exposes used/remaining display mode, menu bar text mode, and
-  refresh cadence settings.
-- Telegram alert config is shared between `scriba config telegram` and the
-  macOS settings window.
-- The app uses controlled native menu rows and macOS 26 glass button styles in
-  the settings window when available.
-- Packaging supports host-arch and universal app/helper builds. Debug builds use
-  a separate bundle identifier from release builds.
-- `scriba server run` is the resident devbox process for live Codex limit
-  polling, reset detection, Telegram commands, limit/grant warning
-  notifications, health, stats, pruning, and radar probability alerts.
-- Codex limit polling reads explicit additional-rate-limit buckets, including
-  Spark, and exposes the available reset-grant count plus earliest available
-  grant expiry when the ChatGPT backend exposes reset-credit metadata.
-- Telegram reset-grant expiry alerts are tracked per available grant credit and
-  fire once at the 5-day, 3-day, and 1-day checkpoints before each credit's own
-  `expires_at`.
-- Telegram `/grants` and its dedicated inline keyboard button render every
-  available reset grant from the latest durable server observation, including
-  title, type, status, granted time, expiry, remaining lifetime, and full id.
-- Telegram `/reset [profile]` and Reset limits buttons use a fresh,
-  profile-isolated preview followed by an owner-bound ten-minute confirmation.
-  The callback contains only an opaque short token; the exact credit and stable
-  idempotency UUID remain resident. Cancel, expiry, foreign users, and duplicate
-  callbacks cannot spend another grant.
-- Schema v7 stores reset, limit-warning, grant-warning, reset-grant, and Radar
-  notification intents in one canonical outbox, atomically with their typed
-  business events. Telegram claims one target-filtered row at a time with a
-  fenced lease; legacy delivery tables remain read-only migration evidence.
-- The live schema-v8 migration adds constrained `policy_states` and
-  `policy_events` tables, account/policy lookup indexes, semantic-event
-  uniqueness, schema validation, and refusal to open a future schema version.
-  Downgrading a v8 database is restore-only: use a pre-migration backup with an
-  older binary rather than attempting an in-place rollback.
-- Commit `6a6a163` introduced the schema-v9 durable replay sequence.
-  `policy_event_replay` maps every policy event to a transactional,
-  never-reused monotonic ordinal through an insert trigger. Replay pages use a
-  single read snapshot and a captured high-water mark, so later/backdated
-  inserts cannot be skipped or leak across a page boundary. Commit `8b6272e`
-  adds schema v10 tombstones plus strict `scriba.events.v1` cursor paging;
-  `fc663de` adds the reviewed Unix socket ownership primitive. Commits
-  `29fd69a` through `e659570` add the Unix HTTP/SSE and stdio MCP transports,
-  supervised CLI/server wiring, exact response contracts, and real lifecycle
-  and parity tests. Profiles move to server schema v11. Wave 3.1 is deployed at
-  `9bf7392` on live schema 10 with the owner-only context API enabled.
-- A fresh verified online schema-v8 backup passed the disposable schema-v10
-  rehearsal through `0d97c27`: idempotence, integrity, replay/high-water,
-  unchanged business-table data, older-binary refusal, and untouched-v8
-  restore-copy opening all passed. The authoritative stopped-service proof and
-  activation receipt followed in
-  [`schema-v10-migration.md`](schema-v10-migration.md).
-- The authoritative stopped-service schema-v8 backup and live schema-v10
-  cutover subsequently passed. Unix HTTP/SSE and both stdio MCP tools passed
-  privacy, restart, and journal smokes. OpenAI's temporary removal of the
-  five-hour bucket is handled by a default-on compatibility flag with
-  `SCRIBA_FEATURE_CODEX_TEMPORARY_NO_FIVE_HOUR=false` as the kill switch.
-  Weekly-only responses do not fabricate five-hour resets, warnings, budgets,
-  or agent context, and the last durable five-hour state is preserved.
-- Wave 3.2 profile support is deployed on schema 11 at `538d557`. Config v1
-  remains one implicit `default` profile; config v2 supports stable explicit
-  profiles and disjoint auth paths. Polling, health, stats, refresh, CLI,
-  Unix HTTP/SSE, MCP, and Telegram selection all preserve profile isolation.
-  See [`schema-v11-migration.md`](schema-v11-migration.md).
-- Wave 3.3 delivery foundations are implemented through `fe60414`. Every event
-  fans out atomically to stable target IDs. Signed webhook and ntfy adapters
-  share one minimized, bounded, target-independent `scriba.notification.v1`
-  envelope; dispatcher outcomes are fenced across shutdown and use closed
-  delivered/retryable/terminal HTTP semantics with capped `Retry-After`.
-- Telegram profile parity is implemented through `68814b1`: six-row versioned
-  inline pages, exact profile Limits/Grants/Profile actions, stable back/home
-  navigation, private-only empty-allowlist compatibility, explicit group-user
-  allowlisting, inaccessible-message authorization, stale-control retirement,
-  closed callback logging, and durable callback failure propagation.
-- Wave 3.3 is deployed on the devbox at `ce03c7a`, schema 11. The Linux amd64
-  artifact SHA-256 is
-  `e4387d92f4525a470a64d9386c73d871071e966d896291037ad25c8e88371b1e`.
-  Health/profile, empty queues, integrity, all 12 Bot API commands, and journal
-  smokes passed. Live evidence is under
-  `/home/arda/.local/state/scriba/deployments/wave33-ce03c7a`. Human health and
-  Profiles to `default` to Limits smokes later passed as durable processed
-  updates `133548446` and `133548448` through `133548450`.
-- Wave 3.4 operations and release parity are deployed through `v0.3.0` at
-  `92e7147`. Bounded retention, verified scheduled backups, hardened user
-  units, linger, a stopped-service restore drill, and an autonomous reboot all
-  passed. The published four-platform release is reproducible, checksummed,
-  provenance-attested, immutable, independently verified, installed on the
-  devbox from its exact Linux amd64 archive, and distributed through Homebrew.
-  See [`release-v0.3.0.md`](release-v0.3.0.md).
-- Completion-audit follow-up `a45d7c3` added the missing frozen parser cases,
-  monotonic budget projection proof, PR archive packaging/executable smoke, and
-  explicit conditional TCP scope. Local `just check`, full uncached race tests,
-  checksum verification, and a host archive smoke passed. Exact-HEAD CI
-  `29261669059` is green, including Linux archive/executable smoke.
-- The resident server now evaluates the closed policy kinds
-  `remaining_checkpoint`, `reset_transition`, `grant_available`, and
-  `grant_expiry_checkpoint`. Its `current` preset preserves the existing
-  thresholds. The live cutover bootstrapped 15 policy states without historical
-  replay or events, and subsequent polls evaluate state and enqueue any new
-  semantic events atomically through the canonical outbox.
-- Read-only `policy validate`, `policy list`, `policy explain`, and `outbox
-  list` inspection surfaces are deployed on the devbox at commit `a168e34`.
-  State-backed queries use a
-  read-only SQLite open, support bounded exact filters, offer field-aware
-  redaction, and publish the typed `scriba.policy-validate.v1`,
-  `scriba.policy-list.v1`, `scriba.policy-explain.v1`, and
-  `scriba.outbox-list.v2` JSON contracts.
-- The Wave 2 release gate is closed at `6bfbcb3`. Composed fixtures prove all
-  four policy transition kinds persist through the typed ledgers and canonical
-  outbox with identical payloads, and a real SQLite/Telegram SDK test proves
-  failed delivery backoff and successful retry of the same row.
-- The Wave 3.1 devbox receipt uses the Linux amd64 artifact with SHA-256
-  `b57cd17bc2dc26a557abdc558e2f3e96f6b7fc2b69a2126f3f630a73df1bf467`.
-  The service was active and healthy at `e3cd9b2`, schema 8. A context smoke
-  returned `scriba.context.v1`, eight sources, Codex under `default`, zero
-  events, and honest unavailable/missing Claude sources. Two context reads left
-  main/cache database hashes and schema/policy/outbox counts unchanged
-  (`8|15|0|40|41`); the forbidden-data grep was clean.
-- Telegram `getUpdates` batches are durably staged as exact raw JSON before the
-  polling dependency can advance its cursor. Pending updates replay after a
-  crash, while malformed updates dead-letter visibly.
-- Server stats and health expose outbox/inbox backlog, due work, attempts,
-  oldest pending age, expired leases, and dead letters.
-- `scriba codex summary` appends live Codex limit/reset-grant metadata unless
-  `--no-remote` is passed.
-- `scriba codex reset-grants` shows every available reset grant and each
-  grant's own expiration timestamp.
-- `scriba codex profile` reads the ChatGPT/Codex profile backend
-  (`/backend-api/wham/profiles/me`) and renders profile token activity,
-  streaks, reasoning mix, thread/skill counts, daily/weekly activity bars, and
-  top skills/plugins while preserving all buckets with `--json`.
-- `scriba update --check` compares the local binary to the latest GitHub tag;
-  `scriba update` uses `go install` for regular installs and refuses
-  Homebrew-managed binaries in favor of `brew upgrade scriba`.
-- `internal/radar` reads `https://codexradar.com/current.json` first and falls
-  back to the old `https://codex-reset-radar.pages.dev/current.json` endpoint.
+The account-centered 0.4.0 implementation has passed focused gates across its
+reviewed component lanes and is being assembled as a release candidate, not yet
+a published or deployed release. It still requires final exact-head integration
+gates, version/release work, schema-13 deployment proof, and the project handoff.
 
-## Current Shipping Lane
+The latest confirmed published and deployed release remains v0.3.4 at
+`2b8fcd4`, using database schema 12 and the older profile-based product. Its
+evidence is preserved in [`release-v0.3.4.md`](release-v0.3.4.md). Running the
+0.4 candidate against existing state performs the separately rehearsed schema
+12-to-13 migration; documentation does not imply that cutover has happened on
+any live host.
 
-The devbox server and Telegram bot lane is implemented:
+## Candidate 0.4 product
 
-- `scriba server run` as one resident process.
-- Live Codex backend limit polling from local Codex auth.
-- SQLite server state.
-- Weekly reset detection from `resetsAt` timestamp advances.
-- Telegram long polling, commands, reset notifications, low-limit warnings,
-  reset-grant expiry warnings, health/recovery alerts, stats, and radar
-  probability milestone alerts.
-- Telegram `/profiles` exposes bounded safe configured-profile health;
-  `/limits [profile]`, `/grants [profile]`, `/reset [profile]`, and `/profile [profile]` select the
-  mapped account while omission uses the configured default.
-- Radar probability alerts fire on upward 24h probability checkpoint crossings
-  at 25%, 50%, and 75%; drops update the stored checkpoint silently so later
-  increases can alert again.
+### Accounts and auth sources
 
-Canonical spec:
+- Stable public account IDs are derived from strong provider account identity.
+  Raw provider refs, auth paths, and credentials stay private.
+- Config v3 contains ordered `codexAuthPaths`, not user-facing profiles.
+  Omitted paths use standard Codex discovery; explicitly configured missing
+  paths never fall back elsewhere.
+- Valid local auth identities are discovered automatically. A source switching
+  from account A to B creates or reactivates B without renaming, deleting, or
+  transferring A's history.
+- `scriba accounts` lists active and historical accounts. Credential
+  availability, last successful observation, age, and staleness are distinct
+  facts. Optional aliases are unique metadata and never change Codex login.
+- `--account <id-or-alias>` selects Codex limits, grants, budgets, activity,
+  reset, status, and context. Omission follows the highest-priority usable auth
+  source for live work. Explicit unknown selectors fail closed.
+- Stored historical limits, grants, and budgets remain readable without
+  credentials. Live-only activity and reset require credentials for that exact
+  account.
 
-- `/Users/arda/Documents/obsidian/obsidian-main/projects/agensfield/scriba/server-telegram-spec.md`
+### Resident state and safety
 
-## Invariants
+- Schema 13 replaces live profile ownership with auth-source bindings and
+  account alias metadata. Migration preserves observations, policy state and
+  events, replay ordinals and prune floors, outbox IDs/payloads/outcomes, and
+  archived source-health evidence. See
+  [`schema-v13-migration.md`](schema-v13-migration.md) for root-owned rehearsal
+  and deployment evidence.
+- Each resident source is inspected and polled independently. Missing,
+  malformed, logged-out, API-key, and rotated credentials cannot silently
+  borrow another source's account.
+- Limits/activity/reset preview requests pin the selected provider identity
+  before network access and after forced OAuth refresh. Reset confirmation also
+  pins the public account, private preview identity, selected credit, user/chat,
+  expiry, and idempotency key. An auth switch refuses redemption.
+- Account observations, policy state/events, warnings, and outbox rows remain
+  account-scoped. Radar alerts remain global and accountless.
+- Retention preserves pending/leased work, monotonic replay high-water state,
+  and one explicit prune floor per account. Backups and restore remain
+  stop-the-service operations.
 
-- Claude/Codex logs and provider APIs remain source of truth.
-- Scriba stores only read-only derived state.
-- Cache deletion is safe.
-- Normal local scans read JSONL line-by-line.
-- Human output is default; `--json` is explicit for agents and automation.
-- `effectiveTokens` and `totalTokens` are distinct contracts: the former
-  excludes cache reads, while the latter represents full model traffic.
-- Calculated `costUSD` is an estimated standard API equivalent, not ChatGPT
-  subscription billing.
-- `--no-remote` skips provider API probes.
-- `--fast` reads cached status only.
-- `--redact` removes share-sensitive paths and identifiers from JSON output.
-- Terminal metric rows use a shared label column per rendered provider/output so
-  progress bars align across short and long labels.
-- Radar alerts are derived notification state; Codex Radar JSON remains the
-  source of truth.
-- Server unit tests keep radar polling opt-in; the real resident server wires a
-  live radar client in `scriba server run`.
+### Public surfaces
 
-## Verification
+- CLI account commands are `scriba accounts [list]` and
+  `scriba accounts alias <id-or-alias> <new-alias>`.
+- The upstream ChatGPT/Codex activity command is `scriba codex activity`.
+- `scriba server accounts` exposes account summaries; server health separates
+  source health from historical account freshness.
+- Telegram uses `/accounts`, `/limits [account]`, `/grants [account]`,
+  `/activity [account]`, and `/reset [account]`. Callbacks contain only public
+  account IDs; old controls fail safely rather than retaining another model.
+- Agent context is `scriba.context.v2`; event pages and records are
+  `scriba.events.v2` and `scriba.event.v2`. HTTP and MCP selectors are named
+  `account`. SSE streams pin one resolved public account for their lifetime.
+- External delivery uses `scriba.notification.v2` with `accountId` derived from
+  the durable outbox account. Possibly email-derived labels are omitted; Radar
+  remains accountless.
 
-Preferred core gate:
+### Local usage and pricing
 
-```sh
-go test ./...
-go vet ./...
-staticcheck ./...
-golangci-lint run ./...
-gosec ./...
-govulncheck ./...
-```
+- Claude and Codex reports preserve effective tokens separately from total
+  model traffic, exact integer counters, timezone-aware grouping, and all
+  materially used model names.
+- Local Codex JSONL totals are scoped to session logs. They cannot be split
+  across provider accounts from auth-switch intervals; selected-account reports
+  state that attribution is unavailable.
+- Known models receive an as-of Standard-tier API-equivalent estimate, not a
+  ChatGPT subscription charge or historical invoice. The embedded reviewed
+  catalog uses current GPT-5.6 Sol/Terra/Luna pricing and invalidates parsed
+  caches when catalog content changes. Frozen third-party differential receipts
+  retain their capture-time rates.
+- `status --fast`, `codex limits --fast`, and `codex reset-grants --fast` use
+  the selected account's resident observation without network access. They do
+  not reuse anonymous or cross-account Codex quota.
 
-Optional macOS menu bar gate:
+## Operational invariants
 
-```sh
-swift test --package-path apps/macos
-apps/macos/Scripts/package_zip.sh release
-```
+- Source logs and provider APIs remain authoritative; cache deletion is safe.
+- Ordinary local scans stream JSONL and never infer account ownership that the
+  source cannot prove.
+- Read-only account/context/MCP/fast paths do not refresh OAuth, sync sources,
+  migrate schemas, or mutate state.
+- The server database, config, auth-source directories, backup directory,
+  environment file, and Unix socket remain owner-only.
+- `--redact` removes human-identifying and operator-private fields appropriate
+  to each JSON surface.
+- The shipped context API is Unix-socket-only. No TCP listener is enabled.
 
-## Open Follow-Ups
+## Evidence boundary
 
-- The local usage control-plane goal is complete under the 2026-07-13 revised
-  Wave 3.2 contract: composed two-fixture isolation plus one-account live
-  compatibility. Reliability, migrations, durable delivery, budget/policy
-  intelligence, agent transports, profiles, delivery adapters, Telegram
-  parity, operations, reproducible release, and the human interaction receipts
-  are proven. See
-  [`control-plane-completion-audit.md`](control-plane-completion-audit.md).
-- Tighten Go regression tests around frozen TS-era fixtures.
-- Revisit Claude `blocks` for strict bounded-memory behavior.
-- Use the requirement-by-requirement verdict in
-  [`control-plane-completion-audit.md`](control-plane-completion-audit.md) as
-  the completion authority.
+Focused account store, resolver/runtime, CLI, Telegram, transport, migration,
+and pricing gates have passed in their implementation lanes, with independent
+review follow-ups applied. That is implementation evidence, not release or
+deployment proof. The release coordinator owns the final combined exact-head
+gates and will append the authoritative 0.4.0 release and live migration
+receipts if shipment occurs.
+
+Older release, schema, and control-plane documents remain immutable historical
+evidence. Their profile terminology describes the product that existed at that
+time and is not current usage guidance. The
+[`control-plane-roadmap.md`](control-plane-roadmap.md) is likewise a historical
+program record; use this document, [`cli.md`](cli.md), and
+[`config.md`](config.md) for the candidate product.

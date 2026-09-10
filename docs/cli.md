@@ -12,9 +12,13 @@ scriba doctor
 scriba doctor --no-remote --json
 scriba status
 scriba status --fast
+scriba status --fast --account work
 scriba status --no-remote
 scriba status --redact --json
 scriba context --json
+scriba context --json --account work
+scriba accounts
+scriba accounts alias <id-or-alias> <new-alias>
 scriba mcp
 scriba schema
 scriba config path
@@ -47,18 +51,35 @@ unless `--no-cache` is passed.
 cache schema/WAL state, cache size, and latest snapshot age. It reports `ok`,
 `degraded`, or `broken`.
 
-`--fast` reads the cached status snapshot only. It is intended for the menu bar,
-Telegram, and agent reads that should not trigger a foreground scan.
+`--fast` avoids local rescans and provider requests. It combines cached local
+status where available with the selected account's latest resident Codex
+observation. Account-specific reads never borrow anonymous or another account's
+quota snapshot.
+
+## Accounts
+
+`scriba accounts` and `scriba accounts list` show every discovered Codex
+account, including accounts whose credentials are no longer available. Each
+entry keeps separate facts for its stable public `acct-…` ID, optional alias,
+email/plan, credential availability, and last successful observation age.
+Authentication sources are configuration, not user-facing identities.
+
+`scriba accounts alias <id-or-alias> <new-alias>` writes only account metadata;
+it does not change Codex login state or move observations between accounts.
+Aliases are unique lowercase slugs up to 32 characters. `current` and strings
+that resemble generated account IDs are reserved. Use `--redact` to omit aliases
+and email addresses from account output.
 
 ## Agent Context
 
 `scriba context --json` is intentionally JSON-only. It reads the status cache
 and server store without provider refresh or mutation and emits the allowlisted
-`scriba.context.v1` contract. `--cache-dir` and `--state-path` override its two
+`scriba.context.v2` contract. `--cache-dir` and `--state-path` override its two
 read sources. Sources report independent availability, provenance, freshness,
 and reason codes, so a missing Claude observation does not suppress valid
-Codex context. Use `--profile <id>` to select an enabled configured profile;
-omission selects the configured default.
+Codex context. Use `--account <id-or-alias>` to select an account; omission uses
+durable current source bindings and then the latest historical account. Unknown
+explicit selectors fail rather than falling back.
 
 The checked-in schema is
 [`context.schema.json`](../schemas/context.schema.json). See
@@ -67,8 +88,8 @@ partial-result behavior, Unix API/SSE cursors, and MCP parity.
 
 `scriba mcp` is a protocol-pure stdio server for local agent clients. It exposes
 only `scriba_get_context` and `scriba_list_events`; each accepts an optional
-configured `profile` ID. It cannot refresh providers, change config, send
-notifications, redeem grants, or select arbitrary provider accounts.
+public account ID, alias, or `current`. It cannot refresh providers, change
+config, send notifications, redeem grants, or accept raw provider account refs.
 Use `--config`, `--cache-dir`, and `--state-path` to select the same read sources
 as the context command. Normal stdin EOF and handled SIGTERM exit cleanly.
 
@@ -105,9 +126,10 @@ scriba codex sessions
 scriba codex limits
 scriba codex reset-grants
 scriba codex reset --dry-run
-scriba codex profile
+scriba codex activity
 scriba codex budget
 scriba codex limits --fast
+scriba codex reset-grants --fast --account work
 ```
 
 Report commands support `--since` and `--until`, accepting full timestamps or
@@ -130,23 +152,30 @@ leads with effective tokens, keeps traffic/cache/output visible, and lists up
 to three materially used exact model names instead of hiding every model except
 the dominant one.
 
+Local Codex JSONL reports come from session logs, which do not establish a
+provider account identity. Supplying `--account` scopes the remote limits
+appended to `summary`, but it does not retroactively split local token totals.
+JSON reports mark `attributionScope: "session_logs"` and
+`accountAttribution: "unavailable"`; human output says the same plainly.
+
 Known Codex models receive a calculated `costUSD`. The human label is `est.`
 because this is a standard-tier API-equivalent estimate, not a claim about
-what a ChatGPT subscription was charged. GPT-5.6 Sol, Terra, and Luna use
-OpenAI's short-context input/cache/output prices and per-request long-context
-rates above 272K input tokens. The whole request switches tiers; reasoning is
-not billed separately. Unknown models retain `costUSD: null` and
+what a ChatGPT subscription was charged. The embedded catalog records its
+review time and current Standard rates. GPT-5.6 Sol, Terra, and Luna use
+short-context input/cache/output prices and per-request long-context rates
+above 272K input tokens. The whole request switches tiers; reasoning is not
+billed separately. Unknown models retain `costUSD: null` and
 `pricingState: "missing"`.
 
 `scriba codex limits` skips local log scanning and only fetches Codex usage
-windows from the logged-in ChatGPT/Codex backend. It reads Codex OAuth state
-from `${CODEX_HOME:-~/.codex}/auth.json`; OpenAI API key auth cannot expose
-these ChatGPT subscription windows. The live payload includes primary Codex
+windows for the selected account. Omit `--account` to use the highest-priority
+usable auth source, or pass a public ID or alias. OpenAI API key auth cannot
+expose these ChatGPT subscription windows. The live payload includes primary Codex
 windows, explicit additional model windows such as Spark, and the available
 rate-limit reset grant count. When the read-only reset-credit metadata endpoint
 answers, Scriba also shows the earliest available grant expiry. Pass `--fast`
-to read the last cached `scriba status` snapshot instead of making a network
-request.
+to read the selected account's latest resident observation, including its age
+and stale state, without making a provider request.
 
 `scriba codex summary` keeps the local usage summary and, unless `--no-remote`
 is passed, appends the same live Codex limits and reset-grant metadata.
@@ -154,9 +183,12 @@ is passed, appends the same live Codex limits and reset-grant metadata.
 `scriba codex reset-grants` shows available rate-limit reset grants as a focused
 view, including every available grant's `grantedAt` and `expiresAt` timestamp
 when OpenAI exposes the read-only reset-credit metadata. The short alias is
-`scriba codex grants`.
+`scriba codex grants`. For an explicitly selected historical account without
+credentials, the command falls back to stored grant metadata; `--fast` requests
+that behavior directly.
 
-`scriba codex reset` fetches current usage and grant metadata, selects the
+`scriba codex reset` requires usable credentials for the selected account,
+fetches current usage and grant metadata, selects the
 available credit expiring soonest, prints the exact credit, and requires an
 explicit `y` confirmation before redeeming it. Use `--credit <id>` to pin a
 specific available grant, `--dry-run` to stop before the redeeming POST, or
@@ -166,9 +198,11 @@ the selected credit ID, then reports one of `reset`, `nothing_to_reset`,
 `no_credit`, or `already_redeemed`. Scriba does not retry a timed-out mutation
 with a new key: it retries one transient failure with the same key. Telegram
 exposes the same operation only through an owner-bound, expiring confirmation
-callback; MCP remains read-only.
+callback; MCP remains read-only. The preview pins the resolved public account,
+private provider identity, credit, and idempotency key. Auth rotation before a
+retry or confirmation refuses redemption and requires a fresh preview.
 
-`scriba codex profile` shows the ChatGPT/Codex profile token-activity backend:
+`scriba codex activity` shows the ChatGPT/Codex profile token-activity backend:
 lifetime and peak tokens, streaks, longest turn duration, reasoning/fast-mode
 mix, thread and skill counts, daily/weekly activity bars, and top skills/plugins.
 `--json` preserves the full daily, weekly, and cumulative daily bucket arrays
@@ -183,7 +217,9 @@ windows and derive pacing, safe allowance, projected exhaustion, risk,
 freshness, confidence, and explicit reason codes. Budget quantities are quota
 percentage points, not local token counts: `3pp/h` means three points of the
 provider-reported quota percentage per hour. These commands deliberately do
-not accept `--fast`; a budget must start from a fresh provider observation.
+not accept `--fast`. An explicitly selected historical Codex account without
+credentials can still derive a visibly stale budget from its stored
+observation; live/current requests use fresh provider data.
 
 Codex can use matching durable server observations from the preceding 24 hours
 for its recent-burn estimate; samples less than 10 minutes apart are ignored.

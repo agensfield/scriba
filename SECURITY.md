@@ -22,11 +22,14 @@ depend on severity and reproducibility.
 ## Security boundaries
 
 Scriba is local-first, but it reads sensitive local Codex authentication and
-usage data. Its server database, config, environment file, backup directory,
-and Unix socket must remain owner-only. External notifications intentionally
-use minimized canonical payloads; credentials remain environment-only. The
-stdio MCP and owner-only Unix API are read-only agent surfaces. TCP exposure is
-not enabled by the shipped context API configuration.
+usage data. Every configured `codexAuthPaths` parent, plus the server database,
+config, environment file, backup directory, and Unix socket, must remain
+owner-only. Auth paths and raw provider account references are private;
+user-facing selectors use stable public account IDs or optional aliases.
+External notifications intentionally use minimized canonical payloads and omit
+possibly email-derived account labels; credentials remain environment-only.
+The stdio MCP and owner-only Unix API are read-only agent surfaces. TCP
+exposure is not enabled by the shipped context API configuration.
 
 Verified local backups are recoverability, not disaster recovery. Operators
 remain responsible for independently protected off-host copies, host access,
