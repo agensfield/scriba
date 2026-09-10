@@ -268,12 +268,10 @@ func fastCodexLimitsPayload(ctx context.Context, opts options) (codexLimitsPaylo
 		return codexLimitsPayload{}, err
 	}
 	defer func() { _ = st.Close() }()
-	account, ok, err := st.ResolveAccount(ctx, opts.account)
+	resolver := accountresolver.New(st, accountresolver.Sources(cfg))
+	account, err := resolver.Resolve(ctx, opts.account)
 	if err != nil {
 		return codexLimitsPayload{}, err
-	}
-	if !ok {
-		return codexLimitsPayload{}, accountresolver.ErrAccountNotFound
 	}
 	observation, ok, err := st.LoadLatestObservationForAccount(ctx, account.ID)
 	if err != nil {

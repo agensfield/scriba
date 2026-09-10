@@ -77,12 +77,10 @@ func runStoredCodexBudget(cfg config.Config, opts options) error {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	account, ok, err := st.ResolveAccount(context.Background(), opts.account)
+	resolver := accountresolver.New(st, accountresolver.Sources(cfg))
+	account, err := resolver.Resolve(context.Background(), opts.account)
 	if err != nil {
 		return err
-	}
-	if !ok {
-		return accountresolver.ErrAccountNotFound
 	}
 	observation, ok, err := st.LoadLatestObservationForAccount(context.Background(), account.ID)
 	if err != nil {
