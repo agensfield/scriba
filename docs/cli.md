@@ -209,12 +209,12 @@ The Wave 2 inspection commands are read-only:
   values. Its JSON schema version is `scriba.policy-explain.v1`.
 - `scriba outbox list` opens server SQLite read-only without claiming messages
   and filters by exact `--id`, `--status`, and `--target` values. Its JSON
-  schema version is `scriba.outbox-list.v1`.
+  schema version is `scriba.outbox-list.v2`.
 
 The state-backed commands accept `--state-path`, `--env`, and a `--limit` from
 1 to 1000. `--redact` on `policy explain` removes subject/account/config
 identifiers and persisted state/evaluation bodies. On `outbox list` it removes
-profile/account/target identifiers, delivery payloads, lease/provider message
+account/target identifiers, delivery payloads, lease/provider message
 identifiers, and last errors. The checked-in Draft 2020-12 schemas are
 [`policy-validate.schema.json`](../schemas/policy-validate.schema.json),
 [`policy-list.schema.json`](../schemas/policy-list.schema.json),

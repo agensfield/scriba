@@ -195,7 +195,7 @@ Claude Code and Codex usage tracker.
   read-only SQLite open, support bounded exact filters, offer field-aware
   redaction, and publish the typed `scriba.policy-validate.v1`,
   `scriba.policy-list.v1`, `scriba.policy-explain.v1`, and
-  `scriba.outbox-list.v1` JSON contracts.
+  `scriba.outbox-list.v2` JSON contracts.
 - The Wave 2 release gate is closed at `6bfbcb3`. Composed fixtures prove all
   four policy transition kinds persist through the typed ledgers and canonical
   outbox with identical payloads, and a real SQLite/Telegram SDK test proves

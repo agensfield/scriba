@@ -111,7 +111,7 @@ mutate SQLite:
 - `policy explain` reads persisted state/evaluation explanations with exact
   provider, account, and rule filters and emits `scriba.policy-explain.v1`;
 - `outbox list` reads delivery envelopes with exact id, status, and target
-  filters and emits `scriba.outbox-list.v1` without leasing work.
+  filters and emits `scriba.outbox-list.v2` without leasing work.
 
 The two state-backed commands accept a bounded 1..1000 result limit and support
 field-aware `--redact` output for identifiers, stored JSON bodies, delivery
