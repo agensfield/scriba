@@ -98,13 +98,14 @@ type SourceIdentity struct {
 }
 
 type Server struct {
-	store    Store
-	fetcher  Fetcher
-	radar    RadarFetcher
-	notifier Notifier
-	cfg      Config
-	accounts *accounts.Resolver
-	logger   *slog.Logger
+	store         Store
+	fetcher       Fetcher
+	radar         RadarFetcher
+	notifier      Notifier
+	cfg           Config
+	accounts      *accounts.Resolver
+	fetchActivity func(context.Context, remotecodex.FetchOptions) (remotecodex.ProfileResult, error)
+	logger        *slog.Logger
 
 	mu            sync.Mutex
 	refreshing    bool
@@ -136,6 +137,11 @@ type PollResult struct {
 type CodexResetPlan struct {
 	Account store.Account                  `json:"account"`
 	Plan    remotecodex.RateLimitResetPlan `json:"plan"`
+}
+
+type CodexActivityResult struct {
+	Account  store.Account             `json:"account"`
+	Activity remotecodex.ProfileResult `json:"activity"`
 }
 
 type SourcePollFailure struct {
@@ -237,11 +243,14 @@ func New(st Store, fetcher Fetcher, notifier Notifier, cfg Config) *Server {
 	accountResolver := accounts.New(st, cfg.Sources)
 	cfg.Sources = accountResolver.Sources()
 	return &Server{
-		store:         st,
-		fetcher:       fetcher,
-		notifier:      notifier,
-		cfg:           cfg,
-		accounts:      accountResolver,
+		store:    st,
+		fetcher:  fetcher,
+		notifier: notifier,
+		cfg:      cfg,
+		accounts: accountResolver,
+		fetchActivity: func(ctx context.Context, options remotecodex.FetchOptions) (remotecodex.ProfileResult, error) {
+			return remotecodex.FetchProfileWithOptions(ctx, nil, options)
+		},
 		logger:        slog.Default(),
 		heartbeat:     cfg.StartupHeartbeat,
 		intervalCh:    make(chan struct{}, 1),
@@ -355,17 +364,17 @@ func (s *Server) LatestObservationForAccount(ctx context.Context, selector strin
 	return s.store.LoadLatestObservationForAccount(ctx, account.ID)
 }
 
-func (s *Server) CodexActivityForAccount(ctx context.Context, selector string) (remotecodex.ProfileResult, error) {
+func (s *Server) CodexActivityForAccount(ctx context.Context, selector string) (CodexActivityResult, error) {
 	live, err := s.accounts.ResolveLive(ctx, selector)
 	if err != nil {
-		return remotecodex.ProfileResult{}, err
+		return CodexActivityResult{}, err
 	}
-	result, err := remotecodex.FetchProfileWithOptions(ctx, nil, live.FetchOptions())
+	result, err := s.fetchActivity(ctx, live.FetchOptions())
 	if err != nil {
-		return remotecodex.ProfileResult{}, err
+		return CodexActivityResult{}, err
 	}
 	result.SchemaVersion = model.SchemaVersion
-	return sanitizeCodexProfileResult(result), nil
+	return CodexActivityResult{Account: live.Account, Activity: sanitizeCodexProfileResult(result)}, nil
 }
 
 func (s *Server) PlanCodexReset(ctx context.Context, selector string) (CodexResetPlan, error) {

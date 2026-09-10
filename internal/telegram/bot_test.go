@@ -349,13 +349,19 @@ func TestEmptyAllowlistIsPrivateChatOnlyAndGroupsRequireUserAllowlist(t *testing
 
 func TestVersionedAccountCallbacksSelectExactAccount(t *testing.T) {
 	account := testAccount("work", "work", true)
-	controller := &fakeController{accounts: []store.Account{account}, latest: resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "work", Label: "Work"}, ObservedAt: time.Now()}, latestOK: true, health: healthFixture()}
+	controller := &fakeController{accounts: []store.Account{account}, latest: resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "work", Label: "Work"}, ObservedAt: time.Now()}, latestOK: true, health: healthFixture(), activityResult: server.CodexActivityResult{Account: account, Activity: remotecodex.ProfileResult{AuthState: remote.AuthState{OK: true}}}}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
 	if err := svc.handleCallback(t.Context(), &models.CallbackQuery{Data: "accounts:v1:limits:" + account.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if controller.latestSelector != account.ID {
 		t.Fatalf("selected account=%q", controller.latestSelector)
+	}
+	if err := svc.handleCallback(t.Context(), &models.CallbackQuery{Data: "accounts:v1:activity:" + account.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if controller.activitySelector != account.ID {
+		t.Fatalf("selected activity account=%q", controller.activitySelector)
 	}
 	if _, _, ok := parseAccountCallback("accounts:v2:limits:" + account.ID); ok {
 		t.Fatal("future callback version accepted")
@@ -364,6 +370,27 @@ func TestVersionedAccountCallbacksSelectExactAccount(t *testing.T) {
 		if _, _, ok := parseAccountCallback(malformed); ok {
 			t.Fatalf("malformed callback accepted: %q", malformed)
 		}
+	}
+}
+
+func TestAccountActivityCallbackHonorsChatAndUserAuthorization(t *testing.T) {
+	account := testAccount("work", "work", true)
+	controller := &fakeController{accounts: []store.Account{account}, activityResult: server.CodexActivityResult{Account: account, Activity: remotecodex.ProfileResult{AuthState: remote.AuthState{OK: true}}}}
+	svc := &Service{cfg: BotConfig{ChatID: 123, AllowedUserIDs: []int64{7}}, controller: controller, logger: slog.Default()}
+	callback := func(user int64) *models.Update {
+		return &models.Update{CallbackQuery: &models.CallbackQuery{Data: "accounts:v1:activity:" + account.ID, From: models.User{ID: user}, Message: models.MaybeInaccessibleMessage{Message: &models.Message{Chat: models.Chat{ID: 123, Type: models.ChatTypePrivate}}}}}
+	}
+	if err := svc.dispatchUpdate(t.Context(), callback(8)); err != nil {
+		t.Fatal(err)
+	}
+	if controller.profileCalls != 0 {
+		t.Fatal("unauthorized callback reached activity controller")
+	}
+	if err := svc.dispatchUpdate(t.Context(), callback(7)); err != nil {
+		t.Fatal(err)
+	}
+	if controller.profileCalls != 1 || controller.activitySelector != account.ID {
+		t.Fatalf("authorized callback calls=%d selector=%q", controller.profileCalls, controller.activitySelector)
 	}
 }
 
@@ -790,32 +817,39 @@ func resetTestQuery(data string, chatID, userID int64) *models.CallbackQuery {
 }
 
 func TestActivityCommandUsesControllerActivity(t *testing.T) {
-	account := testAccount("work-ref", "work", true)
+	account := testAccount("switched-ref", "switched", true)
 	controller := &fakeController{
-		accounts: []store.Account{account},
-		profile: remotecodex.ProfileResult{
-			Profile:   remotecodex.Profile{Username: "ardasevinc", DisplayName: "Arda Sevinc"},
-			AuthState: remote.AuthState{OK: true},
-			Stats: remotecodex.ProfileStats{
-				LifetimeTokens:    8318370263,
-				CurrentStreakDays: 22,
-				LongestStreakDays: 22,
+		accounts: []store.Account{testAccount("old-ref", "old", true)},
+		activityResult: server.CodexActivityResult{
+			Account: account,
+			Activity: remotecodex.ProfileResult{
+				Profile:   remotecodex.Profile{Username: "ardasevinc", DisplayName: "Arda Sevinc"},
+				AuthState: remote.AuthState{OK: true},
+				Stats: remotecodex.ProfileStats{
+					LifetimeTokens:    8318370263,
+					CurrentStreakDays: 22,
+					LongestStreakDays: 22,
+				},
 			},
 		},
 	}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	reply, markup := svc.handleCommand(context.Background(), "/activity work")
+	reply, markup := svc.handleCommand(context.Background(), "/activity")
 	if !strings.Contains(reply, "<b>Codex activity</b>") || !strings.Contains(reply, "8.3B lifetime") {
 		t.Fatalf("unexpected profile reply: %s", reply)
+	}
+	if !strings.Contains(reply, "switched") || !strings.Contains(reply, account.ID) || strings.Contains(reply, "old-ref") {
+		t.Fatalf("implicit current lost resolved account: %s", reply)
 	}
 	if controller.profileCalls != 1 {
 		t.Fatalf("expected one profile call, got %d", controller.profileCalls)
 	}
-	if controller.activitySelector != account.ID {
+	if controller.activitySelector != "" {
 		t.Fatalf("selector=%q", controller.activitySelector)
 	}
-	if markup == nil {
-		t.Fatal("expected main keyboard")
+	keyboard, ok := markup.(models.InlineKeyboardMarkup)
+	if !ok || !keyboardHasCallback(keyboard, "accounts:v1:activity:"+account.ID) {
+		t.Fatalf("resolved account keyboard=%+v", markup)
 	}
 }
 
@@ -1008,7 +1042,7 @@ type fakeController struct {
 	latestBySelector map[string]resetwatch.Observation
 	latestOK         bool
 	refreshes        int
-	profile          remotecodex.ProfileResult
+	activityResult   server.CodexActivityResult
 	profileCalls     int
 	latestSelector   string
 	activitySelector string
@@ -1060,15 +1094,10 @@ func (f *fakeController) LatestObservationForAccount(_ context.Context, selector
 	return f.latest, f.latestOK, f.latestErr
 }
 
-func (f *fakeController) CodexProfile(context.Context) (remotecodex.ProfileResult, error) {
-	f.profileCalls++
-	return f.profile, nil
-}
-
-func (f *fakeController) CodexActivityForAccount(_ context.Context, selector string) (remotecodex.ProfileResult, error) {
+func (f *fakeController) CodexActivityForAccount(_ context.Context, selector string) (server.CodexActivityResult, error) {
 	f.profileCalls++
 	f.activitySelector = selector
-	return f.profile, f.profileErr
+	return f.activityResult, f.profileErr
 }
 
 func (f *fakeController) PlanCodexReset(_ context.Context, selector string) (server.CodexResetPlan, error) {

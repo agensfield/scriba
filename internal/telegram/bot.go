@@ -39,7 +39,7 @@ type Controller interface {
 	LastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	Accounts(context.Context) ([]store.Account, error)
 	LatestObservationForAccount(context.Context, string) (resetwatch.Observation, bool, error)
-	CodexActivityForAccount(context.Context, string) (remotecodex.ProfileResult, error)
+	CodexActivityForAccount(context.Context, string) (server.CodexActivityResult, error)
 	PlanCodexReset(context.Context, string) (server.CodexResetPlan, error)
 	ConsumeCodexReset(context.Context, string, remotecodex.ResetAccountPin, remote.ResetCredit, string) (remotecodex.RateLimitResetResult, error)
 	Stats(context.Context) (server.Stats, error)
@@ -351,22 +351,14 @@ func (s *Service) handleCommandFor(ctx context.Context, text string, chatID, use
 		if err != nil {
 			return "usage: /activity [account]", nil
 		}
-		account, err := s.accountForSelector(ctx, selector)
+		result, err := s.controller.CodexActivityForAccount(ctx, selector)
 		if err != nil {
 			return accountCommandError("activity", err), nil
 		}
-		liveSelector := selector
-		if account.ID != "" {
-			liveSelector = account.ID
+		if !telegramAccountIDPattern.MatchString(result.Account.ID) {
+			return "activity failed.", nil
 		}
-		activity, err := s.controller.CodexActivityForAccount(ctx, liveSelector)
-		if err != nil {
-			return accountCommandError("activity", err), nil
-		}
-		if account.ID == "" {
-			return RenderActivity(activity), mainKeyboard()
-		}
-		return renderSelectedAccount(account, false, RenderActivity(activity)), accountKeyboard(account.ID)
+		return renderSelectedAccount(result.Account, false, RenderActivity(result.Activity)), accountKeyboard(result.Account.ID)
 	case "/accounts":
 		if len(command) != 1 {
 			return "usage: /accounts", nil
@@ -512,22 +504,6 @@ func (s *Service) cachedAccountObservation(ctx context.Context, selector string)
 		stale = health.StaleAfter > 0 && time.Since(account.LastSeenAt) > health.StaleAfter
 	}
 	return obs, account, stale, true, nil
-}
-
-func (s *Service) accountForSelector(ctx context.Context, selector string) (store.Account, error) {
-	if selector == "" || selector == "current" {
-		return store.Account{}, nil
-	}
-	known, err := s.controller.Accounts(ctx)
-	if err != nil {
-		return store.Account{}, err
-	}
-	for _, account := range known {
-		if account.ID == selector || account.Alias == selector {
-			return account, nil
-		}
-	}
-	return store.Account{}, accounts.ErrAccountNotFound
 }
 
 func accountCommandError(action string, err error) string {

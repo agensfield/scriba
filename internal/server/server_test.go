@@ -454,6 +454,42 @@ func TestSanitizeCodexProfileResultRemovesPrivateDiagnostics(t *testing.T) {
 	}
 }
 
+func TestCodexActivityResultKeepsResolvedAccountAcrossAuthSwitch(t *testing.T) {
+	st := openStore(t)
+	cfg := testServerConfig(t, Config{})
+	srv := New(st, nil, nil, cfg)
+	var expectedAccount string
+	srv.fetchActivity = func(_ context.Context, options remotecodex.FetchOptions) (remotecodex.ProfileResult, error) {
+		expectedAccount = options.ExpectedAccountID
+		if err := os.WriteFile(cfg.Sources[0].Path, []byte(`{"tokens":{"access_token":"rotated-token","account_id":"account-b"},"last_refresh":"2026-09-10T00:01:00Z"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return remotecodex.ProfileResult{AuthState: remote.AuthState{OK: true, AccountID: expectedAccount, AccessToken: "private"}, Profile: remotecodex.Profile{DisplayName: "Activity"}}, nil
+	}
+
+	result, err := srv.CodexActivityForAccount(context.Background(), "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expectedAccount != "acct_123" || result.Account.ID != store.AccountID("codex", "acct_123") || result.Account.Ref != "acct_123" {
+		t.Fatalf("expected=%q account=%+v", expectedAccount, result.Account)
+	}
+	if result.Activity.SchemaVersion != model.SchemaVersion || result.Activity.AuthState.AccountID != "" || result.Activity.AuthState.AccessToken != "" {
+		t.Fatalf("activity=%+v", result.Activity)
+	}
+	switched, err := srv.accounts.ResolveLive(context.Background(), "current")
+	if err != nil || switched.Account.Ref != "account-b" {
+		t.Fatalf("post-fetch current=%+v err=%v", switched.Account, err)
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "acct_123") || strings.Contains(string(raw), "private") || !strings.Contains(string(raw), result.Account.ID) {
+		t.Fatalf("activity result privacy=%s", raw)
+	}
+}
+
 func TestSanitizeCodexAuthStateRemovesPrivateDiagnostics(t *testing.T) {
 	result := sanitizeCodexAuthState(remote.AuthState{OK: true, Source: "/secret/auth.json", Error: "bearer secret", AccessToken: "token", AccountID: "acct", Email: "safe@example.com"})
 	if !result.OK || result.Email != "safe@example.com" || result.Source != "" || result.Error != "" || result.AccessToken != "" || result.AccountID != "" {
