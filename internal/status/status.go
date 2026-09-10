@@ -28,7 +28,12 @@ type Built struct {
 	ScanStats map[string]model.ScannerStats
 }
 
-var fetchCodexLimits = remotecodex.FetchLimitsWithOptions
+var (
+	fetchCodexLimits = remotecodex.FetchLimitsWithOptions
+	resolveCodexLive = func(resolver *accountresolver.Resolver, ctx context.Context, selector string) (accountresolver.LiveAccount, error) {
+		return resolver.ResolveLive(ctx, selector)
+	}
+)
 
 func Build(cfg config.Config, c *cache.Cache, includeRemote bool, accountSelector ...string) (Built, error) {
 	generatedAt := time.Now().UTC().Format(time.RFC3339Nano)
@@ -111,7 +116,7 @@ func appendCodexAccount(provider *model.ProviderSnapshot, cfg config.Config, sel
 	if !includeRemote {
 		return appendStoredCodexAccount(provider, st, account)
 	}
-	live, err := resolver.ResolveLive(ctx, selector)
+	live, err := resolveCodexLive(resolver, ctx, selector)
 	if errors.Is(err, accountresolver.ErrCredentialsUnavailable) {
 		if storedErr := appendStoredCodexAccount(provider, st, account); storedErr == nil {
 			return nil
@@ -120,12 +125,15 @@ func appendCodexAccount(provider *model.ProviderSnapshot, cfg config.Config, sel
 	if err != nil {
 		return err
 	}
+	account = live.Account
 	result, err := fetchCodexLimits(ctx, nil, live.FetchOptions())
 	if err != nil {
 		return err
 	}
 	provider.AccountID = account.ID
 	provider.AccountAlias = account.Alias
+	credentialsAvailable := account.CredentialsAvailable
+	provider.CredentialsAvailable = &credentialsAvailable
 	provider.Lines = append(result.Lines, provider.Lines...)
 	provider.Provenance = append(provider.Provenance, result.Provenance...)
 	if !result.AuthState.OK {
@@ -165,6 +173,8 @@ func appendStoredCodexAccount(provider *model.ProviderSnapshot, st *store.Store,
 	stale := age > 15*time.Minute
 	provider.AccountID = account.ID
 	provider.AccountAlias = account.Alias
+	credentialsAvailable := account.CredentialsAvailable
+	provider.CredentialsAvailable = &credentialsAvailable
 	provider.ObservedAt = observation.ObservedAt.UTC().Format(time.RFC3339Nano)
 	provider.ObservedAgeMs = &ageMs
 	provider.ObservationStale = stale

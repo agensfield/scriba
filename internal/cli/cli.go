@@ -30,6 +30,7 @@ import (
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/render"
 	"github.com/agensfield/scriba/internal/reports"
+	"github.com/agensfield/scriba/internal/server/store"
 	"github.com/agensfield/scriba/internal/status"
 	"github.com/agensfield/scriba/internal/telegram"
 	"github.com/agensfield/scriba/internal/updater"
@@ -533,6 +534,9 @@ func runStatus(opts options) error {
 		if err != nil {
 			return err
 		}
+		if opts.redact {
+			snapshot = redactStatusAccountMetadata(snapshot)
+		}
 		return output(opts, snapshot, render.Status(snapshot))
 	}
 	if !opts.noCache {
@@ -553,9 +557,11 @@ func runStatus(opts options) error {
 		}
 		built, err := status.Build(cfg, c, !opts.noRemote, opts.account)
 		if err != nil {
-			if snapshot, loadErr := c.LoadStatusSnapshot(); loadErr == nil && snapshot != nil {
-				stale := status.MarkStale(*snapshot, err)
-				return output(opts, stale, render.Status(stale))
+			if opts.account == "" {
+				if snapshot, loadErr := c.LoadStatusSnapshot(); loadErr == nil && snapshot != nil {
+					stale := status.MarkStale(*snapshot, err)
+					return output(opts, stale, render.Status(stale))
+				}
 			}
 			return err
 		}
@@ -564,11 +570,17 @@ func runStatus(opts options) error {
 				return err
 			}
 		}
+		if opts.redact {
+			built.Snapshot = redactStatusAccountMetadata(built.Snapshot)
+		}
 		return output(opts, built.Snapshot, render.Status(built.Snapshot))
 	}
 	built, err := status.Build(cfg, nil, !opts.noRemote, opts.account)
 	if err != nil {
 		return err
+	}
+	if opts.redact {
+		built.Snapshot = redactStatusAccountMetadata(built.Snapshot)
 	}
 	return output(opts, built.Snapshot, render.Status(built.Snapshot))
 }
@@ -665,7 +677,7 @@ func runReport(provider, command string, opts options) error {
 	}
 	if limits != nil {
 		payload["limits"] = limits
-		human += "\n\n" + render.CodexLimits(limits.Lines, false)
+		human += "\n\n" + renderCodexLimitsPayload(*limits, false)
 	}
 	return output(opts, payload, human)
 }
@@ -676,29 +688,62 @@ func runCodexLimits(opts options) error {
 		if err != nil {
 			return err
 		}
-		return output(opts, payload, render.CodexLimits(payload.Lines, true))
+		return output(opts, payload, renderCodexLimitsPayload(payload, true))
 	}
 	payload, cleanup, err := liveCodexLimitsPayloadFor(context.Background(), opts)
+	if err != nil {
+		if opts.account != "" && errors.Is(err, accountresolver.ErrCredentialsUnavailable) {
+			payload, fallbackErr := fastCodexLimitsPayload(context.Background(), opts)
+			if fallbackErr != nil {
+				return fallbackErr
+			}
+			return output(opts, payload, renderCodexLimitsPayload(payload, true))
+		}
+		return err
+	}
+	defer cleanup()
+	return output(opts, payload, renderCodexLimitsPayload(payload, false))
+}
+
+func renderCodexLimitsPayload(payload codexLimitsPayload, cached bool) string {
+	text := render.CodexLimits(payload.Lines, cached)
+	if payload.AccountID == "" {
+		return text
+	}
+	name := payload.AccountAlias
+	if name == "" {
+		name = payload.AccountID
+	}
+	metadata := cliMuted("account " + name + " · " + payload.AccountID)
+	if payload.CredentialsAvailable != nil {
+		state := "unavailable"
+		if *payload.CredentialsAvailable {
+			state = "available"
+		}
+		metadata += "\n" + cliMuted("credentials "+state)
+	}
+	if payload.ObservedAt != "" {
+		metadata += "\n" + cliMuted("observed "+payload.ObservedAt)
+		if payload.ObservedAgeMs != nil {
+			metadata += " · " + cliMuted("age "+formatAccountAge(payload.ObservedAgeMs))
+		}
+		if payload.ObservationStale {
+			metadata += " · " + cliMuted("stale")
+		}
+	}
+	if index := strings.IndexByte(text, '\n'); index >= 0 {
+		return text[:index+1] + metadata + "\n" + text[index+1:]
+	}
+	return metadata + "\n" + text
+}
+
+func runCodexActivity(opts options) error {
+	live, cleanup, err := resolveLiveCodex(context.Background(), opts)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	return output(opts, payload, render.CodexLimits(payload.Lines, false))
-}
-
-func runCodexActivity(opts options) error {
-	resolver, st, _, err := openAccountRegistry(opts)
-	if err != nil {
-		return err
-	}
-	if st != nil {
-		defer func() { _ = st.Close() }()
-	}
-	live, err := resolver.ResolveLive(context.Background(), opts.account)
-	if err != nil {
-		return err
-	}
-	profile, err := remotecodex.FetchProfileWithOptions(context.Background(), nil, live.FetchOptions())
+	profile, err := fetchCodexActivity(context.Background(), nil, live.FetchOptions())
 	if err != nil {
 		return err
 	}
@@ -713,7 +758,35 @@ func runCodexActivity(opts options) error {
 		profile.Provenance[i].Error = ""
 	}
 	profile.SchemaVersion = model.SchemaVersion
-	return output(opts, profile, renderCodexActivity(profile))
+	return output(opts, codexActivityPayload(profile, live.Account, opts.redact), renderCodexActivityForAccount(profile, live.Account, opts.redact))
+}
+
+func codexActivityPayload(profile remotecodex.ProfileResult, account store.Account, redact bool) map[string]any {
+	data, _ := json.Marshal(profile)
+	var payload map[string]any
+	_ = json.Unmarshal(data, &payload)
+	payload["accountId"] = account.ID
+	if account.Alias != "" && !redact {
+		payload["accountAlias"] = account.Alias
+	}
+	payload["credentialsAvailable"] = account.CredentialsAvailable
+	return payload
+}
+
+func renderCodexActivityForAccount(profile remotecodex.ProfileResult, account store.Account, redact bool) string {
+	text := renderCodexActivity(profile)
+	name := account.Alias
+	if redact {
+		name = ""
+	}
+	if name == "" {
+		name = account.ID
+	}
+	metadata := cliMuted("account " + name + " · " + account.ID)
+	if index := strings.IndexByte(text, '\n'); index >= 0 {
+		return text[:index+1] + metadata + "\n" + text[index+1:]
+	}
+	return metadata + "\n" + text
 }
 
 func runCodexResetGrants(opts options) error {
@@ -740,17 +813,20 @@ func runCodexResetGrants(opts options) error {
 }
 
 type codexResetPayload struct {
-	SchemaVersion    string             `json:"schemaVersion"`
-	ProviderID       string             `json:"providerId"`
-	Source           string             `json:"source"`
-	DryRun           bool               `json:"dryRun"`
-	Outcome          string             `json:"outcome"`
-	WindowsReset     int64              `json:"windowsReset"`
-	AvailableBefore  int                `json:"availableBefore"`
-	WeeklyUsedBefore *float64           `json:"weeklyUsedPercentBefore,omitempty"`
-	WeeklyResetsAt   string             `json:"weeklyResetsAt,omitempty"`
-	Credit           remote.ResetCredit `json:"credit"`
-	AuthState        remote.AuthState   `json:"authState"`
+	SchemaVersion        string             `json:"schemaVersion"`
+	ProviderID           string             `json:"providerId"`
+	Source               string             `json:"source"`
+	AccountID            string             `json:"accountId"`
+	AccountAlias         string             `json:"accountAlias,omitempty"`
+	CredentialsAvailable bool               `json:"credentialsAvailable"`
+	DryRun               bool               `json:"dryRun"`
+	Outcome              string             `json:"outcome"`
+	WindowsReset         int64              `json:"windowsReset"`
+	AvailableBefore      int                `json:"availableBefore"`
+	WeeklyUsedBefore     *float64           `json:"weeklyUsedPercentBefore,omitempty"`
+	WeeklyResetsAt       string             `json:"weeklyResetsAt,omitempty"`
+	Credit               remote.ResetCredit `json:"credit"`
+	AuthState            remote.AuthState   `json:"authState"`
 }
 
 func runCodexReset(opts options) error {
@@ -760,6 +836,7 @@ func runCodexReset(opts options) error {
 	ctx := context.Background()
 	var (
 		plan    remotecodex.RateLimitResetPlan
+		account store.Account
 		consume func(string) (remotecodex.RateLimitResetResult, error)
 		cleanup func()
 	)
@@ -772,6 +849,7 @@ func runCodexReset(opts options) error {
 			if err != nil {
 				return err
 			}
+			account = planned.Account
 			plan = planned.Plan
 			consume = func(requestID string) (remotecodex.RateLimitResetResult, error) {
 				return srv.ConsumeCodexReset(ctx, planned.Account.ID, plan.AccountPin, plan.Credit, requestID)
@@ -779,46 +857,57 @@ func runCodexReset(opts options) error {
 		} else if !errors.Is(openErr, os.ErrNotExist) {
 			return openErr
 		} else {
-			fetchOpts, closeStore, err := resolveLiveCodexOptions(ctx, opts)
+			live, closeStore, err := resolveLiveCodex(ctx, opts)
 			if err != nil {
 				return err
 			}
 			cleanup = closeStore
 			defer cleanup()
-			plan, err = remotecodex.PlanRateLimitReset(ctx, nil, fetchOpts, "")
+			account = live.Account
+			fetchOpts := live.FetchOptions()
+			plan, err = planCodexReset(ctx, nil, fetchOpts, "")
 			if err != nil {
 				return err
 			}
 			consume = func(requestID string) (remotecodex.RateLimitResetResult, error) {
-				return remotecodex.ConsumeRateLimitResetCredit(ctx, nil, fetchOpts, plan.AccountPin, plan.Credit, requestID)
+				return consumeCodexReset(ctx, nil, fetchOpts, plan.AccountPin, plan.Credit, requestID)
 			}
 		}
 	} else {
-		fetchOpts, closeStore, err := resolveLiveCodexOptions(ctx, opts)
+		live, closeStore, err := resolveLiveCodex(ctx, opts)
 		if err != nil {
 			return err
 		}
 		cleanup = closeStore
 		defer cleanup()
-		plan, err = remotecodex.PlanRateLimitReset(ctx, nil, fetchOpts, opts.credit)
+		account = live.Account
+		fetchOpts := live.FetchOptions()
+		plan, err = planCodexReset(ctx, nil, fetchOpts, opts.credit)
 		if err != nil {
 			return err
 		}
 		consume = func(requestID string) (remotecodex.RateLimitResetResult, error) {
-			return remotecodex.ConsumeRateLimitResetCredit(ctx, nil, fetchOpts, plan.AccountPin, plan.Credit, requestID)
+			return consumeCodexReset(ctx, nil, fetchOpts, plan.AccountPin, plan.Credit, requestID)
 		}
 	}
+	accountAlias := ""
+	if !opts.redact {
+		accountAlias = account.Alias
+	}
 	payload := codexResetPayload{
-		SchemaVersion:    model.SchemaVersion,
-		ProviderID:       plan.ProviderID,
-		Source:           plan.Source,
-		DryRun:           true,
-		Outcome:          "planned",
-		AvailableBefore:  plan.AvailableCount,
-		WeeklyUsedBefore: plan.WeeklyUsed,
-		WeeklyResetsAt:   plan.WeeklyResetsAt,
-		Credit:           plan.Credit,
-		AuthState:        plan.AuthState,
+		SchemaVersion:        model.SchemaVersion,
+		ProviderID:           plan.ProviderID,
+		Source:               plan.Source,
+		AccountID:            account.ID,
+		AccountAlias:         accountAlias,
+		CredentialsAvailable: account.CredentialsAvailable,
+		DryRun:               true,
+		Outcome:              "planned",
+		AvailableBefore:      plan.AvailableCount,
+		WeeklyUsedBefore:     plan.WeeklyUsed,
+		WeeklyResetsAt:       plan.WeeklyResetsAt,
+		Credit:               plan.Credit,
+		AuthState:            plan.AuthState,
 	}
 	if opts.dryRun {
 		return output(opts, payload, renderCodexReset(payload))
@@ -856,6 +945,18 @@ func renderCodexReset(payload codexResetPayload) string {
 	var b strings.Builder
 	b.WriteString(cliHeader("Codex reset"))
 	b.WriteString("\n")
+	if payload.AccountID != "" {
+		name := payload.AccountAlias
+		if name == "" {
+			name = payload.AccountID
+		}
+		fmt.Fprintf(&b, "%s\n", cliMuted("account "+name+" · "+payload.AccountID))
+		state := "unavailable"
+		if payload.CredentialsAvailable {
+			state = "available"
+		}
+		fmt.Fprintf(&b, "%s\n", cliMuted("credentials "+state))
+	}
 	status := payload.Outcome
 	renderStatus := cliValue
 	switch payload.Outcome {
@@ -1138,42 +1239,58 @@ func renderUpdateCheck(check updater.Check) string {
 }
 
 func liveCodexLimitsPayloadFor(ctx context.Context, opts options) (codexLimitsPayload, func(), error) {
-	fetchOpts, cleanup, err := resolveLiveCodexOptions(ctx, opts)
+	live, cleanup, err := resolveLiveCodex(ctx, opts)
 	if err != nil {
 		return codexLimitsPayload{}, nil, err
 	}
-	result, err := remotecodex.FetchLimitsWithOptions(ctx, nil, fetchOpts)
+	result, err := fetchCodexLimits(ctx, nil, live.FetchOptions())
 	if err != nil {
 		cleanup()
 		return codexLimitsPayload{}, nil, err
 	}
+	credentialsAvailable := live.Account.CredentialsAvailable
+	accountAlias := ""
+	if !opts.redact {
+		accountAlias = live.Account.Alias
+	}
 	return codexLimitsPayload{
-		SchemaVersion: model.SchemaVersion,
-		ProviderID:    result.ProviderID,
-		Source:        "chatgpt-codex-backend",
-		Mode:          "live",
-		Lines:         filterCodexLimitLines(result.Lines),
-		ResetCredits:  result.ResetCredits,
-		Provenance:    result.Provenance,
-		AuthState:     result.AuthState,
+		SchemaVersion:        model.SchemaVersion,
+		ProviderID:           result.ProviderID,
+		Source:               "chatgpt-codex-backend",
+		Mode:                 "live",
+		Lines:                filterCodexLimitLines(result.Lines),
+		ResetCredits:         result.ResetCredits,
+		Provenance:           result.Provenance,
+		AuthState:            result.AuthState,
+		AccountID:            live.Account.ID,
+		AccountAlias:         accountAlias,
+		CredentialsAvailable: &credentialsAvailable,
 	}, cleanup, nil
 }
 
+var (
+	fetchCodexLimits   = remotecodex.FetchLimitsWithOptions
+	fetchCodexActivity = remotecodex.FetchProfileWithOptions
+	planCodexReset     = remotecodex.PlanRateLimitReset
+	consumeCodexReset  = remotecodex.ConsumeRateLimitResetCredit
+)
+
 type codexLimitsPayload struct {
-	SchemaVersion    string                   `json:"schemaVersion"`
-	ProviderID       string                   `json:"providerId"`
-	Source           string                   `json:"source"`
-	Mode             string                   `json:"mode"`
-	GeneratedAt      string                   `json:"generatedAt,omitempty"`
-	Lines            []model.MetricLine       `json:"lines"`
-	ResetCredits     []remote.ResetCredit     `json:"resetCredits,omitempty"`
-	Provenance       []model.SourceProvenance `json:"provenance,omitempty"`
-	AuthState        any                      `json:"authState,omitempty"`
-	AccountID        string                   `json:"accountId,omitempty"`
-	AccountAlias     string                   `json:"accountAlias,omitempty"`
-	ObservedAt       string                   `json:"observedAt,omitempty"`
-	ObservedAgeMs    *int64                   `json:"observedAgeMs,omitempty"`
-	ObservationStale bool                     `json:"observationStale,omitempty"`
+	SchemaVersion        string                   `json:"schemaVersion"`
+	ProviderID           string                   `json:"providerId"`
+	Source               string                   `json:"source"`
+	Mode                 string                   `json:"mode"`
+	GeneratedAt          string                   `json:"generatedAt,omitempty"`
+	Lines                []model.MetricLine       `json:"lines"`
+	ResetCredits         []remote.ResetCredit     `json:"resetCredits,omitempty"`
+	Provenance           []model.SourceProvenance `json:"provenance,omitempty"`
+	AuthState            any                      `json:"authState,omitempty"`
+	AccountID            string                   `json:"accountId,omitempty"`
+	AccountAlias         string                   `json:"accountAlias,omitempty"`
+	CredentialsAvailable *bool                    `json:"credentialsAvailable,omitempty"`
+	ObservedAt           string                   `json:"observedAt,omitempty"`
+	ObservedAgeMs        *int64                   `json:"observedAgeMs,omitempty"`
+	ObservationStale     bool                     `json:"observationStale,omitempty"`
 }
 
 func codexLimitsFromSnapshot(snapshot model.StatusSnapshot) (codexLimitsPayload, error) {
@@ -1181,14 +1298,20 @@ func codexLimitsFromSnapshot(snapshot model.StatusSnapshot) (codexLimitsPayload,
 		if provider.ProviderID != "codex" {
 			continue
 		}
+		if provider.AccountID == "" || provider.CredentialsAvailable == nil {
+			return codexLimitsPayload{}, fmt.Errorf("cached status snapshot has no codex account identity")
+		}
 		return codexLimitsPayload{
-			SchemaVersion: snapshot.SchemaVersion,
-			ProviderID:    provider.ProviderID,
-			Source:        "status-cache",
-			Mode:          "fast",
-			GeneratedAt:   snapshot.GeneratedAt,
-			Lines:         filterCodexLimitLines(provider.Lines),
-			Provenance:    provider.Provenance,
+			SchemaVersion:        snapshot.SchemaVersion,
+			ProviderID:           provider.ProviderID,
+			Source:               "status-cache",
+			Mode:                 "fast",
+			AccountID:            provider.AccountID,
+			AccountAlias:         provider.AccountAlias,
+			CredentialsAvailable: provider.CredentialsAvailable,
+			GeneratedAt:          snapshot.GeneratedAt,
+			Lines:                filterCodexLimitLines(provider.Lines),
+			Provenance:           provider.Provenance,
 		}, nil
 	}
 	return codexLimitsPayload{}, fmt.Errorf("cached status snapshot has no codex provider")
@@ -1226,6 +1349,9 @@ func resetGrantsPayload(payload codexLimitsPayload) map[string]any {
 	}
 	if payload.AccountAlias != "" {
 		result["accountAlias"] = payload.AccountAlias
+	}
+	if payload.CredentialsAvailable != nil {
+		result["credentialsAvailable"] = *payload.CredentialsAvailable
 	}
 	if payload.ObservedAt != "" {
 		result["observedAt"] = payload.ObservedAt
@@ -1265,6 +1391,20 @@ func renderResetGrantsAt(payload codexLimitsPayload, now time.Time) string {
 	var b strings.Builder
 	b.WriteString(cliHeader("Codex reset grants"))
 	b.WriteString("\n")
+	if payload.AccountID != "" {
+		name := payload.AccountAlias
+		if name == "" {
+			name = payload.AccountID
+		}
+		fmt.Fprintf(&b, "%s\n", cliMuted("account "+name+" · "+payload.AccountID))
+	}
+	if payload.CredentialsAvailable != nil {
+		state := "unavailable"
+		if *payload.CredentialsAvailable {
+			state = "available"
+		}
+		fmt.Fprintf(&b, "%s\n", cliMuted("credentials "+state))
+	}
 	fmt.Fprintf(&b, "%s %s", cliGreen(fmt.Sprint(summary["available"])), cliGreen("available"))
 	if expiresAt, ok := summary["earliestExpiresAt"]; ok {
 		fmt.Fprintf(&b, " · %s %s", cliMuted("earliest expires"), formatGrantExpiry(fmt.Sprint(expiresAt), now))

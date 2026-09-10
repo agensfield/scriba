@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	accountresolver "github.com/agensfield/scriba/internal/accounts"
 	"github.com/agensfield/scriba/internal/config"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/remote"
@@ -81,6 +82,58 @@ func TestBuildCodexAccountRoutesConfiguredSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(built.Snapshot.Providers) != 1 || built.Snapshot.Providers[0].AccountID != wantID {
+		t.Fatalf("providers=%+v", built.Snapshot.Providers)
+	}
+}
+
+func TestBuildCurrentPublishesTheAtomicallyResolvedLiveIdentity(t *testing.T) {
+	dir := t.TempDir()
+	authA := filepath.Join(dir, "a.json")
+	authB := filepath.Join(dir, "b.json")
+	for _, fixture := range []struct{ path, account string }{{authA, "private-a"}, {authB, "private-b"}} {
+		data, _ := json.Marshal(map[string]any{"tokens": map[string]string{"access_token": "token-" + fixture.account, "account_id": fixture.account}})
+		if err := os.WriteFile(fixture.path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Default()
+	cfg.Server.StatePath = filepath.Join(dir, "server.sqlite")
+	cfg.CodexAuthPaths = []string{authA, authB}
+	cfg.Providers.Claude.Enabled = false
+	cfg.Providers.Codex.Paths = []string{filepath.Join(dir, "codex-logs")}
+	st, err := store.Open(cfg.Server.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	base := time.Date(2026, 9, 10, 19, 0, 0, 0, time.UTC)
+	for _, account := range []string{"private-a", "private-b"} {
+		used := 25.0
+		if _, err := st.ApplyCodexPoll(context.Background(), store.CodexPollInput{Observation: resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: account}, ObservedAt: base, Windows: []resetwatch.Window{{Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: base.Add(5 * time.Hour)}}}, CommittedAt: base.Add(time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		base = base.Add(time.Minute)
+	}
+	oldResolve := resolveCodexLive
+	resolveCodexLive = func(_ *accountresolver.Resolver, _ context.Context, selector string) (accountresolver.LiveAccount, error) {
+		if selector != "" {
+			t.Fatalf("selector=%q, want current", selector)
+		}
+		return accountresolver.LiveAccount{Account: store.Account{ID: store.AccountID("codex", "private-b"), Ref: "private-b", ProviderID: "codex", Alias: "work", CredentialsAvailable: true}, Source: accountresolver.Source{Ref: accountresolver.SourceRef(authB), Path: authB}}, nil
+	}
+	oldFetch := fetchCodexLimits
+	fetchCodexLimits = func(_ context.Context, _ *http.Client, opts remotecodex.FetchOptions) (remote.ProbeResult, error) {
+		if opts.ExpectedAccountID != "private-b" || len(opts.AuthPaths) != 1 || opts.AuthPaths[0] != authB {
+			t.Fatalf("fetch options=%+v", opts)
+		}
+		return remote.ProbeResult{ProviderID: "codex", AuthState: remote.AuthState{OK: true}, Lines: []model.MetricLine{{Type: "progress", Label: "5h limit"}}}, nil
+	}
+	t.Cleanup(func() { resolveCodexLive = oldResolve; fetchCodexLimits = oldFetch })
+	built, err := Build(cfg, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(built.Snapshot.Providers) != 1 || built.Snapshot.Providers[0].AccountID != store.AccountID("codex", "private-b") || built.Snapshot.Providers[0].AccountAlias != "work" {
 		t.Fatalf("providers=%+v", built.Snapshot.Providers)
 	}
 }

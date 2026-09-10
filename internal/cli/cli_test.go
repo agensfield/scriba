@@ -31,9 +31,11 @@ func TestCodexLimitsFromSnapshotFiltersRemoteLimitLines(t *testing.T) {
 		GeneratedAt:   "2026-05-19T19:30:56Z",
 		Providers: []model.ProviderSnapshot{
 			{
-				ProviderID:  "codex",
-				DisplayName: "Codex",
-				State:       "ok",
+				ProviderID:           "codex",
+				DisplayName:          "Codex",
+				State:                "ok",
+				AccountID:            "acct-0123456789abcdef0123",
+				CredentialsAvailable: ptrBool(true),
 				Lines: []model.MetricLine{
 					{Type: "badge", Label: "Plan", Text: "prolite"},
 					{Type: "progress", Label: "5h limit", Used: &used, Limit: &limit},
@@ -56,6 +58,16 @@ func TestCodexLimitsFromSnapshotFiltersRemoteLimitLines(t *testing.T) {
 	}
 	if payload.Lines[0].Label != "Plan" || payload.Lines[1].Label != "5h limit" || payload.Lines[2].Label != "Reset grants" {
 		t.Fatalf("unexpected labels: %#v", payload.Lines)
+	}
+}
+
+func TestCodexLimitsFromSnapshotRejectsAnonymousCodexProvider(t *testing.T) {
+	_, err := codexLimitsFromSnapshot(model.StatusSnapshot{
+		SchemaVersion: model.SchemaVersion,
+		Providers:     []model.ProviderSnapshot{{ProviderID: "codex", DisplayName: "Codex"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "no codex account identity") {
+		t.Fatalf("error = %v, want missing identity", err)
 	}
 }
 
@@ -224,6 +236,8 @@ func TestResetGrantsPayloadCarriesAccountObservationMetadata(t *testing.T) {
 func stripANSI(text string) string {
 	return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(text, "")
 }
+
+func ptrBool(value bool) *bool { return &value }
 
 func TestCodexGroupHelpListsResetGrants(t *testing.T) {
 	text := groupHelp("codex")

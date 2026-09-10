@@ -3,14 +3,19 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/agensfield/scriba/internal/model"
+	"github.com/agensfield/scriba/internal/remote"
+	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server/store"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestAccountListItemsKeepCredentialAndObservationFactsDistinct(t *testing.T) {
@@ -139,7 +144,7 @@ func TestLiveOptionsCleanInstallPinColdAccountWithoutState(t *testing.T) {
 	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"token-clean-live","account_id":"private-clean-live"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+authPath+`"]}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+authPath+`"],"server":{"statePath":"`+statePath+`"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	fetchOpts, cleanup, err := resolveLiveCodexOptions(context.Background(), options{config: configPath, statePath: statePath})
@@ -152,6 +157,30 @@ func TestLiveOptionsCleanInstallPinColdAccountWithoutState(t *testing.T) {
 	}
 	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
 		t.Fatalf("clean-install live selection created state: %v", err)
+	}
+}
+
+func TestCleanInstallFastCommandsReturnBoundedNoObservation(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	configPath := filepath.Join(dir, "config.json")
+	statePath := filepath.Join(dir, "missing.sqlite")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"token-clean-fast","account_id":"private-clean-fast"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+authPath+`"],"server":{"statePath":"`+statePath+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"--json", "--config", configPath}
+	for _, command := range []string{"codex limits --fast", "codex reset-grants --fast", "status --fast"} {
+		args := append([]string{}, strings.Split(command, " ")...)
+		args = append(args, base...)
+		if err := dispatch(args); err == nil || !strings.Contains(err.Error(), "no stored Codex limits") {
+			t.Fatalf("dispatch(%q) error=%v", args, err)
+		}
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("clean-install fast command created state: %v", err)
 	}
 }
 
@@ -191,4 +220,231 @@ func TestDispatchAccountsAliasAcceptsFlagsAfterSelector(t *testing.T) {
 	}
 }
 
+func TestFastResetGrantsCommandMatchesSchemaAndReportsCredentials(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "server.sqlite")
+	authPath := filepath.Join(dir, "missing-auth.json")
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+authPath+`"],"server":{"statePath":"`+statePath+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := 84.0
+	at := time.Now().UTC().Add(-time.Hour)
+	_, err = st.ApplyCodexPoll(context.Background(), store.CodexPollInput{Observation: resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "private-grants"}, ObservedAt: at, ResetGrants: resetwatch.ResetGrants{AvailableCount: ptrInt(1)}, Windows: []resetwatch.Window{{Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: at.Add(5 * time.Hour)}}}, CommittedAt: at.Add(time.Second)})
+	if err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	selector := store.AccountID("codex", "private-grants")
+	var dispatchErr error
+	stdout := captureCLIStdout(t, func() {
+		dispatchErr = dispatch([]string{"codex", "reset-grants", "--fast", "--json", "--config", configPath, "--account", selector})
+	})
+	if dispatchErr != nil {
+		t.Fatal(dispatchErr)
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("decode grants output=%q: %v", stdout, err)
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "schemas", "codex-reset-grants.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://agensfield.dev/scriba/schemas/codex-reset-grants.schema.json"
+	limitsURL := "https://agensfield.dev/scriba/schemas/codex-limits.schema.json"
+	limitsData, err := os.ReadFile(filepath.Join("..", "..", "schemas", "codex-limits.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var limitsDocument any
+	if err := json.Unmarshal(limitsData, &limitsDocument); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiler.AddResource(limitsURL, limitsDocument); err != nil {
+		t.Fatal(err)
+	}
+	statusURL := "https://agensfield.dev/scriba/schemas/status.schema.json"
+	statusData, err := os.ReadFile(filepath.Join("..", "..", "schemas", "status.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statusDocument any
+	if err := json.Unmarshal(statusData, &statusDocument); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiler.AddResource(statusURL, statusDocument); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiler.AddResource(schemaURL, document); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(schemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(payload); err != nil {
+		t.Fatalf("fast grants schema: %v\n%s", err, stdout)
+	}
+	object := payload.(map[string]any)
+	if object["accountId"] != selector || object["credentialsAvailable"] != false {
+		t.Fatalf("account state missing: %#v", object)
+	}
+	if auth, ok := object["authState"].(map[string]any); !ok || auth["ok"] != false {
+		t.Fatalf("auth state=%#v", object["authState"])
+	}
+}
+
+func TestInactiveAccountLimitsFallBackToStoredObservation(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "server.sqlite")
+	authPath := filepath.Join(dir, "missing-auth.json")
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+authPath+`"],"server":{"statePath":"`+statePath+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC().Add(-time.Hour)
+	used := 72.0
+	_, err = st.ApplyCodexPoll(context.Background(), store.CodexPollInput{Observation: resetwatch.Observation{
+		ProviderID: "codex",
+		Account:    resetwatch.Account{Ref: "private-inactive"},
+		ObservedAt: at,
+		Windows:    []resetwatch.Window{{Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: at.Add(5 * time.Hour)}},
+	}, CommittedAt: at.Add(time.Second)})
+	if err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	selector := store.AccountID("codex", "private-inactive")
+	var dispatchErr error
+	stdout := captureCLIStdout(t, func() {
+		dispatchErr = dispatch([]string{"codex", "limits", "--json", "--config", configPath, "--account", selector})
+	})
+	if dispatchErr != nil {
+		t.Fatal(dispatchErr)
+	}
+	var payload codexLimitsPayload
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("decode limits output=%q: %v", stdout, err)
+	}
+	if payload.Mode != "fast" || payload.AccountID != selector || payload.CredentialsAvailable == nil || *payload.CredentialsAvailable {
+		t.Fatalf("stored fallback payload=%+v", payload)
+	}
+	if payload.ObservedAt == "" || payload.ObservedAgeMs == nil || !payload.ObservationStale {
+		t.Fatalf("stored fallback freshness=%+v", payload)
+	}
+}
+
+func TestLiveLimitsPayloadCarriesResolvedIdentity(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	configPath := filepath.Join(dir, "config.json")
+	statePath := filepath.Join(dir, "missing.sqlite")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"token-live-limits","account_id":"private-live-limits"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+authPath+`"],"server":{"statePath":"`+statePath+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldFetch := fetchCodexLimits
+	fetchCodexLimits = func(_ context.Context, _ *http.Client, opts remotecodex.FetchOptions) (remote.ProbeResult, error) {
+		if opts.ExpectedAccountID != "private-live-limits" || len(opts.AuthPaths) != 1 || opts.AuthPaths[0] != authPath {
+			t.Fatalf("fetch options=%+v", opts)
+		}
+		return remote.ProbeResult{ProviderID: "codex", AuthState: remote.AuthState{OK: true}, Lines: []model.MetricLine{{Type: "progress", Label: "5h limit"}}}, nil
+	}
+	t.Cleanup(func() { fetchCodexLimits = oldFetch })
+	payload, cleanup, err := liveCodexLimitsPayloadFor(context.Background(), options{config: configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	if payload.AccountID != store.AccountID("codex", "private-live-limits") || payload.CredentialsAvailable == nil || !*payload.CredentialsAvailable {
+		t.Fatalf("live payload=%+v", payload)
+	}
+}
+
+func TestLiveActivityCommandCarriesResolvedIdentity(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	configPath := filepath.Join(dir, "config.json")
+	statePath := filepath.Join(dir, "missing.sqlite")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"token-live-activity","account_id":"private-live-activity"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+authPath+`"],"server":{"statePath":"`+statePath+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldFetch := fetchCodexActivity
+	fetchCodexActivity = func(_ context.Context, _ *http.Client, opts remotecodex.FetchOptions) (remotecodex.ProfileResult, error) {
+		if opts.ExpectedAccountID != "private-live-activity" {
+			t.Fatalf("fetch options=%+v", opts)
+		}
+		return remotecodex.ProfileResult{ProviderID: "codex", Source: "chatgpt-codex-profile-backend", Profile: remotecodex.Profile{Username: "activity"}, AuthState: remote.AuthState{OK: true}}, nil
+	}
+	t.Cleanup(func() { fetchCodexActivity = oldFetch })
+	var runErr error
+	stdout := captureCLIStdout(t, func() { runErr = runCodexActivity(options{jsonOut: true, config: configPath}) })
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("decode activity output=%q: %v", stdout, err)
+	}
+	if payload["accountId"] != store.AccountID("codex", "private-live-activity") || payload["credentialsAvailable"] != true {
+		t.Fatalf("activity payload=%+v", payload)
+	}
+}
+
+func TestLiveResetCommandCarriesResolvedIdentity(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	configPath := filepath.Join(dir, "config.json")
+	statePath := filepath.Join(dir, "missing.sqlite")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"token-live-reset","account_id":"private-live-reset"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+authPath+`"],"server":{"statePath":"`+statePath+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldPlan := planCodexReset
+	planCodexReset = func(_ context.Context, _ *http.Client, opts remotecodex.FetchOptions, _ string) (remotecodex.RateLimitResetPlan, error) {
+		if opts.ExpectedAccountID != "private-live-reset" {
+			t.Fatalf("fetch options=%+v", opts)
+		}
+		return remotecodex.RateLimitResetPlan{ProviderID: "codex", Source: "chatgpt-codex-backend", Mode: "live", AvailableCount: 1, Credit: remote.ResetCredit{ID: "credit-1", Title: "reset"}, AuthState: remote.AuthState{OK: true}}, nil
+	}
+	t.Cleanup(func() { planCodexReset = oldPlan })
+	var runErr error
+	stdout := captureCLIStdout(t, func() { runErr = runCodexReset(options{jsonOut: true, dryRun: true, config: configPath}) })
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	var payload codexResetPayload
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("decode reset output=%q: %v", stdout, err)
+	}
+	if payload.AccountID != store.AccountID("codex", "private-live-reset") || !payload.CredentialsAvailable {
+		t.Fatalf("reset payload=%+v", payload)
+	}
+}
+
 func ptrInt64(value int64) *int64 { return &value }
+
+func ptrInt(value int) *int { return &value }

@@ -32,17 +32,18 @@ type MetricLine struct {
 }
 
 type ProviderSnapshot struct {
-	ProviderID       string             `json:"providerId"`
-	DisplayName      string             `json:"displayName"`
-	State            string             `json:"state"`
-	Plan             string             `json:"plan,omitempty"`
-	AccountID        string             `json:"accountId,omitempty"`
-	AccountAlias     string             `json:"accountAlias,omitempty"`
-	ObservedAt       string             `json:"observedAt,omitempty"`
-	ObservedAgeMs    *int64             `json:"observedAgeMs,omitempty"`
-	ObservationStale bool               `json:"observationStale,omitempty"`
-	Lines            []MetricLine       `json:"lines"`
-	Provenance       []SourceProvenance `json:"provenance"`
+	ProviderID           string             `json:"providerId"`
+	DisplayName          string             `json:"displayName"`
+	State                string             `json:"state"`
+	Plan                 string             `json:"plan,omitempty"`
+	AccountID            string             `json:"accountId,omitempty"`
+	AccountAlias         string             `json:"accountAlias,omitempty"`
+	CredentialsAvailable *bool              `json:"credentialsAvailable,omitempty"`
+	ObservedAt           string             `json:"observedAt,omitempty"`
+	ObservedAgeMs        *int64             `json:"observedAgeMs,omitempty"`
+	ObservationStale     bool               `json:"observationStale,omitempty"`
+	Lines                []MetricLine       `json:"lines"`
+	Provenance           []SourceProvenance `json:"provenance"`
 }
 
 type StatusSnapshot struct {

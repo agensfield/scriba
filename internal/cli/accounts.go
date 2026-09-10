@@ -272,18 +272,26 @@ func formatAccountAge(ageMs *int64) string {
 }
 
 func resolveLiveCodexOptions(ctx context.Context, opts options) (remotecodex.FetchOptions, func(), error) {
-	resolver, st, _, err := openAccountRegistry(opts)
+	live, cleanup, err := resolveLiveCodex(ctx, opts)
 	if err != nil {
 		return remotecodex.FetchOptions{}, nil, err
+	}
+	return live.FetchOptions(), cleanup, nil
+}
+
+func resolveLiveCodex(ctx context.Context, opts options) (accountresolver.LiveAccount, func(), error) {
+	resolver, st, _, err := openAccountRegistry(opts)
+	if err != nil {
+		return accountresolver.LiveAccount{}, nil, err
 	}
 	live, err := resolver.ResolveLive(ctx, opts.account)
 	if err != nil {
 		if st != nil {
 			_ = st.Close()
 		}
-		return remotecodex.FetchOptions{}, nil, err
+		return accountresolver.LiveAccount{}, nil, err
 	}
-	return live.FetchOptions(), func() {
+	return live, func() {
 		if st != nil {
 			_ = st.Close()
 		}
@@ -302,6 +310,9 @@ func fastCodexLimitsPayload(ctx context.Context, opts options) (codexLimitsPaylo
 	if err != nil {
 		return codexLimitsPayload{}, err
 	}
+	if st == nil {
+		return codexLimitsPayload{}, fmt.Errorf("no stored Codex limits for account %s", account.DisplayName())
+	}
 	observation, ok, err := st.LoadLatestObservationForAccount(ctx, account.ID)
 	if err != nil {
 		return codexLimitsPayload{}, err
@@ -319,6 +330,7 @@ func fastCodexLimitsPayload(ctx context.Context, opts options) (codexLimitsPaylo
 	if !opts.redact {
 		accountAlias = account.Alias
 	}
+	credentialsAvailable := account.CredentialsAvailable
 	return codexLimitsPayload{
 		SchemaVersion: model.SchemaVersion,
 		ProviderID:    "codex",
@@ -327,6 +339,7 @@ func fastCodexLimitsPayload(ctx context.Context, opts options) (codexLimitsPaylo
 		GeneratedAt:   observation.ObservedAt.UTC().Format(time.RFC3339Nano),
 		Lines:         metricLinesFromObservation(observation),
 		ResetCredits:  resetCreditsFromObservation(observation.ResetGrants.Credits),
+		AuthState:     remote.AuthState{OK: account.CredentialsAvailable},
 		Provenance: []model.SourceProvenance{{
 			Kind:       "resident-store",
 			ProviderID: "codex",
@@ -334,11 +347,12 @@ func fastCodexLimitsPayload(ctx context.Context, opts options) (codexLimitsPaylo
 			CacheAgeMs: &ageMs,
 			Stale:      age > accountStaleAfter,
 		}},
-		AccountID:        account.ID,
-		AccountAlias:     accountAlias,
-		ObservedAt:       observation.ObservedAt.UTC().Format(time.RFC3339Nano),
-		ObservedAgeMs:    &ageMs,
-		ObservationStale: age > accountStaleAfter,
+		AccountID:            account.ID,
+		AccountAlias:         accountAlias,
+		CredentialsAvailable: &credentialsAvailable,
+		ObservedAt:           observation.ObservedAt.UTC().Format(time.RFC3339Nano),
+		ObservedAgeMs:        &ageMs,
+		ObservationStale:     age > accountStaleAfter,
 	}, nil
 }
 
@@ -362,16 +376,17 @@ func fastAccountStatusSnapshot(cfg config.Config, opts options) (model.StatusSna
 		return model.StatusSnapshot{}, openErr
 	}
 	provider := model.ProviderSnapshot{
-		ProviderID:       "codex",
-		DisplayName:      "Codex",
-		State:            "ok",
-		AccountID:        payload.AccountID,
-		AccountAlias:     payload.AccountAlias,
-		ObservedAt:       payload.ObservedAt,
-		ObservedAgeMs:    payload.ObservedAgeMs,
-		ObservationStale: payload.ObservationStale,
-		Lines:            payload.Lines,
-		Provenance:       payload.Provenance,
+		ProviderID:           "codex",
+		DisplayName:          "Codex",
+		State:                "ok",
+		AccountID:            payload.AccountID,
+		AccountAlias:         payload.AccountAlias,
+		CredentialsAvailable: payload.CredentialsAvailable,
+		ObservedAt:           payload.ObservedAt,
+		ObservedAgeMs:        payload.ObservedAgeMs,
+		ObservationStale:     payload.ObservationStale,
+		Lines:                payload.Lines,
+		Provenance:           payload.Provenance,
 	}
 	found := false
 	for i := range snapshot.Providers {
@@ -385,6 +400,13 @@ func fastAccountStatusSnapshot(cfg config.Config, opts options) (model.StatusSna
 		snapshot.Providers = append(snapshot.Providers, provider)
 	}
 	return snapshot, nil
+}
+
+func redactStatusAccountMetadata(snapshot model.StatusSnapshot) model.StatusSnapshot {
+	for i := range snapshot.Providers {
+		snapshot.Providers[i].AccountAlias = ""
+	}
+	return snapshot
 }
 
 func metricLinesFromObservation(observation resetwatch.Observation) []model.MetricLine {

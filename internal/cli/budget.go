@@ -15,7 +15,6 @@ import (
 	"github.com/agensfield/scriba/internal/privacy"
 	"github.com/agensfield/scriba/internal/remote"
 	remoteclaude "github.com/agensfield/scriba/internal/remote/claude"
-	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
@@ -31,10 +30,10 @@ func runBudget(providerID string, opts options) (err error) {
 	}
 	var result remote.ProbeResult
 	var closeStore func()
+	var live accountresolver.LiveAccount
 	switch providerID {
 	case "codex":
-		var fetchOpts remotecodex.FetchOptions
-		fetchOpts, closeStore, err = resolveLiveCodexOptions(context.Background(), opts)
+		live, closeStore, err = resolveLiveCodex(context.Background(), opts)
 		if err != nil {
 			if opts.account != "" && errors.Is(err, accountresolver.ErrCredentialsUnavailable) {
 				return runStoredCodexBudget(cfg, opts)
@@ -42,7 +41,7 @@ func runBudget(providerID string, opts options) (err error) {
 			return err
 		}
 		defer closeStore()
-		result, err = remotecodex.FetchLimitsWithOptions(context.Background(), nil, fetchOpts)
+		result, err = fetchCodexLimits(context.Background(), nil, live.FetchOptions())
 	case "claude":
 		result, err = remoteclaude.Probe(true)
 	default:
@@ -65,6 +64,17 @@ func runBudget(providerID string, opts options) (err error) {
 		return err
 	}
 	report := budget.Evaluate(budget.Input{ProviderID: providerID, Observation: observation, History: history, HistoryState: historyState}, now)
+	if providerID == "codex" {
+		report.AccountID = live.Account.ID
+		if !opts.redact {
+			report.AccountAlias = live.Account.Alias
+		}
+		available := live.Account.CredentialsAvailable
+		report.CredentialsAvailable = &available
+		age := int64(0)
+		report.ObservedAgeMs = &age
+		report.ObservationSource = "provider-api"
+	}
 	return output(opts, report, renderBudget(report))
 }
 
