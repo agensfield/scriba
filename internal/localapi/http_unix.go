@@ -180,7 +180,7 @@ func requestedAccount(r *http.Request, allowCursor bool) (string, string) {
 		return "", "invalid_account"
 	}
 	for key := range query {
-		if key != "account" && !(allowCursor && key == "cursor") {
+		if key != "account" && (!allowCursor || key != "cursor") {
 			return "", "invalid_account"
 		}
 	}

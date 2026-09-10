@@ -63,7 +63,7 @@ func validSourceRef(v string) bool {
 		return false
 	}
 	for _, c := range []byte(v[4:]) {
-		if !((c >= 'a' && c <= 'f') || (c >= '0' && c <= '9')) {
+		if (c < 'a' || c > 'f') && (c < '0' || c > '9') {
 			return false
 		}
 	}
