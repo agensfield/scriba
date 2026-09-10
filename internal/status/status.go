@@ -1,9 +1,14 @@
 package status
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
+	accountresolver "github.com/agensfield/scriba/internal/accounts"
 	"github.com/agensfield/scriba/internal/cache"
 	"github.com/agensfield/scriba/internal/cached"
 	"github.com/agensfield/scriba/internal/config"
@@ -14,6 +19,8 @@ import (
 	remoteclaude "github.com/agensfield/scriba/internal/remote/claude"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/reports"
+	"github.com/agensfield/scriba/internal/resetwatch"
+	"github.com/agensfield/scriba/internal/server/store"
 )
 
 type Built struct {
@@ -21,7 +28,9 @@ type Built struct {
 	ScanStats map[string]model.ScannerStats
 }
 
-func Build(cfg config.Config, c *cache.Cache, includeRemote bool) (Built, error) {
+var fetchCodexLimits = remotecodex.FetchLimitsWithOptions
+
+func Build(cfg config.Config, c *cache.Cache, includeRemote bool, accountSelector ...string) (Built, error) {
 	generatedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	location, err := reports.Location(cfg.Timezone)
 	if err != nil {
@@ -62,8 +71,17 @@ func Build(cfg config.Config, c *cache.Cache, includeRemote bool) (Built, error)
 		}
 		scanStats["codex"] = stats
 		provider := providerFromDaily("codex", "Codex", reports.DailyIn(events, true, location), stats, generatedAt, location)
-		if includeRemote {
-			appendRemote(&provider, remotecodex.Probe)
+		selector := ""
+		if len(accountSelector) > 0 {
+			selector = accountSelector[0]
+		}
+		if includeRemote || selector != "" {
+			if err := appendCodexAccount(&provider, cfg, selector, includeRemote); err != nil {
+				if selector != "" {
+					return Built{}, err
+				}
+				appendProviderError(&provider, err)
+			}
 		}
 		providers = append(providers, provider)
 	}
@@ -71,6 +89,111 @@ func Build(cfg config.Config, c *cache.Cache, includeRemote bool) (Built, error)
 		Snapshot:  model.StatusSnapshot{SchemaVersion: model.SchemaVersion, GeneratedAt: generatedAt, Timezone: location.String(), Providers: providers},
 		ScanStats: scanStats,
 	}, nil
+}
+
+func appendCodexAccount(provider *model.ProviderSnapshot, cfg config.Config, selector string, includeRemote bool) error {
+	ctx := context.Background()
+	path := accountStatePath(cfg.Server.StatePath)
+	st, err := store.OpenReadOnly(path)
+	if errors.Is(err, os.ErrNotExist) {
+		st = nil
+	} else if err != nil {
+		return err
+	}
+	if st != nil {
+		defer func() { _ = st.Close() }()
+	}
+	resolver := accountresolver.New(st, accountresolver.Sources(cfg))
+	account, err := resolver.Resolve(ctx, selector)
+	if err != nil {
+		return err
+	}
+	if !includeRemote {
+		return appendStoredCodexAccount(provider, st, account)
+	}
+	live, err := resolver.ResolveLive(ctx, selector)
+	if errors.Is(err, accountresolver.ErrCredentialsUnavailable) {
+		if storedErr := appendStoredCodexAccount(provider, st, account); storedErr == nil {
+			return nil
+		}
+	}
+	if err != nil {
+		return err
+	}
+	result, err := fetchCodexLimits(ctx, nil, live.FetchOptions())
+	if err != nil {
+		return err
+	}
+	provider.AccountID = account.ID
+	provider.AccountAlias = account.Alias
+	provider.Lines = append(result.Lines, provider.Lines...)
+	provider.Provenance = append(provider.Provenance, result.Provenance...)
+	if !result.AuthState.OK {
+		provider.State = "degraded"
+	}
+	return nil
+}
+
+func accountStatePath(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+		return filepath.Join(xdg, "scriba", "server.sqlite")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "scriba", "server.sqlite")
+}
+
+func appendStoredCodexAccount(provider *model.ProviderSnapshot, st *store.Store, account store.Account) error {
+	if st == nil {
+		return fmt.Errorf("no stored Codex limits for account %s", account.DisplayName())
+	}
+	observation, ok, err := st.LoadLatestObservationForAccount(context.Background(), account.ID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("no stored Codex limits for account %s", account.DisplayName())
+	}
+	now := time.Now().UTC()
+	age := now.Sub(observation.ObservedAt.UTC())
+	if age < 0 {
+		age = 0
+	}
+	ageMs := age.Milliseconds()
+	stale := age > 15*time.Minute
+	provider.AccountID = account.ID
+	provider.AccountAlias = account.Alias
+	provider.ObservedAt = observation.ObservedAt.UTC().Format(time.RFC3339Nano)
+	provider.ObservedAgeMs = &ageMs
+	provider.ObservationStale = stale
+	provider.Lines = append(metricLinesFromObservation(observation), provider.Lines...)
+	provider.Provenance = append(provider.Provenance, model.SourceProvenance{Kind: "resident-store", ProviderID: "codex", FetchedAt: provider.ObservedAt, CacheAgeMs: &ageMs, Stale: stale})
+	if stale {
+		provider.State = "degraded"
+	}
+	return nil
+}
+
+func metricLinesFromObservation(observation resetwatch.Observation) []model.MetricLine {
+	lines := make([]model.MetricLine, 0, len(observation.Windows)+2)
+	limit := 100.0
+	for _, window := range observation.Windows {
+		line := model.MetricLine{Type: "progress", Label: window.Label, Limit: &limit, ResetsAt: window.ResetAt.UTC().Format(time.RFC3339Nano), PeriodDurationMs: window.PeriodDurationMs}
+		if window.UsedPercent != nil {
+			used := *window.UsedPercent
+			line.Used = &used
+		}
+		lines = append(lines, line)
+	}
+	if observation.ResetGrants.AvailableCount != nil {
+		lines = append(lines, model.MetricLine{Type: "amount", Label: resetwatch.LabelResetGrants, Value: *observation.ResetGrants.AvailableCount, Format: &model.MetricFormat{Kind: "count", Suffix: "available"}})
+	}
+	if !observation.ResetGrants.ExpiresAt.IsZero() {
+		lines = append(lines, model.MetricLine{Type: "text", Label: resetwatch.LabelGrantExpiry, Value: observation.ResetGrants.ExpiresAt.UTC().Format(time.RFC3339Nano)})
+	}
+	return lines
 }
 
 func Save(c *cache.Cache, built Built) error {
@@ -144,15 +267,7 @@ func formatUsage(usage model.TokenUsage) string {
 func appendRemote(provider *model.ProviderSnapshot, probe func(bool) (remote.ProbeResult, error)) {
 	result, err := probe(true)
 	if err != nil {
-		provider.Provenance = append(provider.Provenance, model.SourceProvenance{
-			Kind:       "provider-api",
-			ProviderID: provider.ProviderID,
-			FetchedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-			Error:      err.Error(),
-		})
-		if provider.State != "broken" {
-			provider.State = "degraded"
-		}
+		appendProviderError(provider, err)
 		return
 	}
 	provider.Lines = append(result.Lines, provider.Lines...)
@@ -161,6 +276,18 @@ func appendRemote(provider *model.ProviderSnapshot, probe func(bool) (remote.Pro
 		if provenance.Error != "" && provider.State != "broken" {
 			provider.State = "degraded"
 		}
+	}
+}
+
+func appendProviderError(provider *model.ProviderSnapshot, err error) {
+	provider.Provenance = append(provider.Provenance, model.SourceProvenance{
+		Kind:       "provider-api",
+		ProviderID: provider.ProviderID,
+		FetchedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Error:      err.Error(),
+	})
+	if provider.State != "broken" {
+		provider.State = "degraded"
 	}
 }
 

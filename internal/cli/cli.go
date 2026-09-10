@@ -551,7 +551,7 @@ func runStatus(opts options) error {
 			}
 			return output(opts, *snapshot, render.Status(*snapshot))
 		}
-		built, err := status.Build(cfg, c, !opts.noRemote)
+		built, err := status.Build(cfg, c, !opts.noRemote, opts.account)
 		if err != nil {
 			if snapshot, loadErr := c.LoadStatusSnapshot(); loadErr == nil && snapshot != nil {
 				stale := status.MarkStale(*snapshot, err)
@@ -559,12 +559,14 @@ func runStatus(opts options) error {
 			}
 			return err
 		}
-		if err := status.Save(c, built); err != nil {
-			return err
+		if opts.account == "" {
+			if err := status.Save(c, built); err != nil {
+				return err
+			}
 		}
 		return output(opts, built.Snapshot, render.Status(built.Snapshot))
 	}
-	built, err := status.Build(cfg, nil, !opts.noRemote)
+	built, err := status.Build(cfg, nil, !opts.noRemote, opts.account)
 	if err != nil {
 		return err
 	}
@@ -685,14 +687,30 @@ func runCodexLimits(opts options) error {
 }
 
 func runCodexActivity(opts options) error {
-	srv, st, _, err := openAccountServer(opts, false)
+	resolver, st, _, err := openAccountRegistry(opts)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
-	profile, err := srv.CodexActivityForAccount(context.Background(), opts.account)
+	if st != nil {
+		defer func() { _ = st.Close() }()
+	}
+	live, err := resolver.ResolveLive(context.Background(), opts.account)
 	if err != nil {
 		return err
+	}
+	profile, err := remotecodex.FetchProfileWithOptions(context.Background(), nil, live.FetchOptions())
+	if err != nil {
+		return err
+	}
+	profile.AuthState.Source = ""
+	profile.AuthState.Error = ""
+	profile.AuthState.AccessToken = ""
+	profile.AuthState.AccountID = ""
+	if profile.Metadata.StatsError != nil {
+		profile.Metadata.StatsError = "profile stats unavailable"
+	}
+	for i := range profile.Provenance {
+		profile.Provenance[i].Error = ""
 	}
 	profile.SchemaVersion = model.SchemaVersion
 	return output(opts, profile, renderCodexActivity(profile))
@@ -746,19 +764,34 @@ func runCodexReset(opts options) error {
 		cleanup func()
 	)
 	if opts.credit == "" {
-		srv, st, _, err := openAccountServer(opts, false)
-		if err != nil {
-			return err
-		}
-		cleanup = func() { _ = st.Close() }
-		defer cleanup()
-		planned, err := srv.PlanCodexReset(ctx, opts.account)
-		if err != nil {
-			return err
-		}
-		plan = planned.Plan
-		consume = func(requestID string) (remotecodex.RateLimitResetResult, error) {
-			return srv.ConsumeCodexReset(ctx, planned.Account.ID, plan.AccountPin, plan.Credit, requestID)
+		srv, st, _, openErr := openAccountServer(opts, false)
+		if openErr == nil {
+			cleanup = func() { _ = st.Close() }
+			defer cleanup()
+			planned, err := srv.PlanCodexReset(ctx, opts.account)
+			if err != nil {
+				return err
+			}
+			plan = planned.Plan
+			consume = func(requestID string) (remotecodex.RateLimitResetResult, error) {
+				return srv.ConsumeCodexReset(ctx, planned.Account.ID, plan.AccountPin, plan.Credit, requestID)
+			}
+		} else if !errors.Is(openErr, os.ErrNotExist) {
+			return openErr
+		} else {
+			fetchOpts, closeStore, err := resolveLiveCodexOptions(ctx, opts)
+			if err != nil {
+				return err
+			}
+			cleanup = closeStore
+			defer cleanup()
+			plan, err = remotecodex.PlanRateLimitReset(ctx, nil, fetchOpts, "")
+			if err != nil {
+				return err
+			}
+			consume = func(requestID string) (remotecodex.RateLimitResetResult, error) {
+				return remotecodex.ConsumeRateLimitResetCredit(ctx, nil, fetchOpts, plan.AccountPin, plan.Credit, requestID)
+			}
 		}
 	} else {
 		fetchOpts, closeStore, err := resolveLiveCodexOptions(ctx, opts)

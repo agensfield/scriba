@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +65,67 @@ func TestRenderAccountsShowsAvailabilityAndFreshness(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("render missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestDispatchAccountsSupportsShorthandAndListFlags(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "missing.sqlite")
+	configPath := filepath.Join(dir, "config.json")
+	configJSON := []byte(`{"schemaVersion":3,"codexAuthPaths":["` + filepath.Join(dir, "missing-auth.json") + `"]}`)
+	if err := os.WriteFile(configPath, configJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"--json", "--config", configPath, "--state-path", statePath},
+		{"list", "--json", "--config", configPath, "--state-path", statePath},
+	} {
+		var dispatchErr error
+		stdout := captureCLIStdout(t, func() { dispatchErr = dispatchAccounts(args) })
+		if dispatchErr != nil {
+			t.Fatalf("dispatchAccounts(%q): %v", args, dispatchErr)
+		}
+		var payload accountsPayload
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("dispatchAccounts(%q) output=%q: %v", args, stdout, err)
+		}
+		if payload.SchemaVersion != accountsSchemaVersion || payload.Accounts == nil {
+			t.Fatalf("dispatchAccounts(%q) payload=%+v", args, payload)
+		}
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("read-only account listing created state: %v", err)
+	}
+}
+
+func TestAccountsCleanInstallDiscoversAuthWithoutCreatingState(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "missing.sqlite")
+	authPath := filepath.Join(dir, "auth.json")
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"token-clean-install","account_id":"private-clean-install"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configJSON := []byte(`{"schemaVersion":3,"codexAuthPaths":["` + authPath + `"]}`)
+	if err := os.WriteFile(configPath, configJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var dispatchErr error
+	stdout := captureCLIStdout(t, func() {
+		dispatchErr = dispatchAccounts([]string{"--json", "--config", configPath, "--state-path", statePath})
+	})
+	if dispatchErr != nil {
+		t.Fatalf("clean-install accounts: %v", dispatchErr)
+	}
+	var payload accountsPayload
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("decode accounts output=%q: %v", stdout, err)
+	}
+	if len(payload.Accounts) != 1 || payload.Accounts[0].AccountID != store.AccountID("codex", "private-clean-install") || !payload.Accounts[0].CredentialsAvailable || payload.Accounts[0].LastObservedAt != "" {
+		t.Fatalf("clean-install payload=%+v", payload)
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("clean-install listing created state: %v", err)
 	}
 }
 

@@ -96,6 +96,20 @@ func runStoredCodexBudget(cfg config.Config, opts options) error {
 		return err
 	}
 	report := budget.Evaluate(budget.Input{ProviderID: "codex", Observation: current, History: history, HistoryState: historyState}, now)
+	report.AccountID = account.ID
+	if !opts.redact {
+		report.AccountAlias = account.Alias
+	}
+	available := account.CredentialsAvailable
+	report.CredentialsAvailable = &available
+	age := now.Sub(observation.ObservedAt.UTC())
+	if age < 0 {
+		age = 0
+	}
+	ageMs := age.Milliseconds()
+	report.ObservedAgeMs = &ageMs
+	report.ObservationStale = age > accountStaleAfter
+	report.ObservationSource = "resident-store"
 	return output(opts, report, renderBudget(report))
 }
 
@@ -133,6 +147,33 @@ func budgetHistory(ctx context.Context, providerID string, auth remote.AuthState
 func renderBudget(report budget.Report) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", cliHeader(title(report.ProviderID)+" budget"))
+	if report.AccountID != "" {
+		name := report.AccountAlias
+		if name == "" {
+			name = report.AccountID
+		}
+		fmt.Fprintf(&b, "%s\n", cliMuted("account "+name+" · "+report.AccountID))
+	}
+	if report.ObservationSource != "" {
+		freshness := report.ObservationSource
+		if !report.ObservedAt.IsZero() {
+			freshness += " · observed " + report.ObservedAt.UTC().Format(time.RFC3339)
+		}
+		if report.ObservedAgeMs != nil {
+			freshness += " · age " + (time.Duration(*report.ObservedAgeMs) * time.Millisecond).Round(time.Second).String()
+		}
+		if report.ObservationStale {
+			freshness += " · stale"
+		}
+		fmt.Fprintf(&b, "%s\n", cliMuted(freshness))
+	}
+	if report.CredentialsAvailable != nil {
+		state := "unavailable"
+		if *report.CredentialsAvailable {
+			state = "available"
+		}
+		fmt.Fprintf(&b, "%s\n", cliMuted("credentials "+state))
+	}
 	b.WriteString(cliMuted(budgetHistorySummary(report.History)))
 	if len(report.Windows) == 0 {
 		b.WriteString("\n" + cliYellow("No quota windows were returned."))

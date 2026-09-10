@@ -43,7 +43,7 @@ type accountListItem struct {
 
 func dispatchAccounts(args []string) error {
 	command := "list"
-	if len(args) > 0 && !isHelpArg(args[0]) {
+	if len(args) > 0 && !isHelpArg(args[0]) && !strings.HasPrefix(args[0], "-") {
 		command = args[0]
 		args = args[1:]
 	}
@@ -83,6 +83,9 @@ func openAccountRegistry(opts options) (*accountresolver.Resolver, *store.Store,
 		cfg.Server.StatePath = opts.statePath
 	}
 	st, err := store.OpenReadOnly(resolveServerStatePath(cfg.Server.StatePath))
+	if errors.Is(err, os.ErrNotExist) {
+		return accountresolver.New(nil, accountresolver.Sources(cfg)), nil, cfg, nil
+	}
 	if err != nil {
 		return nil, nil, cfg, err
 	}
@@ -115,12 +118,12 @@ func openAccountServer(opts options, writable bool) (*servercore.Server, *store.
 }
 
 func runAccountsList(opts options) error {
-	srv, st, _, err := openAccountServer(opts, false)
+	resolver, st, _, err := openAccountRegistry(opts)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	items, err := srv.Accounts(context.Background())
+	items, err := resolver.Accounts(context.Background())
 	if err != nil {
 		return err
 	}
@@ -249,26 +252,26 @@ func resolveLiveCodexOptions(ctx context.Context, opts options) (remotecodex.Fet
 	}
 	live, err := resolver.ResolveLive(ctx, opts.account)
 	if err != nil {
-		_ = st.Close()
+		if st != nil {
+			_ = st.Close()
+		}
 		return remotecodex.FetchOptions{}, nil, err
 	}
-	return live.FetchOptions(), func() { _ = st.Close() }, nil
+	return live.FetchOptions(), func() {
+		if st != nil {
+			_ = st.Close()
+		}
+	}, nil
 }
 
 func fastCodexLimitsPayload(ctx context.Context, opts options) (codexLimitsPayload, error) {
-	cfg, err := load(opts)
+	resolver, st, cfg, err := openAccountRegistry(opts)
 	if err != nil {
 		return codexLimitsPayload{}, err
 	}
-	if opts.statePath != "" {
-		cfg.Server.StatePath = opts.statePath
+	if st != nil {
+		defer func() { _ = st.Close() }()
 	}
-	st, err := store.OpenReadOnly(resolveServerStatePath(cfg.Server.StatePath))
-	if err != nil {
-		return codexLimitsPayload{}, err
-	}
-	defer func() { _ = st.Close() }()
-	resolver := accountresolver.New(st, accountresolver.Sources(cfg))
 	account, err := resolver.Resolve(ctx, opts.account)
 	if err != nil {
 		return codexLimitsPayload{}, err
@@ -318,11 +321,13 @@ func fastAccountStatusSnapshot(cfg config.Config, opts options) (model.StatusSna
 	if err != nil {
 		return model.StatusSnapshot{}, err
 	}
-	snapshot := model.StatusSnapshot{SchemaVersion: model.SchemaVersion, GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Timezone: cfg.Timezone, Providers: []model.ProviderSnapshot{}}
+	generatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	snapshot := model.StatusSnapshot{SchemaVersion: model.SchemaVersion, GeneratedAt: generatedAt, Timezone: cfg.Timezone, Providers: []model.ProviderSnapshot{}}
 	if c, openErr := cache.OpenReadOnly(cfg.CacheDir); openErr == nil {
 		defer func() { _ = c.Close() }()
 		if cached, loadErr := c.LoadStatusSnapshot(); loadErr == nil && cached != nil {
 			snapshot = *cached
+			snapshot.GeneratedAt = generatedAt
 			if snapshot.Providers == nil {
 				snapshot.Providers = []model.ProviderSnapshot{}
 			}

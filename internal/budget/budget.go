@@ -36,12 +36,18 @@ type Input struct {
 }
 
 type Report struct {
-	SchemaVersion string    `json:"schemaVersion"`
-	GeneratedAt   time.Time `json:"generatedAt"`
-	ProviderID    string    `json:"providerId"`
-	ObservedAt    time.Time `json:"observedAt"`
-	History       History   `json:"history"`
-	Windows       []Window  `json:"windows"`
+	SchemaVersion        string    `json:"schemaVersion"`
+	GeneratedAt          time.Time `json:"generatedAt"`
+	ProviderID           string    `json:"providerId"`
+	ObservedAt           time.Time `json:"observedAt"`
+	AccountID            string    `json:"accountId,omitempty"`
+	AccountAlias         string    `json:"accountAlias,omitempty"`
+	CredentialsAvailable *bool     `json:"credentialsAvailable,omitempty"`
+	ObservedAgeMs        *int64    `json:"observedAgeMs,omitempty"`
+	ObservationStale     bool      `json:"observationStale,omitempty"`
+	ObservationSource    string    `json:"observationSource,omitempty"`
+	History              History   `json:"history"`
+	Windows              []Window  `json:"windows"`
 }
 
 // PacingAlert is the durable notification projection for a budget risk

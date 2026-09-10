@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,37 @@ func TestRenderBudgetMakesZeroBurnPlain(t *testing.T) {
 	for _, want := range []string{"No recent history yet", "Spark weekly · on track", "0.0% used, 100.0% left", "No usage yet", "up to 0.60% per hour", "Estimate confidence: low"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestRenderStoredBudgetShowsAccountFreshness(t *testing.T) {
+	age := int64(3_600_000)
+	available := false
+	report := budget.Report{
+		ProviderID:           "codex",
+		ObservedAt:           time.Date(2026, 9, 10, 19, 0, 0, 0, time.UTC),
+		AccountID:            "acct-0123456789abcdef0123",
+		AccountAlias:         "personal",
+		CredentialsAvailable: &available,
+		ObservedAgeMs:        &age,
+		ObservationStale:     true,
+		ObservationSource:    "resident-store",
+		History:              budget.History{State: budget.HistoryUnavailable},
+	}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"accountId", "accountAlias", "credentialsAvailable", "observedAgeMs", "observationStale", "observationSource"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("stored metadata missing %q: %s", want, raw)
+		}
+	}
+	text := stripANSI(renderBudget(report))
+	for _, want := range []string{"personal · acct-0123456789abcdef0123", "resident-store", "observed 2026-09-10T19:00:00Z", "age 1h0m0s", "stale", "credentials unavailable"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("human metadata missing %q:\n%s", want, text)
 		}
 	}
 }
