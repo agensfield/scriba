@@ -13,7 +13,50 @@ import (
 const (
 	testSourceA = "src-00000000000000000000"
 	testSourceB = "src-11111111111111111111"
+	testSourceC = "src-22222222222222222222"
 )
+
+func TestRegisterAuthSourceAccountAliasIsAtomicAndSourceScoped(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	checked := time.Date(2026, 9, 10, 20, 0, 0, 0, time.UTC)
+	if err := s.SyncAuthSources(ctx, []SourceSpec{{Ref: testSourceA, Enabled: true, Priority: 0}, {Ref: testSourceB, Enabled: true, Priority: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ObserveAuthSource(ctx, testSourceB, resetwatch.Account{Ref: "existing", Email: "existing@example.com"}, checked); err != nil {
+		t.Fatal(err)
+	}
+	cold := resetwatch.Account{Ref: "cold", Email: "cold@example.com", Plan: "plus"}
+	if err := s.RegisterAuthSourceAccountAlias(ctx, SourceSpec{Ref: testSourceC, Priority: 2}, cold, "personal", checked.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	account, ok, err := s.ResolveAccount(ctx, "personal")
+	if err != nil || !ok || account.Ref != cold.Ref || !account.CredentialsAvailable || !account.LastSeenAt.IsZero() {
+		t.Fatalf("cold account=%+v ok=%v err=%v", account, ok, err)
+	}
+	health, err := s.ListSourceHealth(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := map[string]string{}
+	for _, source := range health {
+		bound[source.SourceRef] = source.AccountRef
+	}
+	if bound[testSourceB] != "existing" || bound[testSourceC] != "cold" {
+		t.Fatalf("source bindings=%v", bound)
+	}
+	var observations int
+	if err := s.db.QueryRow(`select count(*) from limit_observations where account_ref='cold'`).Scan(&observations); err != nil || observations != 0 {
+		t.Fatalf("cold observations=%d err=%v", observations, err)
+	}
+	if err := s.RegisterAuthSourceAccountAlias(ctx, SourceSpec{Ref: "src-33333333333333333333", Priority: 3}, resetwatch.Account{Ref: "invalid"}, "current", checked); !errors.Is(err, ErrInvalidAccountAlias) {
+		t.Fatalf("invalid alias err=%v", err)
+	}
+	var invalidRows int
+	if err := s.db.QueryRow(`select count(*) from accounts where account_ref='invalid'`).Scan(&invalidRows); err != nil || invalidRows != 0 {
+		t.Fatalf("invalid alias partially registered rows=%d err=%v", invalidRows, err)
+	}
+}
 
 func TestAccountRegistryDiscoveryAliasAndSourceRotation(t *testing.T) {
 	s := openTestStore(t)

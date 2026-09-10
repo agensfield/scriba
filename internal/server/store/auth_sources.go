@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/agensfield/scriba/internal/resetwatch"
@@ -141,6 +142,43 @@ func (s *Store) ObserveAuthSource(ctx context.Context, sourceRef string, account
 		_, err = tx.ExecContext(ctx, `update auth_sources set account_ref=?,credentials_available=1,last_identity_check=?,updated_at=? where source_ref=?`, account.Ref, formatTime(checkedAt), formatTime(checkedAt), sourceRef)
 	}
 	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RegisterAuthSourceAccountAlias atomically registers a cold inspected account,
+// binds only its source, and assigns the requested alias. It does not reconcile
+// or disable any other configured source.
+func (s *Store) RegisterAuthSourceAccountAlias(ctx context.Context, spec SourceSpec, account resetwatch.Account, alias string, checkedAt time.Time) error {
+	if !validAlias(alias) {
+		return ErrInvalidAccountAlias
+	}
+	if !validSourceRef(spec.Ref) || spec.Priority < 0 || account.Ref == "" || checkedAt.IsZero() {
+		return ErrInvalidSource
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stamp := formatTime(checkedAt)
+	if _, err = tx.ExecContext(ctx, `insert into auth_sources(source_ref,enabled,priority,credentials_available,created_at,updated_at) values(?,?,?,0,?,?) on conflict(source_ref) do update set enabled=1,priority=excluded.priority,updated_at=excluded.updated_at`, spec.Ref, true, spec.Priority, stamp, stamp); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `insert into auth_source_poll_health(source_ref,consecutive_failures,failure_kind,last_error_code,alert_state,updated_at) values(?,0,'','','ok',?) on conflict(source_ref) do nothing`, spec.Ref, stamp); err != nil {
+		return err
+	}
+	if err = ensureDiscoveredAccount(ctx, tx, resetwatch.ProviderCodex, account, checkedAt); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `update auth_sources set account_ref=?,credentials_available=1,last_identity_check=?,updated_at=? where source_ref=?`, account.Ref, stamp, stamp, spec.Ref); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `update accounts set alias=?,updated_at=? where provider_id=? and account_ref=?`, alias, stamp, resetwatch.ProviderCodex, account.Ref); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return ErrInvalidAccountAlias
+		}
 		return err
 	}
 	return tx.Commit()
