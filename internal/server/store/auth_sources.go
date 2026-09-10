@@ -11,10 +11,11 @@ import (
 )
 
 var (
-	ErrInvalidSource   = errors.New("invalid auth source")
-	ErrSourceMissing   = errors.New("auth source missing")
-	ErrSourceDisabled  = errors.New("auth source disabled")
-	ErrSourcePollStale = errors.New("stale auth source poll attempt")
+	ErrInvalidSource       = errors.New("invalid auth source")
+	ErrSourceMissing       = errors.New("auth source missing")
+	ErrSourceDisabled      = errors.New("auth source disabled")
+	ErrSourceIdentityStale = errors.New("stale auth source identity check")
+	ErrSourcePollStale     = errors.New("stale auth source poll attempt")
 )
 
 const (
@@ -163,8 +164,28 @@ func (s *Store) RegisterAuthSourceAccountAlias(ctx context.Context, spec SourceS
 	}
 	defer func() { _ = tx.Rollback() }()
 	stamp := formatTime(checkedAt)
-	if _, err = tx.ExecContext(ctx, `insert into auth_sources(source_ref,enabled,priority,credentials_available,created_at,updated_at) values(?,?,?,0,?,?) on conflict(source_ref) do update set enabled=1,priority=excluded.priority,updated_at=excluded.updated_at`, spec.Ref, true, spec.Priority, stamp, stamp); err != nil {
+	var enabled int
+	var boundAccount, lastCheck sql.NullString
+	err = tx.QueryRowContext(ctx, `select enabled,account_ref,last_identity_check from auth_sources where source_ref=?`, spec.Ref).Scan(&enabled, &boundAccount, &lastCheck)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if _, err = tx.ExecContext(ctx, `insert into auth_sources(source_ref,enabled,priority,credentials_available,created_at,updated_at) values(?,?,?,0,?,?)`, spec.Ref, true, spec.Priority, stamp, stamp); err != nil {
+			return err
+		}
+	case err != nil:
 		return err
+	case enabled != 1:
+		return ErrSourceDisabled
+	default:
+		if lastCheck.Valid {
+			previous, parseErr := time.Parse(time.RFC3339Nano, lastCheck.String)
+			if parseErr != nil {
+				return parseErr
+			}
+			if previous.After(checkedAt) || (previous.Equal(checkedAt) && (!boundAccount.Valid || boundAccount.String != account.Ref)) {
+				return ErrSourceIdentityStale
+			}
+		}
 	}
 	if _, err = tx.ExecContext(ctx, `insert into auth_source_poll_health(source_ref,consecutive_failures,failure_kind,last_error_code,alert_state,updated_at) values(?,0,'','','ok',?) on conflict(source_ref) do nothing`, spec.Ref, stamp); err != nil {
 		return err
@@ -172,7 +193,7 @@ func (s *Store) RegisterAuthSourceAccountAlias(ctx context.Context, spec SourceS
 	if err = ensureDiscoveredAccount(ctx, tx, resetwatch.ProviderCodex, account, checkedAt); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `update auth_sources set account_ref=?,credentials_available=1,last_identity_check=?,updated_at=? where source_ref=?`, account.Ref, stamp, stamp, spec.Ref); err != nil {
+	if _, err = tx.ExecContext(ctx, `update auth_sources set account_ref=?,credentials_available=1,last_identity_check=?,updated_at=case when updated_at>? then updated_at else ? end where source_ref=?`, account.Ref, stamp, stamp, stamp, spec.Ref); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `update accounts set alias=?,updated_at=? where provider_id=? and account_ref=?`, alias, stamp, resetwatch.ProviderCodex, account.Ref); err != nil {

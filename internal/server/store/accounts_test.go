@@ -58,6 +58,58 @@ func TestRegisterAuthSourceAccountAliasIsAtomicAndSourceScoped(t *testing.T) {
 	}
 }
 
+func TestRegisterAuthSourceAccountAliasRejectsStaleIdentityAndPreservesExistingConfig(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	newer := time.Date(2026, 9, 10, 20, 10, 0, 0, time.UTC)
+	if err := s.SyncAuthSources(ctx, []SourceSpec{{Ref: testSourceA, Enabled: true, Priority: 7}, {Ref: testSourceB, Enabled: false, Priority: 8}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ObserveAuthSource(ctx, testSourceA, resetwatch.Account{Ref: "newer-account"}, newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncAuthSources(ctx, []SourceSpec{{Ref: testSourceA, Enabled: true, Priority: 7}, {Ref: testSourceB, Enabled: false, Priority: 8}}); err != nil {
+		t.Fatal(err)
+	}
+	stale := resetwatch.Account{Ref: "stale-account", Email: "stale@example.com"}
+	if err := s.RegisterAuthSourceAccountAlias(ctx, SourceSpec{Ref: testSourceA, Priority: 0}, stale, "stale-alias", newer.Add(-time.Minute)); !errors.Is(err, ErrSourceIdentityStale) {
+		t.Fatalf("stale registration err=%v", err)
+	}
+	var accountRef, lastCheck, originalUpdated string
+	var enabled, priority int
+	if err := s.db.QueryRow(`select enabled,priority,account_ref,last_identity_check,updated_at from auth_sources where source_ref=?`, testSourceA).Scan(&enabled, &priority, &accountRef, &lastCheck, &originalUpdated); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 1 || priority != 7 || accountRef != "newer-account" || lastCheck != formatTime(newer) {
+		t.Fatalf("source rewound enabled=%d priority=%d account=%q check=%q", enabled, priority, accountRef, lastCheck)
+	}
+	var staleAccounts int
+	if err := s.db.QueryRow(`select count(*) from accounts where account_ref='stale-account' or alias='stale-alias'`).Scan(&staleAccounts); err != nil || staleAccounts != 0 {
+		t.Fatalf("stale registration partially applied rows=%d err=%v", staleAccounts, err)
+	}
+
+	fresh := resetwatch.Account{Ref: "fresh-account", Email: "fresh@example.com"}
+	if err := s.RegisterAuthSourceAccountAlias(ctx, SourceSpec{Ref: testSourceA, Priority: 99}, fresh, "fresh-alias", newer.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	var updated string
+	if err := s.db.QueryRow(`select enabled,priority,account_ref,last_identity_check,updated_at from auth_sources where source_ref=?`, testSourceA).Scan(&enabled, &priority, &accountRef, &lastCheck, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 1 || priority != 7 || accountRef != "fresh-account" || lastCheck != formatTime(newer.Add(time.Minute)) {
+		t.Fatalf("existing config changed enabled=%d priority=%d account=%q check=%q", enabled, priority, accountRef, lastCheck)
+	}
+	if updated < originalUpdated {
+		t.Fatalf("source updated_at rewound from %q to %q", originalUpdated, updated)
+	}
+	if err := s.RegisterAuthSourceAccountAlias(ctx, SourceSpec{Ref: testSourceB, Priority: 0}, resetwatch.Account{Ref: "disabled-account"}, "disabled-alias", newer); !errors.Is(err, ErrSourceDisabled) {
+		t.Fatalf("disabled source registration err=%v", err)
+	}
+	if err := s.db.QueryRow(`select enabled,priority from auth_sources where source_ref=?`, testSourceB).Scan(&enabled, &priority); err != nil || enabled != 0 || priority != 8 {
+		t.Fatalf("disabled source config changed enabled=%d priority=%d err=%v", enabled, priority, err)
+	}
+}
+
 func TestAccountRegistryDiscoveryAliasAndSourceRotation(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
