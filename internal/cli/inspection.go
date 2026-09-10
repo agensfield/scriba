@@ -156,7 +156,7 @@ func runOutboxList(opts options) error {
 
 func outboxMessageDTO(row store.OutboxMessage) outboxMessagePayload {
 	return outboxMessagePayload{
-		ID: row.ID, EventKind: row.EventKind, Source: row.Source, ProfileRef: row.ProfileRef, AccountRef: row.AccountRef,
+		ID: row.ID, EventKind: row.EventKind, Source: row.Source, AccountRef: row.AccountRef,
 		EventID: row.EventID, Target: row.Target, PayloadVersion: row.PayloadVersion, Payload: json.RawMessage(row.PayloadJSON),
 		Status: row.Status, Attempts: row.Attempts, AvailableAt: formatInspectionTime(row.AvailableAt), LeaseToken: row.LeaseToken,
 		LeaseExpiresAt: formatOptionalInspectionTime(row.LeaseExpiresAt), DeliveredAt: formatOptionalInspectionTime(row.DeliveredAt),

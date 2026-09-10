@@ -1105,7 +1105,11 @@ func renderUpdateCheck(check updater.Check) string {
 }
 
 func liveCodexLimitsPayload() (codexLimitsPayload, error) {
-	return liveCodexLimitsPayloadFor(context.Background(), options{})
+	payload, cleanup, err := liveCodexLimitsPayloadFor(context.Background(), options{})
+	if cleanup != nil {
+		defer cleanup()
+	}
+	return payload, err
 }
 
 func liveCodexLimitsPayloadFor(ctx context.Context, opts options) (codexLimitsPayload, func(), error) {

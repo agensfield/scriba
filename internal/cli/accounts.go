@@ -12,6 +12,7 @@ import (
 	"github.com/agensfield/scriba/internal/cache"
 	"github.com/agensfield/scriba/internal/config"
 	"github.com/agensfield/scriba/internal/model"
+	"github.com/agensfield/scriba/internal/remote"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
 	servercore "github.com/agensfield/scriba/internal/server"
