@@ -251,6 +251,9 @@ func TestBackupRejectsPublicOrSymlinkDirectory(t *testing.T) {
 	if err := os.Mkdir(public, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(public, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.Backup(context.Background(), public, 1); err == nil {
 		t.Fatal("expected public backup directory to fail")
 	}
