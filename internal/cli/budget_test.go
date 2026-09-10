@@ -10,7 +10,10 @@ import (
 	"time"
 
 	"github.com/agensfield/scriba/internal/budget"
+	"github.com/agensfield/scriba/internal/config"
 	"github.com/agensfield/scriba/internal/remote"
+	"github.com/agensfield/scriba/internal/resetwatch"
+	"github.com/agensfield/scriba/internal/server/store"
 )
 
 func TestBudgetErrorRedaction(t *testing.T) {
@@ -102,6 +105,45 @@ func TestRenderStoredBudgetShowsAccountFreshness(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("human metadata missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestStoredBudgetCommandCarriesSelectedAccountMetadata(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "server.sqlite")
+	cfg := config.Default()
+	cfg.Server.StatePath = statePath
+	cfg.CodexAuthPaths = []string{filepath.Join(dir, "missing-auth.json")}
+	st, err := store.Open(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := 48.0
+	at := time.Now().UTC().Add(-time.Hour)
+	selector := store.AccountID("codex", "private-budget")
+	_, err = st.ApplyCodexPoll(context.Background(), store.CodexPollInput{Observation: resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "private-budget"}, ObservedAt: at, Windows: []resetwatch.Window{{Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: at.Add(5 * time.Hour)}}}, CommittedAt: at.Add(time.Second)})
+	if err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	if err := st.SetAccountAlias(context.Background(), selector, "personal"); err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	var commandErr error
+	stdout := captureCLIStdout(t, func() {
+		commandErr = runStoredCodexBudget(cfg, options{jsonOut: true, account: selector, statePath: statePath})
+	})
+	if commandErr != nil {
+		t.Fatal(commandErr)
+	}
+	var report budget.Report
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("decode budget output=%q: %v", stdout, err)
+	}
+	if report.AccountID != selector || report.AccountAlias != "personal" || report.CredentialsAvailable == nil || *report.CredentialsAvailable || report.ObservedAt.IsZero() || report.ObservedAgeMs == nil || report.ObservationSource != "resident-store" {
+		t.Fatalf("stored report=%+v", report)
 	}
 }
 

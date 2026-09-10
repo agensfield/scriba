@@ -64,6 +64,7 @@ func dispatchAccounts(args []string) error {
 		}
 		return fmt.Errorf("unknown accounts command: %s", command)
 	}
+	args = normalizeAccountAliasArgs(args)
 	opts, rest, err := parse(args, flagSpec{Use: "scriba accounts alias <id-or-alias> <new-alias> [flags]", Flags: []string{"json", "config", "state-path", "redact"}})
 	if err != nil {
 		return err
@@ -72,6 +73,29 @@ func dispatchAccounts(args []string) error {
 		return errors.New("scriba accounts alias requires an account selector and alias")
 	}
 	return runAccountsAlias(opts, rest[0], rest[1])
+}
+
+func normalizeAccountAliasArgs(args []string) []string {
+	flags := make([]string, 0, len(args))
+	positionals := make([]string, 0, 2)
+	valueFlags := map[string]bool{"--config": true, "--state-path": true}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") {
+			positionals = append(positionals, arg)
+			continue
+		}
+		flags = append(flags, arg)
+		name := arg
+		if index := strings.IndexByte(name, '='); index >= 0 {
+			name = name[:index]
+		}
+		if valueFlags[name] && !strings.Contains(arg, "=") && i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+	return append(flags, positionals...)
 }
 
 func openAccountRegistry(opts options) (*accountresolver.Resolver, *store.Store, config.Config, error) {

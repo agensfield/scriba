@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
@@ -126,6 +128,66 @@ func TestAccountsCleanInstallDiscoversAuthWithoutCreatingState(t *testing.T) {
 	}
 	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
 		t.Fatalf("clean-install listing created state: %v", err)
+	}
+}
+
+func TestLiveOptionsCleanInstallPinColdAccountWithoutState(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "missing.sqlite")
+	authPath := filepath.Join(dir, "auth.json")
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"token-clean-live","account_id":"private-clean-live"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+authPath+`"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fetchOpts, cleanup, err := resolveLiveCodexOptions(context.Background(), options{config: configPath, statePath: statePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	if len(fetchOpts.AuthPaths) != 1 || fetchOpts.AuthPaths[0] != authPath || fetchOpts.ExpectedAccountID != "private-clean-live" {
+		t.Fatalf("fetch options=%+v", fetchOpts)
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("clean-install live selection created state: %v", err)
+	}
+}
+
+func TestDispatchAccountsAliasAcceptsFlagsAfterSelector(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "server.sqlite")
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+filepath.Join(dir, "missing-auth.json")+`"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := 20.0
+	at := time.Now().UTC().Add(-time.Minute)
+	_, err = st.ApplyCodexPoll(context.Background(), store.CodexPollInput{Observation: resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "private-alias"}, ObservedAt: at, Windows: []resetwatch.Window{{Label: resetwatch.LabelFiveHour, UsedPercent: &used, ResetAt: at.Add(5 * time.Hour)}}}, CommittedAt: at.Add(time.Second)})
+	if err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	selector := store.AccountID("codex", "private-alias")
+	var dispatchErr error
+	stdout := captureCLIStdout(t, func() {
+		dispatchErr = dispatchAccounts([]string{"alias", selector, "personal", "--json", "--config", configPath, "--state-path", statePath})
+	})
+	if dispatchErr != nil {
+		t.Fatalf("alias dispatch: %v", dispatchErr)
+	}
+	var payload accountsPayload
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("decode alias output=%q: %v", stdout, err)
+	}
+	if len(payload.Accounts) != 1 || payload.Accounts[0].AccountID != selector || payload.Accounts[0].Alias != "personal" {
+		t.Fatalf("alias payload=%+v", payload)
 	}
 }
 
