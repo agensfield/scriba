@@ -72,8 +72,6 @@ type options struct {
 	id              string
 	status          string
 	target          string
-	profile         string
-	profileSet      bool
 	credit          string
 	yes             bool
 	dryRun          bool
@@ -111,16 +109,18 @@ func dispatch(args []string) error {
 	case "status":
 		opts, _, err := parse(args[1:], flagSpec{
 			Use:   "scriba status [flags]",
-			Flags: []string{"json", "config", "cache-dir", "no-cache", "no-remote", "fast", "redact", "timezone"},
+			Flags: []string{"json", "config", "cache-dir", "no-cache", "no-remote", "fast", "redact", "timezone", "account"},
 		})
 		if err != nil {
 			return err
 		}
 		return runStatus(opts)
+	case "accounts":
+		return dispatchAccounts(args[1:])
 	case "context":
 		opts, rest, err := parse(args[1:], flagSpec{
 			Use:   "scriba context --json [flags]",
-			Flags: []string{"json", "config", "cache-dir", "state-path", "profile"},
+			Flags: []string{"json", "config", "cache-dir", "state-path", "account"},
 		})
 		if err != nil {
 			return err
@@ -152,7 +152,7 @@ func dispatch(args []string) error {
 		if args[0] == "codex" && args[1] == "limits" {
 			opts, _, err := parse(args[2:], flagSpec{
 				Use:   "scriba codex limits [flags]",
-				Flags: []string{"json", "config", "cache-dir", "fast", "redact"},
+				Flags: []string{"json", "config", "cache-dir", "fast", "redact", "account"},
 			})
 			if err != nil {
 				return err
@@ -160,9 +160,13 @@ func dispatch(args []string) error {
 			return runCodexLimits(opts)
 		}
 		if args[1] == "budget" {
+			flags := []string{"json", "config", "state-path", "redact"}
+			if args[0] == "codex" {
+				flags = append(flags, "account")
+			}
 			opts, rest, err := parse(args[2:], flagSpec{
 				Use:   fmt.Sprintf("scriba %s budget [flags]", args[0]),
-				Flags: []string{"json", "config", "state-path", "redact"},
+				Flags: flags,
 			})
 			if err != nil {
 				return err
@@ -175,7 +179,7 @@ func dispatch(args []string) error {
 		if args[0] == "codex" && args[1] == "activity" {
 			opts, _, err := parse(args[2:], flagSpec{
 				Use:   "scriba codex activity [flags]",
-				Flags: []string{"json", "config", "cache-dir", "redact"},
+				Flags: []string{"json", "config", "cache-dir", "redact", "account"},
 			})
 			if err != nil {
 				return err
@@ -185,7 +189,7 @@ func dispatch(args []string) error {
 		if args[0] == "codex" && (args[1] == "reset-grants" || args[1] == "grants") {
 			opts, _, err := parse(args[2:], flagSpec{
 				Use:   "scriba codex reset-grants [flags]",
-				Flags: []string{"json", "config", "cache-dir", "redact"},
+				Flags: []string{"json", "config", "cache-dir", "redact", "account"},
 			})
 			if err != nil {
 				return err
@@ -195,7 +199,7 @@ func dispatch(args []string) error {
 		if args[0] == "codex" && args[1] == "reset" {
 			opts, rest, err := parse(args[2:], flagSpec{
 				Use:   "scriba codex reset [flags]",
-				Flags: []string{"json", "credit", "dry-run", "yes"},
+				Flags: []string{"json", "config", "state-path", "account", "credit", "dry-run", "yes"},
 			})
 			if err != nil {
 				return err
@@ -205,9 +209,13 @@ func dispatch(args []string) error {
 			}
 			return runCodexReset(opts)
 		}
+		reportFlags := []string{"json", "config", "cache-dir", "no-cache", "no-remote", "redact", "since", "until", "timezone"}
+		if args[0] == "codex" {
+			reportFlags = append(reportFlags, "account")
+		}
 		opts, _, err := parse(args[2:], flagSpec{
 			Use:   fmt.Sprintf("scriba %s %s [flags]", args[0], args[1]),
-			Flags: []string{"json", "config", "cache-dir", "no-cache", "no-remote", "redact", "since", "until", "timezone"},
+			Flags: reportFlags,
 		})
 		if err != nil {
 			return err
@@ -376,12 +384,11 @@ var flagHelp = map[string]flagMeta{
 	"backup-dir":        {Name: "backup-dir", Value: "dir", Usage: "backup destination directory"},
 	"retention":         {Name: "retention", Value: "count", Usage: "number of Scriba backups to retain", Default: "14"},
 	"limit":             {Name: "limit", Value: "count", Usage: "maximum rows to return", Default: "100"},
-	"account":           {Name: "account", Value: "ref", Usage: "provider account reference"},
+	"account":           {Name: "account", Value: "id-or-alias", Usage: "account id or alias"},
 	"rule":              {Name: "rule", Value: "id", Usage: "policy rule id"},
 	"id":                {Name: "id", Value: "id", Usage: "outbox message id"},
 	"status":            {Name: "status", Value: "status", Usage: "outbox status"},
 	"target":            {Name: "target", Value: "target", Usage: "delivery target"},
-	"profile":           {Name: "profile", Value: "id", Usage: "configured profile id"},
 	"credit":            {Name: "credit", Value: "id", Usage: "redeem a specific reset credit"},
 	"dry-run":           {Name: "dry-run", Usage: "select and show a reset credit without redeeming it"},
 	"yes":               {Name: "yes", Usage: "confirm reset redemption without prompting"},
@@ -466,18 +473,6 @@ func parse(args []string, spec flagSpec) (options, []string, error) {
 			fs.StringVar(&opts.status, name, "", flagHelp[name].Usage)
 		case "target":
 			fs.StringVar(&opts.target, name, "", flagHelp[name].Usage)
-		case "profile":
-			fs.Func(name, flagHelp[name].Usage, func(value string) error {
-				if opts.profileSet {
-					return errors.New("profile may be provided only once")
-				}
-				opts.profileSet = true
-				if value == "" {
-					return errors.New("profile id is required")
-				}
-				opts.profile = value
-				return nil
-			})
 		case "credit":
 			fs.StringVar(&opts.credit, name, "", flagHelp[name].Usage)
 		case "dry-run":
@@ -531,6 +526,13 @@ func runStatus(opts options) error {
 	cfg, err := load(opts)
 	if err != nil {
 		return err
+	}
+	if opts.fast {
+		snapshot, err := fastAccountStatusSnapshot(cfg, opts)
+		if err != nil {
+			return err
+		}
+		return output(opts, snapshot, render.Status(snapshot))
 	}
 	if !opts.noCache {
 		c, err := cache.Open(cfg.CacheDir)
@@ -620,16 +622,21 @@ func runReport(provider, command string, opts options) error {
 	}
 	filtered := reports.ApplyFiltersIn(events, reports.Filters{Since: opts.since, Until: opts.until}, location)
 	payload := map[string]any{"providerId": provider, "stats": stats, "timezone": location.String()}
+	if provider == "codex" && opts.account != "" {
+		payload["accountAttribution"] = "unavailable"
+		payload["attributionScope"] = "session_logs"
+	}
 	var rows any
 	var limits *codexLimitsPayload
 	switch command {
 	case "summary":
 		rows = reports.DailyIn(filtered, true, location)
 		if provider == "codex" && !opts.noRemote {
-			remoteLimits, err := liveCodexLimitsPayload()
+			remoteLimits, cleanup, err := liveCodexLimitsPayloadFor(context.Background(), opts)
 			if err != nil {
 				return err
 			}
+			defer cleanup()
 			limits = &remoteLimits
 		}
 	case "daily":
@@ -650,6 +657,9 @@ func runReport(provider, command string, opts options) error {
 	}
 	payload["rows"] = rows
 	human := render.Report(title(provider)+" "+title(command), rows)
+	if provider == "codex" && opts.account != "" {
+		human += "\n\n" + cliMuted("account attribution unavailable; local totals are scoped to session logs")
+	}
 	if limits != nil {
 		payload["limits"] = limits
 		human += "\n\n" + render.CodexLimits(limits.Lines, false)
@@ -659,37 +669,27 @@ func runReport(provider, command string, opts options) error {
 
 func runCodexLimits(opts options) error {
 	if opts.fast {
-		cfg, err := load(opts)
-		if err != nil {
-			return err
-		}
-		c, err := cache.Open(cfg.CacheDir)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = c.Close() }()
-		snapshot, err := c.LoadStatusSnapshot()
-		if err != nil {
-			return err
-		}
-		if snapshot == nil {
-			return fmt.Errorf("no cached status snapshot found; run `scriba status` first")
-		}
-		payload, err := codexLimitsFromSnapshot(*snapshot)
+		payload, err := fastCodexLimitsPayload(context.Background(), opts)
 		if err != nil {
 			return err
 		}
 		return output(opts, payload, render.CodexLimits(payload.Lines, true))
 	}
-	payload, err := liveCodexLimitsPayload()
+	payload, cleanup, err := liveCodexLimitsPayloadFor(context.Background(), opts)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	return output(opts, payload, render.CodexLimits(payload.Lines, false))
 }
 
 func runCodexActivity(opts options) error {
-	profile, err := remotecodex.FetchProfile(context.Background(), nil)
+	fetchOpts, cleanup, err := resolveLiveCodexOptions(context.Background(), opts)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	profile, err := remotecodex.FetchProfileWithOptions(context.Background(), nil, fetchOpts)
 	if err != nil {
 		return err
 	}
@@ -698,10 +698,11 @@ func runCodexActivity(opts options) error {
 }
 
 func runCodexResetGrants(opts options) error {
-	payload, err := liveCodexLimitsPayload()
+	payload, cleanup, err := liveCodexLimitsPayloadFor(context.Background(), opts)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	return output(opts, resetGrantsPayload(payload), renderResetGrants(payload))
 }
 
@@ -723,7 +724,12 @@ func runCodexReset(opts options) error {
 	if opts.dryRun && opts.yes {
 		return errors.New("--dry-run and --yes cannot be used together")
 	}
-	plan, err := remotecodex.PlanRateLimitReset(context.Background(), nil, remotecodex.FetchOptions{}, opts.credit)
+	fetchOpts, cleanup, err := resolveLiveCodexOptions(context.Background(), opts)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	plan, err := remotecodex.PlanRateLimitReset(context.Background(), nil, fetchOpts, opts.credit)
 	if err != nil {
 		return err
 	}
@@ -760,7 +766,7 @@ func runCodexReset(opts options) error {
 	if err != nil {
 		return err
 	}
-	result, err := remotecodex.ConsumeRateLimitResetCredit(context.Background(), nil, remotecodex.FetchOptions{}, plan.AccountPin, plan.Credit, requestID)
+	result, err := remotecodex.ConsumeRateLimitResetCredit(context.Background(), nil, fetchOpts, plan.AccountPin, plan.Credit, requestID)
 	if err != nil {
 		return err
 	}
@@ -1057,9 +1063,18 @@ func renderUpdateCheck(check updater.Check) string {
 }
 
 func liveCodexLimitsPayload() (codexLimitsPayload, error) {
-	result, err := remotecodex.Probe(true)
+	return liveCodexLimitsPayloadFor(context.Background(), options{})
+}
+
+func liveCodexLimitsPayloadFor(ctx context.Context, opts options) (codexLimitsPayload, func(), error) {
+	fetchOpts, cleanup, err := resolveLiveCodexOptions(ctx, opts)
 	if err != nil {
-		return codexLimitsPayload{}, err
+		return codexLimitsPayload{}, nil, err
+	}
+	result, err := remotecodex.FetchLimitsWithOptions(ctx, nil, fetchOpts)
+	if err != nil {
+		cleanup()
+		return codexLimitsPayload{}, nil, err
 	}
 	return codexLimitsPayload{
 		SchemaVersion: model.SchemaVersion,
@@ -1070,19 +1085,24 @@ func liveCodexLimitsPayload() (codexLimitsPayload, error) {
 		ResetCredits:  result.ResetCredits,
 		Provenance:    result.Provenance,
 		AuthState:     result.AuthState,
-	}, nil
+	}, cleanup, nil
 }
 
 type codexLimitsPayload struct {
-	SchemaVersion string                   `json:"schemaVersion"`
-	ProviderID    string                   `json:"providerId"`
-	Source        string                   `json:"source"`
-	Mode          string                   `json:"mode"`
-	GeneratedAt   string                   `json:"generatedAt,omitempty"`
-	Lines         []model.MetricLine       `json:"lines"`
-	ResetCredits  []remote.ResetCredit     `json:"resetCredits,omitempty"`
-	Provenance    []model.SourceProvenance `json:"provenance,omitempty"`
-	AuthState     any                      `json:"authState,omitempty"`
+	SchemaVersion    string                   `json:"schemaVersion"`
+	ProviderID       string                   `json:"providerId"`
+	Source           string                   `json:"source"`
+	Mode             string                   `json:"mode"`
+	GeneratedAt      string                   `json:"generatedAt,omitempty"`
+	Lines            []model.MetricLine       `json:"lines"`
+	ResetCredits     []remote.ResetCredit     `json:"resetCredits,omitempty"`
+	Provenance       []model.SourceProvenance `json:"provenance,omitempty"`
+	AuthState        any                      `json:"authState,omitempty"`
+	AccountID        string                   `json:"accountId,omitempty"`
+	AccountAlias     string                   `json:"accountAlias,omitempty"`
+	ObservedAt       string                   `json:"observedAt,omitempty"`
+	ObservedAgeMs    *int64                   `json:"observedAgeMs,omitempty"`
+	ObservationStale bool                     `json:"observationStale,omitempty"`
 }
 
 func codexLimitsFromSnapshot(snapshot model.StatusSnapshot) (codexLimitsPayload, error) {
@@ -1708,9 +1728,10 @@ func title(value string) string {
 
 func commands() map[string][]string {
 	return map[string][]string{
-		"root":     {"doctor", "status", "context", "mcp", "claude", "codex", "schema", "config", "policy", "outbox", "cache", "bench", "telegram", "server", "update", "version"},
+		"root":     {"doctor", "status", "accounts", "context", "mcp", "claude", "codex", "schema", "config", "policy", "outbox", "cache", "bench", "telegram", "server", "update", "version"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks", "budget"},
 		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "reset", "activity", "budget"},
+		"accounts": {"list", "alias"},
 		"config":   {"path", "show", "init", "telegram"},
 		"policy":   {"validate", "list", "explain"},
 		"outbox":   {"list"},
@@ -1723,6 +1744,20 @@ func commands() map[string][]string {
 
 func groupHelp(group string) string {
 	switch group {
+	case "accounts":
+		return `scriba accounts - List and label known Codex accounts.
+
+Commands:
+  scriba accounts list
+  scriba accounts alias <id-or-alias> <new-alias>
+
+Common flags:
+  --json             emit JSON
+  --redact           hide human identifying fields
+
+Examples:
+  scriba accounts list
+  scriba accounts alias acct-0123456789abcdef0123 personal`
 	case "claude":
 		return `scriba claude - Local Claude Code usage reports.
 
@@ -1873,6 +1908,7 @@ Usage:
 
 Commands:
   status            combined local usage and remote limit snapshot
+  accounts          list and label known Codex accounts
   context           machine-readable agent context (requires --json)
   mcp               MCP stdio server for agent context
   doctor            auth, paths, cache, and provider diagnostics
@@ -1902,18 +1938,10 @@ Use --json for automation and agents.
 }
 
 func agentContextService(cfg config.Config) *agentcontext.Service {
-	profiles := make([]string, 0, len(cfg.Profiles))
-	for _, profile := range cfg.Profiles {
-		if profile.Enabled {
-			profiles = append(profiles, profile.ID)
-		}
-	}
 	return agentcontext.New(agentcontext.Config{
-		CacheDir:         cfg.CacheDir,
-		StorePath:        resolveServerStatePath(cfg.Server.StatePath),
-		DefaultProfileID: cfg.DefaultProfileID,
-		ProfileIDs:       profiles,
-		Clock:            agentContextClock,
+		CacheDir:  cfg.CacheDir,
+		StorePath: resolveServerStatePath(cfg.Server.StatePath),
+		Clock:     agentContextClock,
 	})
 }
 

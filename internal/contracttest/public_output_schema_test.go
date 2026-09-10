@@ -10,7 +10,7 @@ import (
 )
 
 var publicOutputSchemaNames = []string{
-	"status", "codex-limits", "codex-profile", "codex-reset-grants", "codex-reset", "budget",
+	"status", "accounts", "codex-limits", "codex-profile", "codex-reset-grants", "codex-reset", "budget",
 	"policy-validate", "policy-list", "policy-explain", "outbox-list",
 	"context", "event", "events", "local-health", "local-error",
 	"profiles",
@@ -55,6 +55,7 @@ func TestPublicOutputSchemasAllowOptionalOmissions(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..", "schemas")
 	cases := map[string]any{
+		"accounts":             map[string]any{"schemaVersion": "scriba.accounts.v1", "accounts": []any{}},
 		"status":             map[string]any{"schemaVersion": "scriba.v1", "generatedAt": "2026-07-12T09:00:00Z", "providers": []any{}},
 		"codex-limits":       map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "status-cache", "mode": "fast", "lines": []any{}},
 		"codex-profile":      map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-profile-backend", "profile": map[string]any{}, "stats": map[string]any{}, "metadata": map[string]any{}, "authState": map[string]any{"ok": false}},

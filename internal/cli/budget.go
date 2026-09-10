@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	accountresolver "github.com/agensfield/scriba/internal/accounts"
 	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/budgetadapter"
+	"github.com/agensfield/scriba/internal/config"
 	"github.com/agensfield/scriba/internal/privacy"
 	"github.com/agensfield/scriba/internal/remote"
 	remoteclaude "github.com/agensfield/scriba/internal/remote/claude"
@@ -28,9 +30,19 @@ func runBudget(providerID string, opts options) (err error) {
 		return err
 	}
 	var result remote.ProbeResult
+	var closeStore func()
 	switch providerID {
 	case "codex":
-		result, err = remotecodex.ProbeContext(context.Background(), true)
+		var fetchOpts remotecodex.FetchOptions
+		fetchOpts, closeStore, err = resolveLiveCodexOptions(context.Background(), opts)
+		if err != nil {
+			if opts.account != "" && errors.Is(err, accountresolver.ErrCredentialsUnavailable) {
+				return runStoredCodexBudget(cfg, opts)
+			}
+			return err
+		}
+		defer closeStore()
+		result, err = remotecodex.FetchLimitsWithOptions(context.Background(), nil, fetchOpts)
 	case "claude":
 		result, err = remoteclaude.Probe(true)
 	default:
@@ -53,6 +65,39 @@ func runBudget(providerID string, opts options) (err error) {
 		return err
 	}
 	report := budget.Evaluate(budget.Input{ProviderID: providerID, Observation: observation, History: history, HistoryState: historyState}, now)
+	return output(opts, report, renderBudget(report))
+}
+
+func runStoredCodexBudget(cfg config.Config, opts options) error {
+	if opts.statePath != "" {
+		cfg.Server.StatePath = opts.statePath
+	}
+	st, err := store.OpenReadOnly(resolveServerStatePath(cfg.Server.StatePath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	account, ok, err := st.ResolveAccount(context.Background(), opts.account)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return accountresolver.ErrAccountNotFound
+	}
+	observation, ok, err := st.LoadLatestObservationForAccount(context.Background(), account.ID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("no stored Codex limits for account %s", account.DisplayName())
+	}
+	now := time.Now().UTC()
+	current := budgetadapter.FromResetwatch(observation)
+	history, historyState, err := budgetHistory(context.Background(), "codex", remote.AuthState{AccountID: account.Ref}, cfg.Server.StatePath, opts.statePath, observation.ObservedAt)
+	if err != nil {
+		return err
+	}
+	report := budget.Evaluate(budget.Input{ProviderID: "codex", Observation: current, History: history, HistoryState: historyState}, now)
 	return output(opts, report, renderBudget(report))
 }
 

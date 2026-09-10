@@ -21,7 +21,7 @@ func runContextWithContext(ctx context.Context, opts options) error {
 	if opts.statePath != "" {
 		cfg.Server.StatePath = opts.statePath
 	}
-	payload, err := agentContextService(cfg).ContextForProfile(ctx, opts.profile)
+	payload, err := agentContextService(cfg).ContextForAccount(ctx, opts.account)
 	if err != nil {
 		return err
 	}
