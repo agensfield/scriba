@@ -11,6 +11,7 @@ func TestLookupPublishedRates(t *testing.T) {
 		short Rates
 		long  Rates
 	}{
+		{"gpt-6-astra", Rates{10e-6, 1e-6, 50e-6, 12.5e-6}, Rates{20e-6, 2e-6, 75e-6, 25e-6}},
 		{"gpt-5.6-sol", Rates{5e-6, 0.5e-6, 30e-6, 6.25e-6}, Rates{10e-6, 1e-6, 45e-6, 12.5e-6}},
 		{"gpt-5.6-terra", Rates{2.5e-6, 0.25e-6, 15e-6, 3.125e-6}, Rates{5e-6, 0.5e-6, 22.5e-6, 6.25e-6}},
 		{"gpt-5.6-luna", Rates{1e-6, 0.1e-6, 6e-6, 1.25e-6}, Rates{2e-6, 0.2e-6, 9e-6, 2.5e-6}},
@@ -61,6 +62,11 @@ func TestCostExactForEachPublishedModelAndTier(t *testing.T) {
 		wantLong  float64
 	}{
 		{
+			"gpt-6-astra",
+			80_000*10e-6 + 20_000*1e-6 + 2_000*50e-6,
+			280_000*20e-6 + 20_000*2e-6 + 2_000*75e-6,
+		},
+		{
 			"gpt-5.6-sol",
 			80_000*5e-6 + 20_000*0.5e-6 + 2_000*30e-6,
 			280_000*10e-6 + 20_000*1e-6 + 2_000*45e-6,
@@ -101,6 +107,39 @@ func TestCostExactForEachPublishedModelAndTier(t *testing.T) {
 			closeEnough(t, gotLong, test.wantLong)
 		})
 	}
+}
+
+func TestGPT6AstraBoundaryAndFastPricing(t *testing.T) {
+	pricing, ok := Lookup("gpt-6-astra")
+	if !ok {
+		t.Fatal("pricing missing")
+	}
+	if pricing.Short.CacheWrite != 12.5e-6 || pricing.Long.CacheWrite != 25e-6 {
+		t.Fatalf("cache-write rates = %#v", pricing)
+	}
+
+	shortUsage := Usage{InputTokens: 272_000, CachedInputTokens: 72_000, OutputTokens: 1_000}
+	wantShort := 200_000*10e-6 + 72_000*1e-6 + 1_000*50e-6
+	gotShort, ok := Cost("gpt-6-astra", shortUsage, StandardSpeedMultiplier)
+	if !ok {
+		t.Fatal("pricing missing")
+	}
+	closeEnough(t, gotShort, wantShort)
+
+	longUsage := shortUsage
+	longUsage.InputTokens++
+	wantLong := 200_001*20e-6 + 72_000*2e-6 + 1_000*75e-6
+	gotLong, ok := Cost("gpt-6-astra", longUsage, StandardSpeedMultiplier)
+	if !ok {
+		t.Fatal("pricing missing")
+	}
+	closeEnough(t, gotLong, wantLong)
+
+	fast, ok := Cost("gpt-6-astra", longUsage, FastSpeedMultiplier)
+	if !ok {
+		t.Fatal("pricing missing")
+	}
+	closeEnough(t, fast, gotLong*FastSpeedMultiplier)
 }
 
 func TestCostClampsCachedInputAndDoesNotRebillReasoning(t *testing.T) {
@@ -183,7 +222,7 @@ func TestGPT56BoundaryGoldensEveryCacheAndSpeedMix(t *testing.T) {
 }
 
 func TestCostProperties(t *testing.T) {
-	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
 		previous := 0.0
 		for input := int64(0); input < 400_000; input += 997 {
 			got, _ := Cost(model, Usage{InputTokens: input, CachedInputTokens: input / 3, OutputTokens: 41}, 1)
