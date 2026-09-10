@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const AccountSchemaVersion = 13
+
 const accountSchemaSQL = `
 create table auth_sources (
  source_ref text not null primary key check(length(source_ref)=24 and substr(source_ref,1,4)='src-' and substr(source_ref,5) not glob '*[^0-9a-f]*'),
@@ -71,7 +73,7 @@ func (s *Store) migrateAccounts(ctx context.Context) (retErr error) {
 	if err = conn.QueryRowContext(ctx, `select max(version) from schema_migrations`).Scan(&version); err != nil {
 		return err
 	}
-	if version.Valid && version.Int64 >= SchemaVersion {
+	if version.Valid && version.Int64 >= AccountSchemaVersion {
 		return validateAccountSchema(ctx, conn)
 	}
 	if _, err = conn.ExecContext(ctx, `begin immediate`); err != nil {
@@ -85,7 +87,7 @@ func (s *Store) migrateAccounts(ctx context.Context) (retErr error) {
 	if err = conn.QueryRowContext(ctx, `select max(version) from schema_migrations`).Scan(&version); err != nil {
 		return err
 	}
-	if version.Valid && version.Int64 >= SchemaVersion {
+	if version.Valid && version.Int64 >= AccountSchemaVersion {
 		if err = validateAccountSchema(ctx, conn); err != nil {
 			return err
 		}
@@ -134,7 +136,7 @@ func (s *Store) migrateAccounts(ctx context.Context) (retErr error) {
 			return err
 		}
 	}
-	if _, err = conn.ExecContext(ctx, `insert into schema_migrations(version,applied_at) values(?,?)`, SchemaVersion, formatTime(time.Now())); err != nil {
+	if _, err = conn.ExecContext(ctx, `insert into schema_migrations(version,applied_at) values(?,?)`, AccountSchemaVersion, formatTime(time.Now())); err != nil {
 		return err
 	}
 	if err = validateAccountSchema(ctx, conn); err != nil {
