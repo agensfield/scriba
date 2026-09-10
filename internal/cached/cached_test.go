@@ -1,6 +1,8 @@
 package cached
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,9 +43,32 @@ func TestScanCodexRepricesWhenCatalogFingerprintChanges(t *testing.T) {
 	if len(events) != 1 || events[0].TotalTokens != 110 || events[0].EffectiveTokens != 30 || events[0].Model != "gpt-6-astra" {
 		t.Fatalf("events = %+v", events)
 	}
-	if events[0].CostUSD == nil || *events[0].CostUSD != 0.00078 || events[0].PricingState != "calculated" {
-		t.Fatalf("Astra pricing was not refreshed: %+v", events[0])
+	if events[0].CostUSD == nil || events[0].PricingState != "calculated" {
+		t.Fatalf("Astra pricing was not refreshed: costUSD=%s pricingState=%q event=%+v", formatCost(events[0].CostUSD), events[0].PricingState, events[0])
 	}
+	const want = 0.00078
+	got := *events[0].CostUSD
+	// arm64 may fuse the final multiply-add, moving the IEEE-754 result by one ULP.
+	if !withinOneULP(got, want) {
+		t.Fatalf("Astra pricing was not refreshed: costUSD=%s want=%.18g (bits=0x%016x) event=%+v", formatCost(events[0].CostUSD), want, math.Float64bits(want), events[0])
+	}
+}
+
+func formatCost(cost *float64) string {
+	if cost == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%.18g (bits=0x%016x)", *cost, math.Float64bits(*cost))
+}
+
+func withinOneULP(got, want float64) bool {
+	if math.IsNaN(got) || math.IsNaN(want) {
+		return false
+	}
+	if got == want {
+		return true
+	}
+	return got == math.Nextafter(want, math.Inf(1)) || got == math.Nextafter(want, math.Inf(-1))
 }
 
 func TestScanClaudeIgnoresPreviousParserCacheVersion(t *testing.T) {
