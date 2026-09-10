@@ -73,120 +73,93 @@ func validAlias(v string) bool {
 }
 
 func (s *Store) ListAccounts(ctx context.Context) ([]Account, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	accounts, _, err := listAccountsQuery(ctx, s.db)
+	return accounts, err
+}
+
+type accountQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func listAccountsQuery(ctx context.Context, q accountQueryer) ([]Account, int, error) {
+	rows, err := q.QueryContext(ctx, `
+with current_account as (
+ select account_ref from auth_sources
+ where enabled=1 and credentials_available=1
+ order by priority,source_ref limit 1
+)
 select a.provider_id,a.account_ref,a.alias,a.email,a.plan,a.first_seen_at,
  coalesce((select max(o.observed_at) from limit_observations o where o.provider_id=a.provider_id and o.account_ref=a.account_ref),''),
- exists(select 1 from auth_sources src where src.account_ref=a.account_ref and src.enabled=1 and src.credentials_available=1)
+ exists(select 1 from current_account current where current.account_ref=a.account_ref),
+ src.source_ref,coalesce(src.enabled,0),coalesce(src.credentials_available,0)
 from accounts a
-order by coalesce((select max(o.observed_at) from limit_observations o where o.provider_id=a.provider_id and o.account_ref=a.account_ref),a.first_seen_at) desc,a.provider_id,a.account_ref`)
+	left join auth_sources src on src.account_ref=a.account_ref
+order by coalesce((select max(o.observed_at) from limit_observations o where o.provider_id=a.provider_id and o.account_ref=a.account_ref),a.first_seen_at) desc,a.provider_id,a.account_ref,src.priority,src.source_ref`)
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
 	defer func() { _ = rows.Close() }()
 	var out []Account
+	currentIndex := -1
 	for rows.Next() {
 		var a Account
 		var first, last string
-		if err = rows.Scan(&a.ProviderID, &a.Ref, &a.Alias, &a.Email, &a.Plan, &first, &last, &a.CredentialsAvailable); err != nil {
-			return nil, err
+		var source sql.NullString
+		var isCurrent, sourceEnabled, sourceAvailable bool
+		if err = rows.Scan(&a.ProviderID, &a.Ref, &a.Alias, &a.Email, &a.Plan, &first, &last, &isCurrent, &source, &sourceEnabled, &sourceAvailable); err != nil {
+			return nil, -1, err
 		}
-		a.ID = AccountID(a.ProviderID, a.Ref)
-		a.FirstSeenAt = parseDBTime(first)
-		if last != "" {
-			a.LastSeenAt = parseDBTime(last)
+		if len(out) == 0 || out[len(out)-1].ProviderID != a.ProviderID || out[len(out)-1].Ref != a.Ref {
+			a.ID = AccountID(a.ProviderID, a.Ref)
+			a.FirstSeenAt = parseDBTime(first)
+			if last != "" {
+				a.LastSeenAt = parseDBTime(last)
+			}
+			out = append(out, a)
+			if isCurrent {
+				currentIndex = len(out) - 1
+			}
 		}
-		a.SourceRefs, err = s.accountSourceRefs(ctx, a.Ref)
-		if err != nil {
-			return nil, err
+		current := &out[len(out)-1]
+		if source.Valid {
+			current.SourceRefs = append(current.SourceRefs, source.String)
+			current.CredentialsAvailable = current.CredentialsAvailable || (sourceEnabled && sourceAvailable)
 		}
-		out = append(out, a)
 	}
-	return out, rows.Err()
-}
-
-func (s *Store) accountSourceRefs(ctx context.Context, accountRef string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `select source_ref from auth_sources where account_ref=? order by priority,source_ref`, accountRef)
-	if err != nil {
-		return nil, err
+	if err = rows.Err(); err != nil {
+		return nil, -1, err
 	}
-	defer func() { _ = rows.Close() }()
-	var refs []string
-	for rows.Next() {
-		var ref string
-		if err = rows.Scan(&ref); err != nil {
-			return nil, err
-		}
-		refs = append(refs, ref)
-	}
-	return refs, rows.Err()
+	return out, currentIndex, nil
 }
 
 func (s *Store) ResolveAccount(ctx context.Context, selector string) (Account, bool, error) {
-	if selector == "" || selector == "current" {
-		var provider, ref string
-		err := s.db.QueryRowContext(ctx, `select a.provider_id,a.account_ref from auth_sources src join accounts a on a.account_ref=src.account_ref where src.enabled=1 and src.credentials_available=1 order by src.priority,src.source_ref limit 1`).Scan(&provider, &ref)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = s.db.QueryRowContext(ctx, `select provider_id,account_ref from accounts order by coalesce((select max(observed_at) from limit_observations o where o.provider_id=accounts.provider_id and o.account_ref=accounts.account_ref),first_seen_at) desc,provider_id,account_ref limit 1`).Scan(&provider, &ref)
-		}
-		if errors.Is(err, sql.ErrNoRows) {
-			return Account{}, false, nil
-		}
-		if err != nil {
-			return Account{}, false, err
-		}
-		return s.accountByRef(ctx, provider, ref)
-	}
 	if !validAccountID(selector) && !validAlias(selector) {
-		return Account{}, false, ErrInvalidAccountSelector
-	}
-	var provider, ref string
-	var err error
-	if validAccountID(selector) {
-		rows, queryErr := s.db.QueryContext(ctx, `select provider_id,account_ref from accounts order by provider_id,account_ref`)
-		if queryErr != nil {
-			return Account{}, false, queryErr
+		if selector != "" && selector != "current" {
+			return Account{}, false, ErrInvalidAccountSelector
 		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			if err = rows.Scan(&provider, &ref); err != nil {
-				return Account{}, false, err
-			}
-			if AccountID(provider, ref) == selector {
-				return s.accountByRef(ctx, provider, ref)
+	}
+	accounts, currentIndex, err := listAccountsQuery(ctx, s.db)
+	if err != nil {
+		return Account{}, false, err
+	}
+	selected := -1
+	if selector == "" || selector == "current" {
+		selected = currentIndex
+		if selected < 0 && len(accounts) > 0 {
+			selected = 0
+		}
+	} else {
+		for i := range accounts {
+			if accounts[i].ID == selector || accounts[i].Alias == selector {
+				selected = i
+				break
 			}
 		}
-		return Account{}, false, rows.Err()
 	}
-	err = s.db.QueryRowContext(ctx, `select provider_id,account_ref from accounts where alias=?`, selector).Scan(&provider, &ref)
-	if errors.Is(err, sql.ErrNoRows) {
+	if selected < 0 {
 		return Account{}, false, nil
 	}
-	if err != nil {
-		return Account{}, false, err
-	}
-	return s.accountByRef(ctx, provider, ref)
-}
-
-func (s *Store) accountByRef(ctx context.Context, provider, ref string) (Account, bool, error) {
-	var a Account
-	var first, last string
-	err := s.db.QueryRowContext(ctx, `select provider_id,account_ref,alias,email,plan,first_seen_at,coalesce((select max(observed_at) from limit_observations where provider_id=accounts.provider_id and account_ref=accounts.account_ref),'') from accounts where provider_id=? and account_ref=?`, provider, ref).Scan(&a.ProviderID, &a.Ref, &a.Alias, &a.Email, &a.Plan, &first, &last)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Account{}, false, nil
-	}
-	if err != nil {
-		return Account{}, false, err
-	}
-	a.ID, a.FirstSeenAt = AccountID(a.ProviderID, a.Ref), parseDBTime(first)
-	if last != "" {
-		a.LastSeenAt = parseDBTime(last)
-	}
-	a.SourceRefs, err = s.accountSourceRefs(ctx, a.Ref)
-	if err != nil {
-		return Account{}, false, err
-	}
-	err = s.db.QueryRowContext(ctx, `select exists(select 1 from auth_sources where account_ref=? and enabled=1 and credentials_available=1)`, a.Ref).Scan(&a.CredentialsAvailable)
-	return a, err == nil, err
+	return accounts[selected], true, nil
 }
 
 func (s *Store) SetAccountAlias(ctx context.Context, selector, alias string) error {

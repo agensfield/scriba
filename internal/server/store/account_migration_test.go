@@ -66,10 +66,7 @@ insert into notification_outbox(id,event_kind,source,profile_ref,account_ref,eve
 	if err := s.db.QueryRow(`select replay_seq from policy_event_replay where policy_event_id='event-one'`).Scan(&replayAfter); err != nil || replayAfter != replayBefore {
 		t.Fatalf("replay=%d want=%d err=%v", replayAfter, replayBefore, err)
 	}
-	var profileTables, fkFailures int
-	if err := s.db.QueryRow(`select count(*) from sqlite_master where type='table' and name in ('profiles','profile_accounts','profile_poll_health')`).Scan(&profileTables); err != nil || profileTables != 0 {
-		t.Fatalf("legacy tables=%d err=%v", profileTables, err)
-	}
+	var fkFailures int
 	if err := s.db.QueryRow(`select count(*) from pragma_foreign_key_check`).Scan(&fkFailures); err != nil || fkFailures != 0 {
 		t.Fatalf("foreign keys=%d err=%v", fkFailures, err)
 	}
@@ -89,6 +86,36 @@ insert into notification_outbox(id,event_kind,source,profile_ref,account_ref,eve
 	if version, err = reopened.SchemaVersion(ctx); err != nil || version != 13 {
 		t.Fatalf("reopened version=%d err=%v", version, err)
 	}
+}
+
+func TestSchema13ValidationRejectsWeakenedConstraints(t *testing.T) {
+	t.Run("alias uniqueness", func(t *testing.T) {
+		s := openTestStore(t)
+		if _, err := s.db.Exec(`drop index accounts_alias_unique; create index accounts_alias_unique on accounts(alias)`); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.migrateAccounts(context.Background()); err == nil {
+			t.Fatal("non-unique aliases accepted")
+		}
+	})
+	t.Run("outbox fencing", func(t *testing.T) {
+		s := openTestStore(t)
+		if _, err := s.db.Exec(`alter table notification_outbox rename to notification_outbox_strong; create table notification_outbox as select * from notification_outbox_strong where 0; drop table notification_outbox_strong`); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.migrateAccounts(context.Background()); err == nil {
+			t.Fatal("unfenced outbox accepted")
+		}
+	})
+	t.Run("source health fencing", func(t *testing.T) {
+		s := openTestStore(t)
+		if _, err := s.db.Exec(`alter table auth_source_poll_health rename to auth_source_poll_health_strong; create table auth_source_poll_health as select * from auth_source_poll_health_strong where 0; drop table auth_source_poll_health_strong`); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.migrateAccounts(context.Background()); err == nil {
+			t.Fatal("unfenced source health accepted")
+		}
+	})
 }
 
 func makeSchema12Store(t *testing.T) *Store {

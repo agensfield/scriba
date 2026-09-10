@@ -10,7 +10,7 @@ import (
 
 const accountSchemaSQL = `
 create table auth_sources (
- source_ref text not null primary key check(length(source_ref)=24),
+ source_ref text not null primary key check(length(source_ref)=24 and substr(source_ref,1,4)='src-' and substr(source_ref,5) not glob '*[^0-9a-f]*'),
  enabled integer not null check(enabled in (0,1)),
  priority integer not null check(priority>=0),
  account_ref text,
@@ -197,5 +197,49 @@ func validateAccountSchema(ctx context.Context, q interface {
 	if !cols["alias"] || !cols["first_seen_at"] {
 		return fmt.Errorf("invalid account metadata schema")
 	}
+	for table, fragments := range map[string][]string{
+		"auth_sources": {
+			"source_ref text not null primary key",
+			"check(length(source_ref)=24 and substr(source_ref,1,4)='src-' and substr(source_ref,5) not glob '*[^0-9a-f]*')",
+			"foreign key(account_ref) references accounts(account_ref)",
+			"check(credentials_available=0 or (enabled=1 and account_ref is not null))",
+		},
+		"auth_source_poll_health": {
+			"source_ref text not null primary key",
+			"check(consecutive_failures>=0)",
+			"foreign key(source_ref) references auth_sources(source_ref) on delete cascade",
+		},
+		"notification_outbox": {
+			"unique(event_kind,event_id,target)",
+			"foreign key(account_ref) references accounts(account_ref)",
+			"check((status='leased')=(lease_token is not null and lease_expires_at is not null))",
+			"check((status='delivered')=(delivered_at is not null))",
+			"check((status='dead_letter')=(dead_lettered_at is not null))",
+		},
+	} {
+		var definition string
+		if err = q.QueryRowContext(ctx, `select sql from sqlite_master where type='table' and name=?`, table).Scan(&definition); err != nil {
+			return fmt.Errorf("invalid account schema %s definition: %w", table, err)
+		}
+		normalized := normalizeSchemaSQL(definition)
+		for _, fragment := range fragments {
+			if !strings.Contains(normalized, normalizeSchemaSQL(fragment)) {
+				return fmt.Errorf("invalid account schema %s constraint", table)
+			}
+		}
+	}
+	for name, expected := range map[string]string{
+		"accounts_alias_unique": `create unique index accounts_alias_unique on accounts(alias) where alias<>''`,
+		"auth_sources_priority": `create index auth_sources_priority on auth_sources(enabled,priority,source_ref)`,
+	} {
+		var definition string
+		if err = q.QueryRowContext(ctx, `select sql from sqlite_master where type='index' and name=?`, name).Scan(&definition); err != nil || normalizeSchemaSQL(definition) != normalizeSchemaSQL(expected) {
+			return fmt.Errorf("invalid account schema index %s", name)
+		}
+	}
 	return nil
+}
+
+func normalizeSchemaSQL(value string) string {
+	return strings.ToLower(strings.NewReplacer(" ", "", "\n", "", "\t", "", "\r", "", `"`, "").Replace(value))
 }

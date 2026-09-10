@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -131,5 +132,51 @@ func TestSourceHealthFencing(t *testing.T) {
 	health, err := s.ListSourceHealth(ctx)
 	if err != nil || len(health) != 1 || health[0].ConsecutiveFailures != 1 || health[0].FailureKind != SourceFailureNetwork {
 		t.Fatalf("health=%+v err=%v", health, err)
+	}
+}
+
+func TestAccountReadsDoNotExhaustSingleConnectionPool(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if err := s.SyncAuthSources(ctx, []SourceSpec{{Ref: testSourceA, Enabled: true, Priority: 0}, {Ref: testSourceB, Enabled: true, Priority: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ObserveAuthSource(ctx, testSourceA, resetwatch.Account{Ref: "one", Email: "one@example.com"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ObserveAuthSource(ctx, testSourceB, resetwatch.Account{Ref: "two", Email: "two@example.com"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	s.db.SetMaxOpenConns(1)
+	s.db.SetMaxIdleConns(1)
+	bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := range 8 {
+		wg.Add(1)
+		go func(resolve bool) {
+			defer wg.Done()
+			if resolve {
+				_, ok, err := s.ResolveAccount(bounded, AccountID("codex", "two"))
+				if err == nil && !ok {
+					err = errors.New("account not resolved")
+				}
+				errs <- err
+				return
+			}
+			accounts, err := s.ListAccounts(bounded)
+			if err == nil && len(accounts) != 2 {
+				err = errors.New("account list incomplete")
+			}
+			errs <- err
+		}(i%2 == 0)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
