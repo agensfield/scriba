@@ -867,7 +867,7 @@ func renderCodexActivity(profile remotecodex.ProfileResult) string {
 		if profile.AuthState.Error != "" {
 			fmt.Fprintf(&b, "%s\n", cliYellow(profile.AuthState.Error))
 		} else {
-			fmt.Fprintf(&b, "%s\n", cliYellow("profile unavailable"))
+			fmt.Fprintf(&b, "%s\n", cliYellow("account unavailable"))
 		}
 		return strings.TrimRight(b.String(), "\n")
 	}
