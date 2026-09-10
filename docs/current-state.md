@@ -61,8 +61,8 @@ any live host.
 - Account observations, policy state/events, warnings, and outbox rows remain
   account-scoped. Radar alerts remain global and accountless.
 - Retention preserves pending/leased work, monotonic replay high-water state,
-  and one explicit prune floor per account. Backups and restore remain
-  stop-the-service operations.
+  and one explicit prune floor per account. Backups use verified online
+  snapshots; schema cutovers and restores require a stopped service.
 
 ### Public surfaces
 
