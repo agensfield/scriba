@@ -10,10 +10,9 @@ import (
 )
 
 var publicOutputSchemaNames = []string{
-	"status", "accounts", "codex-limits", "codex-profile", "codex-reset-grants", "codex-reset", "budget",
+	"status", "accounts", "codex-limits", "codex-activity", "codex-reset-grants", "codex-reset", "budget",
 	"policy-validate", "policy-list", "policy-explain", "outbox-list",
 	"context", "event", "events", "local-health", "local-error",
-	"profiles",
 	"notification",
 }
 
@@ -55,12 +54,12 @@ func TestPublicOutputSchemasAllowOptionalOmissions(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..", "schemas")
 	cases := map[string]any{
-		"accounts":             map[string]any{"schemaVersion": "scriba.accounts.v1", "accounts": []any{}},
+		"accounts":           map[string]any{"schemaVersion": "scriba.accounts.v1", "accounts": []any{}},
 		"status":             map[string]any{"schemaVersion": "scriba.v1", "generatedAt": "2026-07-12T09:00:00Z", "providers": []any{}},
-		"codex-limits":       map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "status-cache", "mode": "fast", "lines": []any{}},
-		"codex-profile":      map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-profile-backend", "profile": map[string]any{}, "stats": map[string]any{}, "metadata": map[string]any{}, "authState": map[string]any{"ok": false}},
-		"codex-reset-grants": map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-backend", "mode": "live", "authState": map[string]any{"ok": false}, "resetCredits": []any{}, "summary": map[string]any{"available": 0}},
-		"codex-reset":        map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-backend", "dryRun": true, "outcome": "planned", "windowsReset": 0, "availableBefore": 1, "credit": map[string]any{"id": "credit-1"}, "authState": map[string]any{"ok": true}},
+		"codex-limits":       map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "status-cache", "mode": "fast", "accountId": "acct-0123456789abcdef0123", "credentialsAvailable": false, "lines": []any{}},
+		"codex-activity":     map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-profile-backend", "accountId": "acct-0123456789abcdef0123", "credentialsAvailable": false, "profile": map[string]any{}, "stats": map[string]any{}, "metadata": map[string]any{}, "authState": map[string]any{"ok": false}},
+		"codex-reset-grants": map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-backend", "mode": "live", "accountId": "acct-0123456789abcdef0123", "credentialsAvailable": false, "authState": map[string]any{"ok": false}, "resetCredits": []any{}, "summary": map[string]any{"available": 0}},
+		"codex-reset":        map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-backend", "accountId": "acct-0123456789abcdef0123", "credentialsAvailable": true, "dryRun": true, "outcome": "planned", "windowsReset": 0, "availableBefore": 1, "credit": map[string]any{"id": "credit-1"}, "authState": map[string]any{"ok": true}},
 		"policy-validate":    map[string]any{"schemaVersion": "scriba.policy-validate.v1", "valid": false, "file": "invalid.json", "rules": []any{}, "errors": []any{"invalid policy"}},
 		"context": map[string]any{"schemaVersion": "scriba.context.v2", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{
 			map[string]any{"sourceId": "codex-quota", "kind": "quota", "availability": "unavailable", "provenance": []any{map[string]any{"source": "status-cache"}}, "reasonCode": "missing"},
@@ -87,7 +86,6 @@ func TestAgentSchemasRejectNonAllowlistedFields(t *testing.T) {
 		{"context-account", "context", map[string]any{"schemaVersion": "scriba.context.v2", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{}, "providers": []any{}, "events": []any{}, "accountRef": "secret"}},
 		{"context-config", "context", map[string]any{"schemaVersion": "scriba.context.v2", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{}, "providers": []any{}, "events": []any{}, "configHash": "secret"}},
 		{"events-account", "events", map[string]any{"schemaVersion": "scriba.events.v2", "generatedAt": "2026-07-12T12:00:00Z", "accountId": "acct-00000000000000000001", "events": []any{}, "cursor": map[string]any{"next": "v1.0000000000000000", "highWater": "v1.0000000000000000"}, "accountRef": "secret"}},
-		{"profiles-auth", "profiles", map[string]any{"schemaVersion": "scriba.profiles.v1", "defaultProfileId": "default", "profiles": []any{map[string]any{"profileId": "default", "label": "Default", "isDefault": true, "status": "ok", "consecutiveFailures": 0, "isStale": false, "auth": "/secret/auth.json"}}}},
 	}
 	for _, field := range []string{"creditId", "grantId", "ruleId", "accountRef", "snapshot", "target", "chatId", "configHash", "semanticKey"} {
 		data := map[string]any{"windowKey": "primary.weekly", "checkpointPercent": 20, "usedPercent": 80, "remainingPercentPoints": 20, field: "secret"}
