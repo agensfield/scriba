@@ -49,6 +49,7 @@ func TestBuildCodexAccountRoutesConfiguredSource(t *testing.T) {
 	cfg.Server.StatePath = filepath.Join(dir, "server.sqlite")
 	cfg.CodexAuthPaths = []string{authA, authB}
 	cfg.Providers.Claude.Enabled = false
+	cfg.Providers.Codex.Paths = []string{filepath.Join(dir, "codex-logs")}
 	st, err := store.Open(cfg.Server.StatePath)
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +91,7 @@ func TestBuildCodexAccountUsesStoredObservationWithoutRemote(t *testing.T) {
 	cfg.Server.StatePath = filepath.Join(dir, "server.sqlite")
 	cfg.CodexAuthPaths = []string{filepath.Join(dir, "missing-auth.json")}
 	cfg.Providers.Claude.Enabled = false
+	cfg.Providers.Codex.Paths = []string{filepath.Join(dir, "codex-logs")}
 	st, err := store.Open(cfg.Server.StatePath)
 	if err != nil {
 		t.Fatal(err)
