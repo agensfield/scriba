@@ -7,9 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agensfield/scriba/internal/budgetadapter"
-	"github.com/agensfield/scriba/internal/cache"
-	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
@@ -40,31 +37,38 @@ func (s *Service) Events(ctx context.Context, request EventPageRequest) (EventPa
 	if s.config.Clock != nil {
 		now = s.config.Clock().UTC()
 	}
-	profile, err := s.selectProfile(request.ProfileID)
-	if err != nil {
-		return EventPage{}, err
-	}
-
-	selected, available, err := s.selectedCodex(ctx, profile)
-	if err != nil {
-		if ctx.Err() != nil {
-			return EventPage{}, ctx.Err()
-		}
-		return EventPage{}, pageError("read_error")
-	}
-	if !available || !selected.fromStore || selected.obs.Account.Ref == "" {
-		return EventPage{}, pageError("events_unavailable")
-	}
 	st, err := store.OpenReadOnlyContext(ctx, s.config.StorePath)
 	if err != nil {
 		if ctx.Err() != nil {
 			return EventPage{}, ctx.Err()
 		}
+		if request.Account != "" {
+			return EventPage{}, &AccountError{ReasonCode: "account_unavailable"}
+		}
 		return EventPage{}, pageError("read_error")
 	}
 	defer func() { _ = st.Close() }()
+	account, ok, err := st.ResolveAccount(ctx, request.Account)
+	if err != nil {
+		if ctx.Err() != nil {
+			return EventPage{}, ctx.Err()
+		}
+		if request.Account != "" {
+			return EventPage{}, &AccountError{ReasonCode: "account_unavailable"}
+		}
+		return EventPage{}, pageError("read_error")
+	}
+	if !ok {
+		if request.Account != "" {
+			return EventPage{}, &AccountError{ReasonCode: "account_unavailable"}
+		}
+		return EventPage{}, pageError("events_unavailable")
+	}
+	if account.ProviderID != "codex" || account.Ref == "" {
+		return EventPage{}, pageError("events_unavailable")
+	}
 
-	meta, err := st.LoadPolicyEventReplay(ctx, "codex", selected.obs.Account.Ref, 0, 0, 1)
+	meta, err := st.LoadPolicyEventReplay(ctx, "codex", account.Ref, 0, 0, 1)
 	if err != nil {
 		if ctx.Err() != nil {
 			return EventPage{}, ctx.Err()
@@ -75,14 +79,14 @@ func (s *Service) Events(ctx context.Context, request EventPageRequest) (EventPa
 		after = meta.HighWater
 	}
 	if request.Mode == "latest" {
-		page, loadErr := st.LoadLatestPolicyEventReplay(ctx, "codex", selected.obs.Account.Ref, meta.HighWater, request.Limit)
+		page, loadErr := st.LoadLatestPolicyEventReplay(ctx, "codex", account.Ref, meta.HighWater, request.Limit)
 		if loadErr != nil {
 			if ctx.Err() != nil {
 				return EventPage{}, ctx.Err()
 			}
 			return EventPage{}, pageError("read_error")
 		}
-		return publicReplayPage(page, profile, now), nil
+		return publicReplayPage(page, account.ID, now), nil
 	}
 	if after > meta.HighWater {
 		return EventPage{}, pageError("cursor_future")
@@ -91,7 +95,7 @@ func (s *Service) Events(ctx context.Context, request EventPageRequest) (EventPa
 		return EventPage{}, pageError("cursor_expired")
 	}
 
-	batch, loadErr := st.LoadPolicyEventReplay(ctx, "codex", selected.obs.Account.Ref, after, meta.HighWater, request.Limit)
+	batch, loadErr := st.LoadPolicyEventReplay(ctx, "codex", account.Ref, after, meta.HighWater, request.Limit)
 	if loadErr != nil {
 		if ctx.Err() != nil {
 			return EventPage{}, ctx.Err()
@@ -101,7 +105,7 @@ func (s *Service) Events(ctx context.Context, request EventPageRequest) (EventPa
 	if cursorExpired(after, batch.PrunedThrough) {
 		return EventPage{}, pageError("cursor_expired")
 	}
-	return publicReplayPage(batch, profile, now), nil
+	return publicReplayPage(batch, account.ID, now), nil
 }
 
 func cursorExpired(after, prunedThrough int64) bool {
@@ -127,51 +131,6 @@ func parseEventCursor(value string) (int64, error) {
 	return seq, nil
 }
 
-func (s *Service) selectedCodex(ctx context.Context, profile string) (candidate, bool, error) {
-	var cached candidate
-	haveCache := false
-	c, err := cache.OpenReadOnlyContext(ctx, s.config.CacheDir)
-	if err == nil {
-		snapshot, loadErr := c.LoadStatusSnapshotContext(ctx)
-		_ = c.Close()
-		if loadErr == nil && snapshot != nil {
-			cached, haveCache = candidatesFromSnapshot(*snapshot)["codex"]
-		}
-	}
-	if ctx.Err() != nil {
-		return candidate{}, false, ctx.Err()
-	}
-	st, err := store.OpenReadOnlyContext(ctx, s.config.StorePath)
-	if err != nil {
-		if haveCache {
-			return cached, true, nil
-		}
-		return candidate{}, false, err
-	}
-	defer func() { _ = st.Close() }()
-	var o resetwatch.Observation
-	var ok bool
-	if len(s.config.ProfileIDs) > 0 {
-		o, ok, err = st.LoadLatestObservationForProfile(ctx, profile)
-	} else {
-		o, ok, err = st.LoadLatestObservationForProvider(ctx, "codex")
-	}
-	if err != nil {
-		return candidate{}, false, err
-	}
-	stored := candidate{}
-	if ok && len(budgetadapter.FromResetwatch(o).Windows) > 0 {
-		stored = candidate{obs: o, provenance: "provider-api", fromStore: true, grantAt: o.ObservedAt}
-	}
-	if len(s.config.ProfileIDs) > 0 {
-		return stored, validCandidate(stored), nil
-	}
-	if validCandidate(stored) && (!haveCache || !stored.obs.ObservedAt.Before(cached.obs.ObservedAt)) {
-		return stored, true, nil
-	}
-	return cached, haveCache, nil
-}
-
 func replayRecord(raw store.PolicyReplayEvent) (store.AgentEventRecord, bool) {
 	if raw.PolicyEventID == "" {
 		return store.AgentEventRecord{}, false
@@ -180,11 +139,11 @@ func replayRecord(raw store.PolicyReplayEvent) (store.AgentEventRecord, bool) {
 	return r, err == nil
 }
 
-func publicReplayPage(page store.PolicyReplayPage, profile string, now time.Time) EventPage {
-	out := EventPage{SchemaVersion: EventsSchemaVersion, GeneratedAt: now, Events: []Event{}}
+func publicReplayPage(page store.PolicyReplayPage, accountID string, now time.Time) EventPage {
+	out := EventPage{SchemaVersion: EventsSchemaVersion, GeneratedAt: now, AccountID: accountID, Events: []Event{}}
 	for _, raw := range page.Events {
 		if r, ok := replayRecord(raw); ok {
-			if e, ok := minimize(r, profile); ok {
+			if e, ok := minimize(r, accountID); ok {
 				out.Events = append(out.Events, e)
 			}
 		}

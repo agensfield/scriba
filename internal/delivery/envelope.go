@@ -13,14 +13,14 @@ import (
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
-const SchemaVersion = "scriba.notification.v1"
+const SchemaVersion = "scriba.notification.v2"
 
 type Envelope struct {
 	SchemaVersion string          `json:"schemaVersion"`
 	EventID       string          `json:"eventId"`
 	EventKind     string          `json:"eventKind"`
 	Source        string          `json:"source"`
-	ProfileID     string          `json:"profileId,omitempty"`
+	AccountID     string          `json:"accountId,omitempty"`
 	OccurredAt    time.Time       `json:"occurredAt"`
 	Data          json.RawMessage `json:"data"`
 }
@@ -36,28 +36,25 @@ func FromOutbox(message store.OutboxMessage) (Envelope, error) {
 	case resetwatch.Event:
 		occurredAt = event.DetectedAt
 		data = struct {
-			AccountLabel           string    `json:"accountLabel,omitempty"`
 			PrimaryTriggerLabel    string    `json:"primaryTriggerLabel"`
 			SecondaryTriggerLabels []string  `json:"secondaryTriggerLabels"`
 			ResetKind              string    `json:"resetKind"`
 			PreviousResetAt        time.Time `json:"previousResetAt"`
 			CurrentResetAt         time.Time `json:"currentResetAt"`
 			JokeID                 string    `json:"jokeId,omitempty"`
-		}{bounded(event.Account.Label, 128), bounded(event.PrimaryTriggerLabel, 128), boundedStrings(event.SecondaryTriggerLabels, 8, 128), bounded(event.ResetKind, 64), event.PreviousResetAt, event.CurrentResetAt, bounded(event.JokeID, 128)}
+		}{bounded(event.PrimaryTriggerLabel, 128), boundedStrings(event.SecondaryTriggerLabels, 8, 128), bounded(event.ResetKind, 64), event.PreviousResetAt, event.CurrentResetAt, bounded(event.JokeID, 128)}
 	case resetwatch.WarningEvent:
 		occurredAt = event.DetectedAt
 		data = struct {
-			AccountLabel       string    `json:"accountLabel,omitempty"`
 			Label              string    `json:"label"`
 			ThresholdRemaining int       `json:"thresholdRemaining"`
 			UsedPercent        float64   `json:"usedPercent"`
 			RemainingPercent   float64   `json:"remainingPercent"`
 			ResetAt            time.Time `json:"resetAt"`
-		}{bounded(event.Account.Label, 128), bounded(event.Label, 128), event.ThresholdRemaining, event.UsedPercent, event.RemainingPercent, event.ResetAt}
+		}{bounded(event.Label, 128), event.ThresholdRemaining, event.UsedPercent, event.RemainingPercent, event.ResetAt}
 	case budget.PacingAlert:
 		occurredAt = event.DetectedAt
 		data = struct {
-			AccountLabel          string    `json:"accountLabel,omitempty"`
 			WindowKey             string    `json:"windowKey"`
 			Label                 string    `json:"label"`
 			Risk                  string    `json:"risk"`
@@ -68,25 +65,23 @@ func FromOutbox(message store.OutboxMessage) (Envelope, error) {
 			SafePerHour           float64   `json:"safePercentPointsPerHour"`
 			ProjectedExhaustionAt time.Time `json:"projectedExhaustionAt"`
 			ResetAt               time.Time `json:"resetAt"`
-		}{bounded(event.AccountLabel, 128), bounded(event.WindowKey, 128), bounded(event.Label, 128), event.Risk, event.Confidence, event.UsedPercent, event.RemainingPercentPoints, event.PacePercentPointsPerHour, event.SafePercentPointsPerHour, event.ProjectedExhaustionAt, event.ResetAt}
+		}{bounded(event.WindowKey, 128), bounded(event.Label, 128), event.Risk, event.Confidence, event.UsedPercent, event.RemainingPercentPoints, event.PacePercentPointsPerHour, event.SafePercentPointsPerHour, event.ProjectedExhaustionAt, event.ResetAt}
 	case resetwatch.GrantExpiryWarning:
 		occurredAt = event.DetectedAt
 		data = struct {
-			AccountLabel  string    `json:"accountLabel,omitempty"`
 			CreditTitle   string    `json:"creditTitle,omitempty"`
 			ThresholdDays int       `json:"thresholdDays"`
 			ExpiresAt     time.Time `json:"expiresAt"`
-		}{bounded(event.Account.Label, 128), bounded(event.CreditTitle, 128), event.ThresholdDays, event.ExpiresAt}
+		}{bounded(event.CreditTitle, 128), event.ThresholdDays, event.ExpiresAt}
 	case resetwatch.ResetGrantEvent:
 		occurredAt = event.DetectedAt
 		data = struct {
-			AccountLabel   string    `json:"accountLabel,omitempty"`
 			CreditTitle    string    `json:"creditTitle,omitempty"`
 			ResetType      string    `json:"resetType,omitempty"`
 			GrantedAt      time.Time `json:"grantedAt"`
 			ExpiresAt      time.Time `json:"expiresAt"`
 			AvailableCount int       `json:"availableCount"`
-		}{bounded(event.Account.Label, 128), bounded(event.CreditTitle, 128), bounded(event.ResetType, 64), event.GrantedAt, event.ExpiresAt, event.AvailableCount}
+		}{bounded(event.CreditTitle, 128), bounded(event.ResetType, 64), event.GrantedAt, event.ExpiresAt, event.AvailableCount}
 	case radar.ProbabilityAlert:
 		occurredAt = event.DetectedAt
 		data = struct {
@@ -104,16 +99,27 @@ func FromOutbox(message store.OutboxMessage) (Envelope, error) {
 	if occurredAt.IsZero() {
 		return Envelope{}, errors.New("notification occurrence time is required")
 	}
+	accountID := ""
+	if message.AccountRef != "" {
+		// Account-scoped durable delivery kinds are produced by the Codex watcher.
+		// The immutable v1 payloads intentionally do not repeat provider identity.
+		accountID = store.AccountID(resetwatch.ProviderCodex, message.AccountRef)
+	} else if _, ok := payload.(radar.ProbabilityAlert); !ok {
+		return Envelope{}, errors.New("notification account is required")
+	}
 	body, err := json.Marshal(data)
 	if err != nil {
 		return Envelope{}, err
 	}
-	return Envelope{SchemaVersion: SchemaVersion, EventID: message.EventID, EventKind: message.EventKind, Source: message.Source, ProfileID: message.ProfileRef, OccurredAt: occurredAt.UTC(), Data: body}, nil
+	return Envelope{SchemaVersion: SchemaVersion, EventID: message.EventID, EventKind: message.EventKind, Source: message.Source, AccountID: accountID, OccurredAt: occurredAt.UTC(), Data: body}, nil
 }
 
 func Marshal(envelope Envelope) ([]byte, error) {
 	if envelope.SchemaVersion != SchemaVersion || envelope.EventID == "" || envelope.EventKind == "" || envelope.Source == "" || envelope.OccurredAt.IsZero() || !json.Valid(envelope.Data) {
 		return nil, errors.New("invalid notification envelope")
+	}
+	if (envelope.EventKind == "radar_alert") != (envelope.AccountID == "") {
+		return nil, errors.New("invalid notification account scope")
 	}
 	return json.Marshal(envelope)
 }

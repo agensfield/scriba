@@ -19,7 +19,7 @@ func TestHealthIsMinimizedAndAllowlisted(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	want := `{"schemaVersion":"scriba.local.health.v1","status":"ok","contextVersion":"scriba.context.v1","eventVersion":"scriba.events.v1"}`
+	want := `{"schemaVersion":"scriba.local.health.v1","status":"ok","contextVersion":"scriba.context.v2","eventVersion":"scriba.events.v2"}`
 	if strings.TrimSpace(w.Body.String()) != want {
 		t.Fatalf("body = %s", w.Body.String())
 	}
@@ -91,30 +91,36 @@ func TestRequestedCursorRejectsDuplicatesAndNonCanonicalValues(t *testing.T) {
 	}
 }
 
-func TestRequestedProfile(t *testing.T) {
-	for _, tc := range []struct{ path, profile, code string }{
+func TestRequestedAccount(t *testing.T) {
+	for _, tc := range []struct{ path, account, code string }{
 		{"/v1/context", "", ""},
-		{"/v1/context?profile=work", "work", ""},
-		{"/v1/context?profile=", "", "invalid_profile"},
-		{"/v1/context?profile=%20work", "", "invalid_profile"},
-		{"/v1/context?profile=one&profile=two", "", "invalid_profile"},
-		{"/v1/context?profile=work;bad=x", "", "invalid_profile"},
+		{"/v1/context?account=work", "work", ""},
+		{"/v1/context?account=", "", "invalid_account"},
+		{"/v1/context?account=%20work", "", "invalid_account"},
+		{"/v1/context?account=one&account=two", "", "invalid_account"},
+		{"/v1/context?account=work;bad=x", "", "invalid_account"},
+		{"/v1/context?profile=work", "", "invalid_account"},
+		{"/v1/context?cursor=v1.0000000000000000", "", "invalid_account"},
 	} {
 		r := httptest.NewRequest(http.MethodGet, tc.path, nil)
-		profile, code := requestedProfile(r)
-		if profile != tc.profile || code != tc.code {
-			t.Fatalf("%s: got (%q, %q), want (%q, %q)", tc.path, profile, code, tc.profile, tc.code)
+		account, code := requestedAccount(r, false)
+		if account != tc.account || code != tc.code {
+			t.Fatalf("%s: got (%q, %q), want (%q, %q)", tc.path, account, code, tc.account, tc.code)
 		}
+	}
+	r := httptest.NewRequest(http.MethodGet, "/v1/events?account=work&cursor=v1.0000000000000000", nil)
+	if account, code := requestedAccount(r, true); account != "work" || code != "" {
+		t.Fatalf("events selector: got (%q, %q)", account, code)
 	}
 }
 
-func TestHTTPRejectsUnknownConfiguredProfile(t *testing.T) {
-	s := NewHTTPServer(nil, agentcontext.New(agentcontext.Config{DefaultProfileID: "default", ProfileIDs: []string{"default"}}), HTTPConfig{})
-	for _, path := range []string{"/v1/context?profile=unknown", "/v1/events?profile=unknown"} {
+func TestHTTPRejectsUnknownAccount(t *testing.T) {
+	s := NewHTTPServer(nil, agentcontext.New(agentcontext.Config{StorePath: t.TempDir() + "/missing.sqlite"}), HTTPConfig{})
+	for _, path := range []string{"/v1/context?account=unknown", "/v1/events?account=unknown"} {
 		r := httptest.NewRequest(http.MethodGet, path, nil)
 		w := httptest.NewRecorder()
 		s.server.Handler.ServeHTTP(w, r)
-		if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "profile_unavailable") {
+		if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "account_unavailable") {
 			t.Fatalf("%s: status=%d body=%s", path, w.Code, w.Body.String())
 		}
 	}

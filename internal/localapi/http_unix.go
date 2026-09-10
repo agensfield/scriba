@@ -18,7 +18,7 @@ import (
 
 const (
 	healthSchemaVersion = "scriba.local.health.v1"
-	streamEventName     = "scriba.event.v1"
+	streamEventName     = "scriba.event.v2"
 )
 
 type HTTPConfig struct {
@@ -156,16 +156,16 @@ func (s *HTTPServer) context(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.requestTimeout)
 	defer cancel()
-	profile, bad := requestedProfile(r)
+	account, bad := requestedAccount(r, false)
 	if bad != "" {
 		writeError(w, http.StatusBadRequest, bad)
 		return
 	}
-	value, err := s.service.ContextForProfile(ctx, profile)
+	value, err := s.service.ContextForAccount(ctx, account)
 	if err != nil {
-		var profileErr *agentcontext.ProfileError
-		if errors.As(err, &profileErr) {
-			writeError(w, http.StatusNotFound, profileErr.ReasonCode)
+		var accountErr *agentcontext.AccountError
+		if errors.As(err, &accountErr) {
+			writeError(w, http.StatusNotFound, accountErr.ReasonCode)
 			return
 		}
 		writeError(w, http.StatusServiceUnavailable, "context_unavailable")
@@ -174,23 +174,28 @@ func (s *HTTPServer) context(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, value)
 }
 
-func requestedProfile(r *http.Request) (string, string) {
+func requestedAccount(r *http.Request, allowCursor bool) (string, string) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		return "", "invalid_profile"
+		return "", "invalid_account"
 	}
-	values := query["profile"]
+	for key := range query {
+		if key != "account" && !(allowCursor && key == "cursor") {
+			return "", "invalid_account"
+		}
+	}
+	values := query["account"]
 	if len(values) > 1 {
-		return "", "invalid_profile"
+		return "", "invalid_account"
 	}
 	if len(values) == 0 {
 		return "", ""
 	}
-	profile := values[0]
-	if profile == "" || profile != strings.TrimSpace(profile) {
-		return "", "invalid_profile"
+	account := values[0]
+	if account == "" || account != strings.TrimSpace(account) {
+		return "", "invalid_account"
 	}
-	return profile, ""
+	return account, ""
 }
 
 func requestedCursor(r *http.Request) (string, string) {
@@ -223,9 +228,9 @@ func requestedCursor(r *http.Request) (string, string) {
 	return query, ""
 }
 func eventError(err error) string {
-	var profile *agentcontext.ProfileError
-	if errors.As(err, &profile) && profile.ReasonCode == "profile_unavailable" {
-		return profile.ReasonCode
+	var account *agentcontext.AccountError
+	if errors.As(err, &account) && account.ReasonCode == "account_unavailable" {
+		return account.ReasonCode
 	}
 	var page *agentcontext.EventPageError
 	if errors.As(err, &page) {
@@ -237,7 +242,7 @@ func eventError(err error) string {
 	return "events_unavailable"
 }
 func statusForEventError(code string) int {
-	if code == "profile_unavailable" {
+	if code == "account_unavailable" {
 		return http.StatusNotFound
 	}
 	if code == "cursor_expired" {
@@ -258,7 +263,7 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, bad)
 		return
 	}
-	profile, bad := requestedProfile(r)
+	account, bad := requestedAccount(r, true)
 	if bad != "" {
 		writeError(w, http.StatusBadRequest, bad)
 		return
@@ -274,12 +279,13 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 	if cursor == "" {
 		mode = "capture"
 	}
-	page, err := s.eventPage(r.Context(), mode, cursor, profile)
+	page, err := s.eventPage(r.Context(), mode, cursor, account)
 	if err != nil {
 		code := eventError(err)
 		writeError(w, statusForEventError(code), code)
 		return
 	}
+	pinnedAccount := page.AccountID
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -288,7 +294,7 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 	if !s.writeFrame(r.Context(), controller, w, ": connected\n\n") {
 		return
 	}
-	cursor, ok := s.drain(r.Context(), controller, w, cursor, page, profile)
+	cursor, ok := s.drain(r.Context(), controller, w, cursor, page, pinnedAccount)
 	if !ok {
 		return
 	}
@@ -305,7 +311,7 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-poll.C:
-			page, err = s.eventPage(r.Context(), "replay", cursor, profile)
+			page, err = s.eventPage(r.Context(), "replay", cursor, pinnedAccount)
 			if err != nil {
 				code := eventError(err)
 				if code == "cursor_expired" {
@@ -313,7 +319,7 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			cursor, ok = s.drain(r.Context(), controller, w, cursor, page, profile)
+			cursor, ok = s.drain(r.Context(), controller, w, cursor, page, pinnedAccount)
 			if !ok {
 				return
 			}
@@ -321,13 +327,13 @@ func (s *HTTPServer) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *HTTPServer) eventPage(parent context.Context, mode, cursor, profile string) (agentcontext.EventPage, error) {
+func (s *HTTPServer) eventPage(parent context.Context, mode, cursor, account string) (agentcontext.EventPage, error) {
 	ctx, cancel := context.WithTimeout(parent, s.requestTimeout)
 	defer cancel()
-	return s.service.Events(ctx, agentcontext.EventPageRequest{Mode: mode, Cursor: cursor, Limit: 1, ProfileID: profile})
+	return s.service.Events(ctx, agentcontext.EventPageRequest{Mode: mode, Cursor: cursor, Limit: 1, Account: account})
 }
 
-func (s *HTTPServer) drain(ctx context.Context, controller *http.ResponseController, w http.ResponseWriter, cursor string, page agentcontext.EventPage, profile string) (string, bool) {
+func (s *HTTPServer) drain(ctx context.Context, controller *http.ResponseController, w http.ResponseWriter, cursor string, page agentcontext.EventPage, account string) (string, bool) {
 	for {
 		next := page.Cursor.Next
 		if len(page.Events) > 0 {
@@ -347,7 +353,7 @@ func (s *HTTPServer) drain(ctx context.Context, controller *http.ResponseControl
 			return cursor, true
 		}
 		var err error
-		page, err = s.eventPage(ctx, "replay", cursor, profile)
+		page, err = s.eventPage(ctx, "replay", cursor, account)
 		if err != nil {
 			if eventError(err) == "cursor_expired" {
 				_ = s.writeFrame(ctx, controller, w, "event: cursor_expired\ndata: {\"reasonCode\":\"cursor_expired\"}\n\n")

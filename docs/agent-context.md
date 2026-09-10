@@ -4,24 +4,25 @@ Wave 3.1 ships one read-only, allowlisted context projection for local agents:
 
 ```sh
 scriba context --json
-scriba context --json --profile work
+scriba context --json --account work
 ```
 
-The command is JSON-only and publishes `scriba.context.v1`, validated by
+The command is JSON-only and publishes `scriba.context.v2`, validated by
 [`schemas/context.schema.json`](../schemas/context.schema.json). It contains a
-generation timestamp, source status, provider/profile quota windows and
+generation timestamp, source status, account-scoped quota windows and
 budgets, reset-grant summary, and minimized durable policy events. Omitting
-`--profile` selects the configured enabled default; an explicit profile must be
-one of the enabled stable IDs in config.
+`--account` uses durable current source bindings, then the latest historical
+account when no source is active. Explicit public IDs and aliases fail closed.
 
 ## Source Selection and Partial Results
 
 Scriba reads the status cache and server store without refreshing a provider.
-Claude context comes from the cached status snapshot. Codex resolves the
-selected profile through the durable current profile/account mapping, then
+Claude context comes from the cached status snapshot and is explicitly
+unattributed because session logs establish neither provider account identity
+nor credential availability. Codex resolves the selected account, then
 loads only that account's latest observation, budget history, and minimized
-policy events. An unrelated newer Codex cache snapshot can never override the
-selected account.
+policy events. Historical accounts remain readable after credentials disappear.
+An anonymous Codex cache snapshot can never override a selected account.
 
 Each provider has four independently reported sources: `quota`, `budget`,
 `grants`, and `policy-events`. Missing or unreadable inputs do not erase healthy
@@ -40,7 +41,10 @@ provider-neutral confidence and reason arrays.
 
 The contract is an allowlist, not a redacted dump. It may expose only:
 
-- provider IDs and the selected stable configured profile ID;
+- provider IDs, stable public account IDs, optional safe aliases, and credential
+  availability;
+- explicitly unattributed Claude session-log usage, without identity or
+  credential claims;
 - normalized quota window percentages and reset timestamps;
 - derived budget risk, confidence, and reason codes;
 - reset-grant count and earliest available expiry;
@@ -66,7 +70,7 @@ sidecar bytes.
 
 The same service is now exposed through three read-only surfaces:
 
-- `scriba context --json [--profile <id>]` returns `scriba.context.v1`.
+- `scriba context --json [--account <id-or-alias>]` returns `scriba.context.v2`.
 - An opt-in owner-only Unix API serves `GET /v1/health`, `GET /v1/context`,
   and replayable SSE at `GET /v1/events`.
 - `scriba mcp` runs a stdio MCP server with exactly two tools:
@@ -79,13 +83,14 @@ The socket parent is private (`0700`) and the socket is mode `0600`. This is a
 same-UID trust boundary, not isolation from malicious code already running as
 the same user. TCP and bearer-authenticated network serving remain absent.
 
-Context and event requests accept `?profile=<id>`; omission selects the enabled
-default. MCP accepts the same optional `profile` argument on both tools.
-Unknown, disabled, duplicate, empty, or whitespace-padded selections fail with
-a bounded code and never fall back to another account.
+Context and event requests accept `?account=<id-or-alias>`; omission uses the
+durable default selection. MCP accepts the same optional `account` argument on
+both tools. Unknown, duplicate, empty, or whitespace-padded selections fail
+with a bounded code and never fall back to another account.
 
 SSE clients reconnect with `Last-Event-ID` or `?cursor=` and repeat the same
-profile selector on reconnect. New connections
+account selector on reconnect. A live stream captures its public account ID
+once, so later auth-source changes cannot switch its event scope. New connections
 capture the current high-water and tail future events; cursor
 `v1.0000000000000000` requests retained history. Expired cursors return `410`,
 future or malformed cursors return `400`, and heartbeats never advance the
@@ -96,9 +101,10 @@ event receives a transactional monotonic replay sequence, and existing events
 backfilled once in deterministic order. The sequence replaces unsafe
 timestamp/hash ordering.
 
-Commit `8b6272e` defines the shared page contract as `scriba.events.v1`.
-Its account-free fixed-width cursors support explicit replay, latest-page
-inspection, and capture-current tailing. Schema v10 preserves tombstones and
+Commit `8b6272e` established the original page contract. The current
+`scriba.events.v2` envelope binds both the page and each `scriba.event.v2`
+record to a public account ID. Its fixed-width cursors support explicit replay,
+latest-page inspection, and capture-current tailing. Schema v10 preserves tombstones and
 durable high-water state across retention, while malformed rows consume only a
 bounded scan slot and never leak raw payloads. Commits `29fd69a`, `e157b66`,
 and `249991d` implement and expose the Unix API and stdio MCP adapters. A shared

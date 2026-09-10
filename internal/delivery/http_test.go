@@ -14,7 +14,7 @@ import (
 )
 
 func fixtureEnvelope() Envelope {
-	return Envelope{SchemaVersion: SchemaVersion, EventID: "event-1", EventKind: "limit_warning", Source: "test", ProfileID: "default", OccurredAt: time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC), Data: json.RawMessage(`{"usedPercent":81}`)}
+	return Envelope{SchemaVersion: SchemaVersion, EventID: "event-1", EventKind: "limit_warning", Source: "test", AccountID: "acct-00000000000000000001", OccurredAt: time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC), Data: json.RawMessage(`{"usedPercent":81}`)}
 }
 
 func TestWebhookSignsExactBodyAndDoesNotFollowRedirects(t *testing.T) {

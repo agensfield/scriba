@@ -61,7 +61,7 @@ func TestPublicOutputSchemasAllowOptionalOmissions(t *testing.T) {
 		"codex-reset-grants": map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-backend", "mode": "live", "authState": map[string]any{"ok": false}, "resetCredits": []any{}, "summary": map[string]any{"available": 0}},
 		"codex-reset":        map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "source": "chatgpt-codex-backend", "dryRun": true, "outcome": "planned", "windowsReset": 0, "availableBefore": 1, "credit": map[string]any{"id": "credit-1"}, "authState": map[string]any{"ok": true}},
 		"policy-validate":    map[string]any{"schemaVersion": "scriba.policy-validate.v1", "valid": false, "file": "invalid.json", "rules": []any{}, "errors": []any{"invalid policy"}},
-		"context": map[string]any{"schemaVersion": "scriba.context.v1", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{
+		"context": map[string]any{"schemaVersion": "scriba.context.v2", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{
 			map[string]any{"sourceId": "codex-quota", "kind": "quota", "availability": "unavailable", "provenance": []any{map[string]any{"source": "status-cache"}}, "reasonCode": "missing"},
 		}, "providers": []any{}, "events": []any{}},
 	}
@@ -83,9 +83,9 @@ func TestAgentSchemasRejectNonAllowlistedFields(t *testing.T) {
 		name, schema string
 		payload      any
 	}{
-		{"context-account", "context", map[string]any{"schemaVersion": "scriba.context.v1", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{}, "providers": []any{}, "events": []any{}, "accountRef": "secret"}},
-		{"context-config", "context", map[string]any{"schemaVersion": "scriba.context.v1", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{}, "providers": []any{}, "events": []any{}, "configHash": "secret"}},
-		{"events-account", "events", map[string]any{"schemaVersion": "scriba.events.v1", "generatedAt": "2026-07-12T12:00:00Z", "events": []any{}, "cursor": map[string]any{"next": "v1.0000000000000000", "highWater": "v1.0000000000000000"}, "accountRef": "secret"}},
+		{"context-account", "context", map[string]any{"schemaVersion": "scriba.context.v2", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{}, "providers": []any{}, "events": []any{}, "accountRef": "secret"}},
+		{"context-config", "context", map[string]any{"schemaVersion": "scriba.context.v2", "generatedAt": "2026-07-12T12:00:00Z", "sources": []any{}, "providers": []any{}, "events": []any{}, "configHash": "secret"}},
+		{"events-account", "events", map[string]any{"schemaVersion": "scriba.events.v2", "generatedAt": "2026-07-12T12:00:00Z", "accountId": "acct-00000000000000000001", "events": []any{}, "cursor": map[string]any{"next": "v1.0000000000000000", "highWater": "v1.0000000000000000"}, "accountRef": "secret"}},
 		{"profiles-auth", "profiles", map[string]any{"schemaVersion": "scriba.profiles.v1", "defaultProfileId": "default", "profiles": []any{map[string]any{"profileId": "default", "label": "Default", "isDefault": true, "status": "ok", "consecutiveFailures": 0, "isStale": false, "auth": "/secret/auth.json"}}}},
 	}
 	for _, field := range []string{"creditId", "grantId", "ruleId", "accountRef", "snapshot", "target", "chatId", "configHash", "semanticKey"} {
@@ -93,7 +93,7 @@ func TestAgentSchemasRejectNonAllowlistedFields(t *testing.T) {
 		cases = append(cases, struct {
 			name, schema string
 			payload      any
-		}{"event-" + field, "event", map[string]any{"schemaVersion": "scriba.event.v1", "id": "event-1", "providerId": "codex", "profileId": "default", "kind": "remaining_checkpoint", "detectedAt": "2026-07-12T12:00:00Z", "data": data}})
+		}{"event-" + field, "event", map[string]any{"schemaVersion": "scriba.event.v2", "id": "event-1", "providerId": "codex", "accountId": "acct-00000000000000000001", "kind": "remaining_checkpoint", "detectedAt": "2026-07-12T12:00:00Z", "data": data}})
 	}
 	for _, tc := range cases {
 		schema, err := publicOutputCompiler(t, root).Compile("https://agensfield.dev/scriba/schemas/" + tc.schema + ".schema.json")
@@ -106,12 +106,12 @@ func TestAgentSchemasRejectNonAllowlistedFields(t *testing.T) {
 	}
 }
 
-func TestLocalErrorSchemaAcceptsProfileErrors(t *testing.T) {
+func TestLocalErrorSchemaAcceptsAccountErrors(t *testing.T) {
 	schema, err := publicOutputCompiler(t, filepath.Join("..", "..", "schemas")).Compile("https://agensfield.dev/scriba/schemas/local-error.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, code := range []string{"invalid_profile", "profile_unavailable"} {
+	for _, code := range []string{"invalid_account", "account_unavailable"} {
 		if err := schema.Validate(map[string]any{"error": map[string]any{"code": code}}); err != nil {
 			t.Fatalf("%s rejected: %v", code, err)
 		}

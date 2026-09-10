@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -15,12 +16,12 @@ import (
 
 func TestCanonicalEnvelopeIsTargetIndependentAndMinimized(t *testing.T) {
 	at := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
-	event := resetwatch.WarningEvent{ID: "warning-1", Account: resetwatch.Account{Ref: "acct-secret", Label: "Work", Email: "secret@example.com", Plan: "pro"}, Label: resetwatch.LabelWeeklyLimit, ThresholdRemaining: 20, UsedPercent: 81, RemainingPercent: 19, ResetAt: at.Add(7 * 24 * time.Hour), SnapshotJSON: []byte(`{"token":"secret-token"}`), DetectedAt: at}
+	event := resetwatch.WarningEvent{ID: "warning-1", ProviderID: "codex", Account: resetwatch.Account{Ref: "acct-secret", Label: "secret@example.com", Email: "secret@example.com", Plan: "pro"}, Label: resetwatch.LabelWeeklyLimit, ThresholdRemaining: 20, UsedPercent: 81, RemainingPercent: 19, ResetAt: at.Add(7 * 24 * time.Hour), SnapshotJSON: []byte(`{"token":"secret-token"}`), DetectedAt: at}
 	payload, err := store.EncodeOutboxPayload("limit_warning", event)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := store.OutboxMessage{EventKind: "limit_warning", Source: "scriba-v7", ProfileRef: "work", AccountRef: event.Account.Ref, EventID: event.ID, PayloadVersion: 1, PayloadJSON: payload}
+	base := store.OutboxMessage{EventKind: "limit_warning", Source: "scriba-v7", AccountRef: event.Account.Ref, EventID: event.ID, PayloadVersion: 1, PayloadJSON: payload}
 	base.Target = "webhook:one"
 	one, err := FromOutbox(base)
 	if err != nil {
@@ -42,7 +43,7 @@ func TestCanonicalEnvelopeIsTargetIndependentAndMinimized(t *testing.T) {
 			t.Fatalf("envelope leaked %q: %s", forbidden, text)
 		}
 	}
-	want := `{"schemaVersion":"scriba.notification.v1","eventId":"warning-1","eventKind":"limit_warning","source":"scriba-v7","profileId":"work","occurredAt":"2026-07-13T12:00:00Z","data":{"accountLabel":"Work","label":"Weekly limit","thresholdRemaining":20,"usedPercent":81,"remainingPercent":19,"resetAt":"2026-07-20T12:00:00Z"}}`
+	want := `{"schemaVersion":"scriba.notification.v2","eventId":"warning-1","eventKind":"limit_warning","source":"scriba-v7","accountId":"acct-7a1869e270aa45923cfd","occurredAt":"2026-07-13T12:00:00Z","data":{"label":"Weekly limit","thresholdRemaining":20,"usedPercent":81,"remainingPercent":19,"resetAt":"2026-07-20T12:00:00Z"}}`
 	if text != want {
 		t.Fatalf("envelope=%s", text)
 	}
@@ -55,11 +56,11 @@ func TestCanonicalEnvelopeSupportsEveryOutboxKind(t *testing.T) {
 		kind  string
 		event any
 	}{
-		{"reset", resetwatch.Event{ID: "reset", Account: account, PrimaryTriggerLabel: "Weekly limit", SecondaryTriggerLabels: []string{}, ResetKind: "scheduled", PreviousResetAt: at, CurrentResetAt: at.Add(7 * 24 * time.Hour), DetectedAt: at, PreviousSnapshotJSON: []byte(`{}`), CurrentSnapshotJSON: []byte(`{}`)}},
-		{"limit_warning", resetwatch.WarningEvent{ID: "warning", Account: account, Label: "Weekly limit", ResetAt: at.Add(time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: at}},
-		{"pacing_warning", budget.PacingAlert{ID: "pacing", AccountRef: account.Ref, AccountLabel: account.Label, WindowKey: "primary.weekly", Label: "Weekly limit", Risk: "high", Confidence: "low", UsedPercent: 40, RemainingPercentPoints: 60, PacePercentPointsPerHour: 1.65, SafePercentPointsPerHour: .42, ProjectedExhaustionAt: at.Add(48 * time.Hour), ResetAt: at.Add(7 * 24 * time.Hour), DetectedAt: at}},
-		{"reset_grant_warning", resetwatch.GrantExpiryWarning{ID: "grant-warning", Account: account, CreditTitle: "Full reset", ExpiresAt: at.Add(24 * time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: at}},
-		{"reset_grant", resetwatch.ResetGrantEvent{ID: "grant", Account: account, CreditTitle: "Full reset", GrantedAt: at, ExpiresAt: at.Add(24 * time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: at}},
+		{"reset", resetwatch.Event{ID: "reset", ProviderID: "codex", Account: account, PrimaryTriggerLabel: "Weekly limit", SecondaryTriggerLabels: []string{}, ResetKind: "scheduled", PreviousResetAt: at, CurrentResetAt: at.Add(7 * 24 * time.Hour), DetectedAt: at, PreviousSnapshotJSON: []byte(`{}`), CurrentSnapshotJSON: []byte(`{}`)}},
+		{"limit_warning", resetwatch.WarningEvent{ID: "warning", ProviderID: "codex", Account: account, Label: "Weekly limit", ResetAt: at.Add(time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: at}},
+		{"pacing_warning", budget.PacingAlert{ID: "pacing", ProviderID: "codex", AccountRef: account.Ref, AccountLabel: account.Label, WindowKey: "primary.weekly", Label: "Weekly limit", Risk: "high", Confidence: "low", UsedPercent: 40, RemainingPercentPoints: 60, PacePercentPointsPerHour: 1.65, SafePercentPointsPerHour: .42, ProjectedExhaustionAt: at.Add(48 * time.Hour), ResetAt: at.Add(7 * 24 * time.Hour), DetectedAt: at}},
+		{"reset_grant_warning", resetwatch.GrantExpiryWarning{ID: "grant-warning", ProviderID: "codex", Account: account, CreditTitle: "Full reset", ExpiresAt: at.Add(24 * time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: at}},
+		{"reset_grant", resetwatch.ResetGrantEvent{ID: "grant", ProviderID: "codex", Account: account, CreditTitle: "Full reset", GrantedAt: at, ExpiresAt: at.Add(24 * time.Hour), SnapshotJSON: []byte(`{}`), DetectedAt: at}},
 		{"radar_alert", radar.ProbabilityAlert{ID: "radar", Milestone: 50, DetectedAt: at, SnapshotJSON: []byte(`{}`)}},
 	}
 	for _, test := range tests {
@@ -69,13 +70,15 @@ func TestCanonicalEnvelopeSupportsEveryOutboxKind(t *testing.T) {
 				t.Fatal(err)
 			}
 			eventID := test.kind
+			accountRef := account.Ref
 			switch test.kind {
 			case "reset_grant_warning":
 				eventID = "grant-warning"
 			case "radar_alert":
 				eventID = "radar"
+				accountRef = ""
 			}
-			envelope, err := FromOutbox(store.OutboxMessage{EventKind: test.kind, Source: "test", ProfileRef: "default", AccountRef: account.Ref, EventID: eventID, PayloadVersion: 1, PayloadJSON: payload})
+			envelope, err := FromOutbox(store.OutboxMessage{EventKind: test.kind, Source: "test", AccountRef: accountRef, EventID: eventID, PayloadVersion: 1, PayloadJSON: payload})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,5 +106,17 @@ func TestCanonicalEnvelopeBoundsProviderAndOperatorStrings(t *testing.T) {
 	}
 	if len(body) > 4096 || !utf8.Valid(body) {
 		t.Fatalf("body length=%d valid=%t", len(body), utf8.Valid(body))
+	}
+}
+
+func TestMarshalRejectsMismatchedAccountScope(t *testing.T) {
+	at := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	for _, envelope := range []Envelope{
+		{SchemaVersion: SchemaVersion, EventID: "account-event", EventKind: "limit_warning", Source: "test", OccurredAt: at, Data: json.RawMessage(`{}`)},
+		{SchemaVersion: SchemaVersion, EventID: "radar", EventKind: "radar_alert", Source: "test", AccountID: "acct-00000000000000000001", OccurredAt: at, Data: json.RawMessage(`{}`)},
+	} {
+		if _, err := Marshal(envelope); err == nil {
+			t.Fatalf("accepted mismatched scope: %+v", envelope)
+		}
 	}
 }

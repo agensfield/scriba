@@ -18,24 +18,24 @@ const (
 )
 
 var (
-	contextInputSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"profile":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$","maxLength":32}}}`)
-	eventsInputSchema  = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"profile":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$","maxLength":32},"mode":{"enum":["latest","replay"]},"cursor":{"type":"string","pattern":"^v1\\.[0-7][0-9a-f]{15}$","minLength":19,"maxLength":19},"limit":{"type":"integer","minimum":1,"maximum":100}},"oneOf":[{"properties":{"mode":{"const":"latest"}},"not":{"required":["cursor"]}},{"required":["mode","cursor"],"properties":{"mode":{"const":"replay"}}}]}`)
+	contextInputSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"account":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$","maxLength":32}}}`)
+	eventsInputSchema  = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"account":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$","maxLength":32},"mode":{"enum":["latest","replay"]},"cursor":{"type":"string","pattern":"^v1\\.[0-7][0-9a-f]{15}$","minLength":19,"maxLength":19},"limit":{"type":"integer","minimum":1,"maximum":100}},"oneOf":[{"properties":{"mode":{"const":"latest"}},"not":{"required":["cursor"]}},{"required":["mode","cursor"],"properties":{"mode":{"const":"replay"}}}]}`)
 )
 
 type contextInput struct {
-	ProfileID string `json:"profile"`
+	Account string `json:"account"`
 }
 
 type eventInput struct {
-	Mode      string `json:"mode"`
-	Cursor    string `json:"cursor"`
-	Limit     int    `json:"limit"`
-	ProfileID string `json:"profile"`
+	Mode    string `json:"mode"`
+	Cursor  string `json:"cursor"`
+	Limit   int    `json:"limit"`
+	Account string `json:"account"`
 }
 
 type contextService interface {
 	Context(context.Context) (agentcontext.Context, error)
-	ContextForProfile(context.Context, string) (agentcontext.Context, error)
+	ContextForAccount(context.Context, string) (agentcontext.Context, error)
 	Events(context.Context, agentcontext.EventPageRequest) (agentcontext.EventPage, error)
 }
 
@@ -43,8 +43,8 @@ type contextService interface {
 func NewServer(service contextService) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "scriba", Version: buildinfo.Version}, nil)
 	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(false)}
-	mcp.AddTool(server, &mcp.Tool{Name: GetContextTool, Description: "Return the current Scriba agent context for an optional configured profile.", InputSchema: contextInputSchema, OutputSchema: json.RawMessage(schemas.MCPContext()), Annotations: annotations}, func(ctx context.Context, request *mcp.CallToolRequest, input contextInput) (*mcp.CallToolResult, agentcontext.Context, error) {
-		output, err := service.ContextForProfile(ctx, input.ProfileID)
+	mcp.AddTool(server, &mcp.Tool{Name: GetContextTool, Description: "Return Scriba agent context for an optional account ID, alias, or current account.", InputSchema: contextInputSchema, OutputSchema: json.RawMessage(schemas.MCPContext()), Annotations: annotations}, func(ctx context.Context, request *mcp.CallToolRequest, input contextInput) (*mcp.CallToolResult, agentcontext.Context, error) {
+		output, err := service.ContextForAccount(ctx, input.Account)
 		return typedResult(output, err)
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: ListEventsTool, Description: "List the latest or replayed Scriba policy events.", InputSchema: eventsInputSchema, OutputSchema: json.RawMessage(schemas.MCPEvents()), Annotations: annotations}, func(ctx context.Context, request *mcp.CallToolRequest, input eventInput) (*mcp.CallToolResult, agentcontext.EventPage, error) {
@@ -54,7 +54,7 @@ func NewServer(service contextService) *mcp.Server {
 		if input.Mode == "" {
 			input.Mode = "latest"
 		}
-		output, err := service.Events(ctx, agentcontext.EventPageRequest{Mode: input.Mode, Cursor: input.Cursor, Limit: input.Limit, ProfileID: input.ProfileID})
+		output, err := service.Events(ctx, agentcontext.EventPageRequest{Mode: input.Mode, Cursor: input.Cursor, Limit: input.Limit, Account: input.Account})
 		return typedResult(output, err)
 	})
 	return server
@@ -79,9 +79,9 @@ func typedResult[T any](output T, err error) (*mcp.CallToolResult, T, error) {
 		if errors.As(err, &pageErr) && allowedReason(pageErr.ReasonCode) {
 			message = pageErr.ReasonCode
 		}
-		var profileErr *agentcontext.ProfileError
-		if errors.As(err, &profileErr) && profileErr.ReasonCode == "profile_unavailable" {
-			message = profileErr.ReasonCode
+		var accountErr *agentcontext.AccountError
+		if errors.As(err, &accountErr) && accountErr.ReasonCode == "account_unavailable" {
+			message = accountErr.ReasonCode
 		}
 		return nil, output, errors.New(message)
 	}

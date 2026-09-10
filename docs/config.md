@@ -101,7 +101,11 @@ Ntfy topics follow the upstream 1-64 character letter/number/underscore/dash
 grammar. On public ntfy instances, an unprotected topic effectively acts as a
 password, so use a random unguessable name or server-side access controls.
 
-Webhooks receive byte-stable `scriba.notification.v1` JSON. Each request has
+Webhooks receive byte-stable `scriba.notification.v2` JSON. Account-scoped
+events carry a public `accountId` calculated from the durable outbox account;
+radar alerts remain accountless. Provider account labels are omitted from the
+minimized envelope because historical labels may contain email addresses. Each
+request has
 `X-Scriba-Event-ID`, a Unix `X-Scriba-Timestamp`, and
 `X-Scriba-Signature: v1=<hex>` where the HMAC-SHA256 input is exactly
 `<timestamp>.<request-body>`. Redirects are never followed. Ntfy uses its root

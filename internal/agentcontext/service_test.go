@@ -46,44 +46,41 @@ func TestContextSurfacesCancellation(t *testing.T) {
 	}
 }
 
-func TestLegacyServiceRejectsArbitraryExplicitProfile(t *testing.T) {
-	svc := New(Config{ProfileID: "legacy"})
-	if _, err := svc.ContextForProfile(t.Context(), "other"); err == nil {
-		t.Fatal("legacy service accepted arbitrary profile")
-	}
-	if _, err := svc.ContextForProfile(t.Context(), "legacy"); err != nil {
-		t.Fatalf("legacy profile rejected: %v", err)
-	}
-}
-
-func TestContextProfileSelectionUsesMappedAccountAndRejectsUnknown(t *testing.T) {
+func TestContextAccountSelectionUsesDurableBindingsAndRejectsUnknown(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.sqlite")
 	st, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SyncProfiles(ctx, []store.ProfileSpec{
-		{ProfileRef: "personal", ProviderID: "codex", Label: "Personal", Enabled: true, IsDefault: true},
-		{ProfileRef: "work", ProviderID: "codex", Label: "Work", Enabled: true},
+	if err := st.SyncAuthSources(ctx, []store.SourceSpec{
+		{Ref: "src-00000000000000000001", Enabled: true, Priority: 0},
+		{Ref: "src-00000000000000000002", Enabled: true, Priority: 1},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	base := time.Date(2026, 7, 13, 2, 0, 0, 0, time.UTC)
-	for i, profile := range []string{"personal", "work"} {
+	for i, alias := range []string{"personal", "work"} {
 		used := float64(20 + 60*i)
 		obs := resetwatch.Observation{
-			ProviderID: "codex", Account: resetwatch.Account{Ref: "acct-" + profile, Label: profile}, ObservedAt: base.Add(time.Duration(i) * time.Hour),
+			ProviderID: "codex", Account: resetwatch.Account{Ref: "private-" + alias, Label: alias}, ObservedAt: base.Add(time.Duration(i) * time.Hour),
 			SnapshotJSON: []byte(`{}`),
 			Windows:      []resetwatch.Window{{Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used, ResetAt: base.Add(7 * 24 * time.Hour)}},
 		}
-		if _, err := st.ApplyCodexPoll(ctx, store.CodexPollInput{ProfileRef: profile, Observation: obs, ResetOptions: resetwatch.DefaultOptions(), CommittedAt: obs.ObservedAt.Add(time.Second)}); err != nil {
+		sourceRef := "src-00000000000000000001"
+		if alias == "work" {
+			sourceRef = "src-00000000000000000002"
+		}
+		if _, err := st.ApplyCodexPoll(ctx, store.CodexPollInput{SourceRef: sourceRef, Observation: obs, ResetOptions: resetwatch.DefaultOptions(), CommittedAt: obs.ObservedAt.Add(time.Second)}); err != nil {
 			t.Fatal(err)
 		}
 		used = float64(81 + 10*i)
 		obs.ObservedAt = base.Add(2*time.Hour + time.Duration(i)*time.Hour)
 		obs.Windows[0].UsedPercent = &used
-		if _, err := st.ApplyCodexPoll(ctx, store.CodexPollInput{ProfileRef: profile, Observation: obs, ResetOptions: resetwatch.DefaultOptions(), CommittedAt: obs.ObservedAt.Add(time.Second)}); err != nil {
+		if _, err := st.ApplyCodexPoll(ctx, store.CodexPollInput{SourceRef: sourceRef, Observation: obs, ResetOptions: resetwatch.DefaultOptions(), CommittedAt: obs.ObservedAt.Add(time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SetAccountAlias(ctx, store.AccountID("codex", obs.Account.Ref), alias); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -104,40 +101,59 @@ func TestContextProfileSelectionUsesMappedAccountAndRejectsUnknown(t *testing.T)
 		t.Fatal(err)
 	}
 
-	svc := New(Config{CacheDir: cacheDir, StorePath: path, DefaultProfileID: "personal", ProfileIDs: []string{"personal", "work"}, Clock: func() time.Time { return base.Add(2 * time.Hour) }})
+	svc := New(Config{CacheDir: cacheDir, StorePath: path, Clock: func() time.Time { return base.Add(2 * time.Hour) }})
 	personal, err := svc.Context(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	work, err := svc.ContextForProfile(ctx, "work")
+	work, err := svc.ContextForAccount(ctx, "work")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := *providerByID(t, personal, "codex").Profiles[0].Windows[0].UsedPercent; got != 81 {
+	if got := *providerByID(t, personal, "codex").Accounts[0].Windows[0].UsedPercent; got != 81 {
 		t.Fatalf("personal used=%v", got)
 	}
-	workProfile := providerByID(t, work, "codex").Profiles[0]
-	if workProfile.ProfileID != "work" || *workProfile.Windows[0].UsedPercent != 91 {
-		t.Fatalf("work profile=%+v", workProfile)
+	workAccount := providerByID(t, work, "codex").Accounts[0]
+	if workAccount.Alias != "work" || *workAccount.Windows[0].UsedPercent != 91 {
+		t.Fatalf("work account=%+v", workAccount)
 	}
-	for _, profile := range []string{"personal", "work"} {
-		page, err := svc.Events(ctx, EventPageRequest{Mode: "latest", Limit: 20, ProfileID: profile})
+	for _, account := range []string{"personal", "work"} {
+		page, err := svc.Events(ctx, EventPageRequest{Mode: "latest", Limit: 20, Account: account})
 		if err != nil || len(page.Events) == 0 {
-			t.Fatalf("%s events=%+v err=%v", profile, page, err)
+			t.Fatalf("%s events=%+v err=%v", account, page, err)
 		}
 		for _, event := range page.Events {
-			if event.ProfileID != profile {
-				t.Fatalf("%s received cross-profile event %+v", profile, event)
+			if event.AccountID != page.AccountID {
+				t.Fatalf("%s received cross-account event %+v", account, event)
 			}
 		}
 	}
-	if _, err := svc.ContextForProfile(ctx, "unknown"); err == nil {
-		t.Fatal("unknown profile accepted")
+	if _, err := svc.ContextForAccount(ctx, "unknown"); err == nil {
+		t.Fatal("unknown account accepted")
 	} else {
-		var profileErr *ProfileError
-		if !errors.As(err, &profileErr) || profileErr.ReasonCode != "profile_unavailable" {
+		var accountErr *AccountError
+		if !errors.As(err, &accountErr) || accountErr.ReasonCode != "account_unavailable" {
 			t.Fatalf("unknown err=%v", err)
 		}
+	}
+	st, err = store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.ObserveAuthSource(ctx, "src-00000000000000000002", resetwatch.Account{}, base.Add(4*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	historical, err := New(Config{CacheDir: cacheDir, StorePath: path, Clock: func() time.Time { return base.Add(4 * time.Hour) }}).ContextForAccount(ctx, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	historicalAccount := providerByID(t, historical, "codex").Accounts[0]
+	quota := sourceByID(t, historical, "codex-quota")
+	if historicalAccount.CredentialsAvailable || historicalAccount.Alias != "work" || quota.Stale == nil || !*quota.Stale {
+		t.Fatalf("historical account was not readable and honestly stale: account=%+v quota=%+v", historicalAccount, quota)
 	}
 }
 
@@ -198,11 +214,11 @@ func TestContextBuildsClaudeFromRealCacheDeterministically(t *testing.T) {
 	if !reflect.DeepEqual(aj, bj) {
 		t.Fatalf("nondeterministic output\n%s\n%s", aj, bj)
 	}
-	if len(a.Providers) != 1 || a.Providers[0].ProviderID != "claude" || len(a.Providers[0].Profiles[0].Windows) != 1 {
+	if len(a.Providers) != 1 || a.Providers[0].ProviderID != "claude" || len(a.Providers[0].Accounts) != 0 || a.Providers[0].Unattributed == nil || len(a.Providers[0].Unattributed.Windows) != 1 {
 		t.Fatalf("unexpected providers: %#v", a.Providers)
 	}
-	if a.Providers[0].Profiles[0].Budgets[0].Reasons[0] != "history_unavailable" {
-		t.Fatalf("claude history was not unavailable: %#v", a.Providers[0].Profiles[0].Budgets)
+	if a.Providers[0].Unattributed.Budgets[0].Reasons[0] != "history_unavailable" {
+		t.Fatalf("claude history was not unavailable: %#v", a.Providers[0].Unattributed.Budgets)
 	}
 }
 
@@ -257,7 +273,7 @@ func TestCacheObservationStateIgnoresAggregateProviderDegradation(t *testing.T) 
 	}
 }
 
-func TestRealCacheStorePrecedenceIsolationPrivacyAndSchema(t *testing.T) {
+func TestRealCacheNeverOverridesAccountStoreAndPreservesIsolationPrivacyAndSchema(t *testing.T) {
 	base := time.Date(2026, 7, 12, 9, 0, 0, 0, time.UTC)
 	t.Run("cache newer", func(t *testing.T) {
 		cacheDir, storePath := seedCacheStore(t, base, base.Add(3*time.Hour), base)
@@ -265,12 +281,9 @@ func TestRealCacheStorePrecedenceIsolationPrivacyAndSchema(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Events) != 0 {
-			t.Fatalf("cache winner inherited store events: %#v", got.Events)
-		}
 		p := providerByID(t, got, "codex")
-		if used := *p.Profiles[0].Windows[0].UsedPercent; used != 33 {
-			t.Fatalf("cache did not win: used=%v", used)
+		if used := *p.Accounts[0].Windows[0].UsedPercent; used != 81 {
+			t.Fatalf("anonymous cache overrode account store: used=%v", used)
 		}
 		assertSchemaAndPrivacy(t, got)
 	})
@@ -282,7 +295,7 @@ func TestRealCacheStorePrecedenceIsolationPrivacyAndSchema(t *testing.T) {
 			t.Fatal(err)
 		}
 		p := providerByID(t, got, "codex")
-		if used := *p.Profiles[0].Windows[0].UsedPercent; used != 81 {
+		if used := *p.Accounts[0].Windows[0].UsedPercent; used != 81 {
 			t.Fatalf("store did not win: used=%v", used)
 		}
 		if len(got.Events) != 1 || strings.Contains(got.Events[0].ID, "PRIVATE_OTHER") {

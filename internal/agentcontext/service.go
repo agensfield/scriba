@@ -3,7 +3,6 @@ package agentcontext
 import (
 	"context"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/agensfield/scriba/internal/budget"
@@ -18,10 +17,9 @@ const defaultEventLimit = 20
 
 type Clock func() time.Time
 type Config struct {
-	CacheDir, StorePath, ProfileID, DefaultProfileID string
-	ProfileIDs                                       []string
-	EventLimit                                       int
-	Clock                                            Clock
+	CacheDir, StorePath string
+	EventLimit          int
+	Clock               Clock
 }
 type Service struct{ config Config }
 
@@ -39,20 +37,16 @@ type candidate struct {
 type readState struct{ cacheErr, storeErr, historyErr, eventErr error }
 
 func (s *Service) Context(ctx context.Context) (Context, error) {
-	return s.ContextForProfile(ctx, "")
+	return s.ContextForAccount(ctx, "")
 }
 
-func (s *Service) ContextForProfile(ctx context.Context, requested string) (Context, error) {
+func (s *Service) ContextForAccount(ctx context.Context, requested string) (Context, error) {
 	if err := ctx.Err(); err != nil {
 		return Context{}, err
 	}
 	now := time.Now().UTC()
 	if s.config.Clock != nil {
 		now = s.config.Clock().UTC()
-	}
-	profileID, err := s.selectProfile(requested)
-	if err != nil {
-		return Context{}, err
 	}
 	limit := s.config.EventLimit
 	if limit <= 0 {
@@ -80,24 +74,33 @@ func (s *Service) ContextForProfile(ctx context.Context, requested string) (Cont
 		return Context{}, err
 	}
 	var st *store.Store
+	var selectedAccount store.Account
 	var storeCandidate candidate
 	st, err = store.OpenReadOnlyContext(ctx, s.config.StorePath)
 	if err != nil {
 		state.storeErr = err
+		if requested != "" {
+			return Context{}, &AccountError{ReasonCode: "account_unavailable"}
+		}
 	} else {
 		defer func() { _ = st.Close() }()
-		var o resetwatch.Observation
 		var ok bool
-		var loadErr error
-		if len(s.config.ProfileIDs) > 0 {
-			o, ok, loadErr = st.LoadLatestObservationForProfile(ctx, profileID)
-		} else {
-			o, ok, loadErr = st.LoadLatestObservationForProvider(ctx, "codex")
+		selectedAccount, ok, err = st.ResolveAccount(ctx, requested)
+		if err != nil {
+			state.storeErr = err
+			if requested != "" {
+				return Context{}, &AccountError{ReasonCode: "account_unavailable"}
+			}
+		} else if !ok && requested != "" {
+			return Context{}, &AccountError{ReasonCode: "account_unavailable"}
 		}
-		if loadErr != nil {
-			state.storeErr = loadErr
-		} else if ok && len(budgetadapter.FromResetwatch(o).Windows) > 0 {
-			storeCandidate = candidate{obs: o, provenance: "provider-api", fromStore: true, grantAt: o.ObservedAt}
+		if err == nil && ok {
+			o, observed, loadErr := st.LoadLatestObservationForAccount(ctx, selectedAccount.ID)
+			if loadErr != nil {
+				state.storeErr = loadErr
+			} else if observed && len(budgetadapter.FromResetwatch(o).Windows) > 0 {
+				storeCandidate = candidate{obs: o, provenance: "provider-api", fromStore: true, grantAt: o.ObservedAt}
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -107,17 +110,17 @@ func (s *Service) ContextForProfile(ctx context.Context, requested string) (Cont
 	providers := []string{"claude", "codex"}
 	for _, providerID := range providers {
 		selected, ok := cacheCandidates[providerID]
-		providerProfileID := "default"
+		accountID, alias := "", ""
+		credentialsAvailable := false
 		if providerID == "codex" {
-			providerProfileID = profileID
-			if len(s.config.ProfileIDs) > 0 {
-				selected, ok = storeCandidate, validCandidate(storeCandidate)
-			} else if validCandidate(storeCandidate) && (!ok || !storeCandidate.obs.ObservedAt.Before(selected.obs.ObservedAt)) {
-				selected, ok = storeCandidate, true
-			}
+			selected, ok = storeCandidate, validCandidate(storeCandidate)
+			accountID, alias, credentialsAvailable = selectedAccount.ID, selectedAccount.Alias, selectedAccount.CredentialsAvailable
 		}
 		if !ok {
 			out.Sources = append(out.Sources, missingSources(providerID, state)...)
+			if providerID == "codex" && accountID != "" {
+				out.Providers = append(out.Providers, buildEmptyProvider(providerID, accountID, alias, credentialsAvailable))
+			}
 			continue
 		}
 		history := []budget.Observation(nil)
@@ -145,10 +148,14 @@ func (s *Service) ContextForProfile(ctx context.Context, requested string) (Cont
 			}
 		}
 		out.Sources = append(out.Sources, sources...)
-		out.Providers = append(out.Providers, buildProvider(providerID, providerProfileID, selected.obs, history, hs, now))
+		if providerID == "claude" {
+			out.Providers = append(out.Providers, buildUnattributedProvider(providerID, selected.obs, history, hs, now))
+		} else {
+			out.Providers = append(out.Providers, buildProvider(providerID, accountID, alias, credentialsAvailable, selected.obs, history, hs, now))
+		}
 		if selected.fromStore && state.eventErr == nil {
 			for _, r := range records {
-				if e, yes := minimize(r, providerProfileID); yes {
+				if e, yes := minimize(r, accountID); yes {
 					out.Events = append(out.Events, e)
 				}
 			}
@@ -163,41 +170,6 @@ func (s *Service) ContextForProfile(ctx context.Context, requested string) (Cont
 		return out.Events[i].DetectedAt.After(out.Events[j].DetectedAt)
 	})
 	return out, nil
-}
-
-func (s *Service) selectProfile(requested string) (string, error) {
-	profileID := strings.TrimSpace(requested)
-	if requested != "" && profileID != requested {
-		return "", &ProfileError{ReasonCode: "profile_unavailable"}
-	}
-	if profileID == "" {
-		profileID = strings.TrimSpace(s.config.DefaultProfileID)
-	}
-	if profileID == "" {
-		profileID = strings.TrimSpace(s.config.ProfileID)
-	}
-	if profileID == "" {
-		profileID = "default"
-	}
-	if len(s.config.ProfileIDs) == 0 {
-		legacyID := strings.TrimSpace(s.config.DefaultProfileID)
-		if legacyID == "" {
-			legacyID = strings.TrimSpace(s.config.ProfileID)
-		}
-		if legacyID == "" {
-			legacyID = "default"
-		}
-		if requested != "" && profileID != legacyID {
-			return "", &ProfileError{ReasonCode: "profile_unavailable"}
-		}
-		return legacyID, nil
-	}
-	for _, allowed := range s.config.ProfileIDs {
-		if profileID == allowed {
-			return profileID, nil
-		}
-	}
-	return "", &ProfileError{ReasonCode: "profile_unavailable"}
 }
 
 func candidatesFromSnapshot(s model.StatusSnapshot) map[string]candidate {
@@ -282,12 +254,13 @@ func toWindows(provider string, at time.Time, lines []model.MetricLine) []resetw
 func missingSources(provider string, state readState) []Source {
 	provenance := "status-cache"
 	reason := "missing"
-	readFailed := state.cacheErr != nil || (provider == "codex" && state.storeErr != nil)
+	readFailed := state.cacheErr != nil
+	if provider == "codex" {
+		provenance = "provider-api"
+		readFailed = state.storeErr != nil
+	}
 	if readFailed {
 		reason = "read_error"
-	}
-	if provider == "codex" && state.storeErr != nil && state.cacheErr != nil {
-		provenance = "provider-api"
 	}
 	eventReason := "missing"
 	if provider == "codex" && state.storeErr != nil {
@@ -371,14 +344,32 @@ func source(id, kind, provenance string, now, at time.Time, available, readErr b
 	}
 	return s
 }
-func buildProvider(id, profile string, obs resetwatch.Observation, h []budget.Observation, hs budget.HistoryState, now time.Time) Provider {
+func buildProvider(id, accountID, alias string, credentialsAvailable bool, obs resetwatch.Observation, h []budget.Observation, hs budget.HistoryState, now time.Time) Provider {
 	r := budget.Evaluate(budget.Input{ProviderID: id, Observation: budgetadapter.FromResetwatch(obs), History: h, HistoryState: hs}, now)
-	p := Profile{ProfileID: profile, Windows: []Window{}, Budgets: []Budget{}, Grants: aggregateGrants(obs.ResetGrants), SourceIDs: []string{id + "-quota", id + "-budget", id + "-grants", id + "-policy-events"}}
+	a := Account{AccountID: accountID, Alias: alias, CredentialsAvailable: credentialsAvailable, Windows: []Window{}, Budgets: []Budget{}, Grants: aggregateGrants(obs.ResetGrants), SourceIDs: []string{id + "-quota", id + "-budget", id + "-grants", id + "-policy-events"}}
 	for _, w := range r.Windows {
-		p.Windows = append(p.Windows, Window{Key: string(w.Key), UsedPercent: w.UsedPercent, RemainingPercentPoints: w.RemainingPercentPoints, ResetAt: w.ResetAt})
-		p.Budgets = append(p.Budgets, Budget{Key: string(w.Key), Risk: w.Risk, Confidence: w.Confidence, Reasons: w.Reasons})
+		a.Windows = append(a.Windows, Window{Key: string(w.Key), UsedPercent: w.UsedPercent, RemainingPercentPoints: w.RemainingPercentPoints, ResetAt: w.ResetAt})
+		a.Budgets = append(a.Budgets, Budget{Key: string(w.Key), Risk: w.Risk, Confidence: w.Confidence, Reasons: w.Reasons})
 	}
-	return Provider{ProviderID: id, Profiles: []Profile{p}}
+	return Provider{ProviderID: id, Accounts: []Account{a}}
+}
+
+func buildEmptyProvider(id, accountID, alias string, credentialsAvailable bool) Provider {
+	return Provider{ProviderID: id, Accounts: []Account{{
+		AccountID: accountID, Alias: alias, CredentialsAvailable: credentialsAvailable,
+		Windows: []Window{}, Budgets: []Budget{}, Grants: Grants{},
+		SourceIDs: []string{id + "-quota", id + "-budget", id + "-grants", id + "-policy-events"},
+	}}}
+}
+
+func buildUnattributedProvider(id string, obs resetwatch.Observation, h []budget.Observation, hs budget.HistoryState, now time.Time) Provider {
+	evaluated := budget.Evaluate(budget.Input{ProviderID: id, Observation: budgetadapter.FromResetwatch(obs), History: h, HistoryState: hs}, now)
+	usage := &Unattributed{Windows: []Window{}, Budgets: []Budget{}, Grants: aggregateGrants(obs.ResetGrants), SourceIDs: []string{id + "-quota", id + "-budget", id + "-grants", id + "-policy-events"}}
+	for _, w := range evaluated.Windows {
+		usage.Windows = append(usage.Windows, Window{Key: string(w.Key), UsedPercent: w.UsedPercent, RemainingPercentPoints: w.RemainingPercentPoints, ResetAt: w.ResetAt})
+		usage.Budgets = append(usage.Budgets, Budget{Key: string(w.Key), Risk: w.Risk, Confidence: w.Confidence, Reasons: w.Reasons})
+	}
+	return Provider{ProviderID: id, Accounts: []Account{}, Unattributed: usage}
 }
 func aggregateGrants(g resetwatch.ResetGrants) Grants {
 	count := 0
@@ -401,8 +392,8 @@ func aggregateGrants(g resetwatch.ResetGrants) Grants {
 	}
 	return Grants{AvailableCount: count, EarliestExpiryAt: expiry}
 }
-func minimize(r store.AgentEventRecord, profile string) (Event, bool) {
-	e := Event{SchemaVersion: "scriba.event.v1", ID: r.ID, ProviderID: r.ProviderID, ProfileID: profile, Kind: string(r.Kind), DetectedAt: r.DetectedAt}
+func minimize(r store.AgentEventRecord, accountID string) (Event, bool) {
+	e := Event{SchemaVersion: "scriba.event.v2", ID: r.ID, ProviderID: r.ProviderID, AccountID: accountID, Kind: string(r.Kind), DetectedAt: r.DetectedAt}
 	switch e.Kind {
 	case "remaining_checkpoint":
 		if r.UsedPercent == nil || r.RemainingPercentPoints == nil {

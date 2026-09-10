@@ -2,7 +2,7 @@ package agentcontext
 
 import "time"
 
-const SchemaVersion = "scriba.context.v1"
+const SchemaVersion = "scriba.context.v2"
 
 type Context struct {
 	SchemaVersion string     `json:"schemaVersion"`
@@ -27,11 +27,20 @@ type Source struct {
 	ReasonCode   string       `json:"reasonCode,omitempty"`
 }
 type Provider struct {
-	ProviderID string    `json:"providerId"`
-	Profiles   []Profile `json:"profiles"`
+	ProviderID   string        `json:"providerId"`
+	Accounts     []Account     `json:"accounts"`
+	Unattributed *Unattributed `json:"unattributed,omitempty"`
 }
-type Profile struct {
-	ProfileID string   `json:"profileId"`
+type Account struct {
+	AccountID            string   `json:"accountId"`
+	Alias                string   `json:"alias,omitempty"`
+	CredentialsAvailable bool     `json:"credentialsAvailable"`
+	Windows              []Window `json:"windows"`
+	Budgets              []Budget `json:"budgets"`
+	Grants               Grants   `json:"grants"`
+	SourceIDs            []string `json:"sourceIds"`
+}
+type Unattributed struct {
 	Windows   []Window `json:"windows"`
 	Budgets   []Budget `json:"budgets"`
 	Grants    Grants   `json:"grants"`
@@ -57,24 +66,25 @@ type Event struct {
 	SchemaVersion string    `json:"schemaVersion"`
 	ID            string    `json:"id"`
 	ProviderID    string    `json:"providerId"`
-	ProfileID     string    `json:"profileId"`
+	AccountID     string    `json:"accountId"`
 	Kind          string    `json:"kind"`
 	DetectedAt    time.Time `json:"detectedAt"`
 	Data          EventData `json:"data"`
 }
 
-const EventsSchemaVersion = "scriba.events.v1"
+const EventsSchemaVersion = "scriba.events.v2"
 
 type EventPageRequest struct {
-	Mode      string
-	Cursor    string
-	Limit     int
-	ProfileID string
+	Mode    string
+	Cursor  string
+	Limit   int
+	Account string
 }
 
 type EventPage struct {
 	SchemaVersion string          `json:"schemaVersion"`
 	GeneratedAt   time.Time       `json:"generatedAt"`
+	AccountID     string          `json:"accountId"`
 	Events        []Event         `json:"events"`
 	Cursor        EventPageCursor `json:"cursor"`
 }
@@ -88,9 +98,9 @@ type EventPageError struct {
 	ReasonCode string `json:"reasonCode"`
 }
 
-type ProfileError struct{ ReasonCode string }
+type AccountError struct{ ReasonCode string }
 
-func (e *ProfileError) Error() string { return "profile unavailable: " + e.ReasonCode }
+func (e *AccountError) Error() string { return "account unavailable: " + e.ReasonCode }
 
 func (e *EventPageError) Error() string { return "event page unavailable: " + e.ReasonCode }
 

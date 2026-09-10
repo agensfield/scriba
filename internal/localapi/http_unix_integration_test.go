@@ -56,7 +56,13 @@ func newUnixHTTPFixture(t *testing.T, maxStreams int) *unixHTTPFixture {
 	if _, err = st.ApplyDecision(t.Context(), obs, resetwatch.Decision{}); err != nil {
 		t.Fatal(err)
 	}
-	svc := agentcontext.New(agentcontext.Config{StorePath: storePath, CacheDir: filepath.Join(dir, "missing-cache"), ProfileID: "profile", Clock: func() time.Time { return now }})
+	if err = st.SyncAuthSources(t.Context(), []store.SourceSpec{{Ref: "src-00000000000000000001", Enabled: true, Priority: 0}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.ObserveAuthSource(t.Context(), "src-00000000000000000001", obs.Account, now); err != nil {
+		t.Fatal(err)
+	}
+	svc := agentcontext.New(agentcontext.Config{StorePath: storePath, CacheDir: filepath.Join(dir, "missing-cache"), Clock: func() time.Time { return now }})
 	ln, err := Listen(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
@@ -160,8 +166,12 @@ func readSSEFrame(t *testing.T, body io.ReadCloser, reader *bufio.Reader) string
 }
 
 func insertWarning(t *testing.T, f *unixHTTPFixture, id string, at time.Time) {
+	insertWarningForAccount(t, f, id, "acct-private-sentinel", at)
+}
+
+func insertWarningForAccount(t *testing.T, f *unixHTTPFixture, id, accountRef string, at time.Time) {
 	t.Helper()
-	w := resetwatch.WarningEvent{ID: id, ProviderID: "codex", Account: resetwatch.Account{Ref: "acct-private-sentinel"}, Label: resetwatch.LabelFiveHour, ThresholdRemaining: 20, UsedPercent: 81, RemainingPercent: 19, ResetAt: at.Add(time.Hour), SnapshotJSON: []byte(`{"secret":"privacy-sentinel"}`), DetectedAt: at}
+	w := resetwatch.WarningEvent{ID: id, ProviderID: "codex", Account: resetwatch.Account{Ref: accountRef}, Label: resetwatch.LabelFiveHour, ThresholdRemaining: 20, UsedPercent: 81, RemainingPercent: 19, ResetAt: at.Add(time.Hour), SnapshotJSON: []byte(`{"secret":"privacy-sentinel"}`), DetectedAt: at}
 	payload, err := store.EncodeOutboxPayload("limit_warning", w)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +182,7 @@ func insertWarning(t *testing.T, f *unixHTTPFixture, id string, at time.Time) {
 	}
 	defer func() { _ = db.Close() }()
 	atText := at.Format(time.RFC3339Nano)
-	_, err = db.ExecContext(t.Context(), `insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, id, "limit_warning", id, "rule", "subject", "remaining_checkpoint", "codex", "acct-private-sentinel", "rev", "hash", 1, string(payload), atText, atText)
+	_, err = db.ExecContext(t.Context(), `insert into policy_events(id,semantic_key,event_kind,semantic_event_id,rule_id,subject_key,rule_kind,provider_id,account_ref,policy_revision,config_hash,payload_version,payload_json,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, id, "limit_warning", id, "rule", "subject", "remaining_checkpoint", "codex", accountRef, "rev", "hash", 1, string(payload), atText, atText)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +289,7 @@ func TestUnixSSECaptureLiveReconnectHeartbeatAndStreamCap(t *testing.T) {
 	for strings.HasPrefix(frame, ": heartbeat") {
 		frame = readSSEFrame(t, r.Body, reader)
 	}
-	if !strings.Contains(frame, "event: scriba.event.v1\n") || !strings.Contains(frame, "\"id\":\"event-one\"") || strings.Contains(frame, "privacy-sentinel") {
+	if !strings.Contains(frame, "event: scriba.event.v2\n") || !strings.Contains(frame, "\"id\":\"event-one\"") || strings.Contains(frame, "privacy-sentinel") {
 		t.Fatalf("event frame=%q", frame)
 	}
 	var cursor string
@@ -320,6 +330,39 @@ func TestUnixSSECaptureLiveReconnectHeartbeatAndStreamCap(t *testing.T) {
 		t.Fatalf("reconnect frame=%q", frame)
 	}
 	_ = replay.Body.Close()
+}
+
+func TestUnixSSEPinsAccountAcrossAuthSourceSwitch(t *testing.T) {
+	f := newUnixHTTPFixture(t, 1)
+	r := f.get(t, "/v1/events")
+	defer func() { _ = r.Body.Close() }()
+	reader := bufio.NewReader(r.Body)
+	if frame := readSSEFrame(t, r.Body, reader); frame != ": connected\n\n" {
+		t.Fatalf("connected=%q", frame)
+	}
+
+	switchedAt := time.Now().UTC()
+	accountB := resetwatch.Account{Ref: "acct-private-b"}
+	if err := f.store.ObserveAuthSource(t.Context(), "src-00000000000000000001", accountB, switchedAt); err != nil {
+		t.Fatal(err)
+	}
+	insertWarningForAccount(t, f, "event-b", accountB.Ref, switchedAt)
+	insertWarningForAccount(t, f, "event-a", "acct-private-sentinel", switchedAt.Add(time.Second))
+
+	for range 10 {
+		frame := readSSEFrame(t, r.Body, reader)
+		if strings.HasPrefix(frame, ": heartbeat") {
+			continue
+		}
+		if strings.Contains(frame, "event-b") || !strings.Contains(frame, "event-a") {
+			t.Fatalf("stream switched account: %q", frame)
+		}
+		if !strings.Contains(frame, `"accountId":"`+store.AccountID("codex", "acct-private-sentinel")+`"`) {
+			t.Fatalf("stream lost pinned public account: %q", frame)
+		}
+		return
+	}
+	t.Fatal("pinned account event not observed")
 }
 
 func TestUnixSSEFutureAndShutdownCleanup(t *testing.T) {

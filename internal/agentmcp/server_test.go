@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -92,7 +93,7 @@ func TestToolsAndCalls(t *testing.T) {
 		t.Fatalf("schemaVersion=%q", envelope.SchemaVersion)
 	}
 
-	for _, args := range []map[string]any{{"unknown": true}, {"profile": "INVALID"}, {"limit": 0}, {"limit": 101}, {"cursor": "bad"}, {"mode": "latest", "cursor": "v1.0000000000000000"}} {
+	for _, args := range []map[string]any{{"unknown": true}, {"account": "INVALID"}, {"profile": "legacy"}, {"limit": 0}, {"limit": 101}, {"cursor": "bad"}, {"mode": "latest", "cursor": "v1.0000000000000000"}} {
 		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: ListEventsTool, Arguments: args})
 		if err != nil {
 			t.Fatal(err)
@@ -142,6 +143,32 @@ func TestSuccessfulEventsReadOnlyAndConcurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = cs.Close() }()
+	wantContext, err := service.Context(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextResult, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: GetContextTool, Arguments: map[string]any{}})
+	if err != nil || contextResult.IsError {
+		t.Fatalf("context result=%#v err=%v", contextResult, err)
+	}
+	contextJSON, _ := json.Marshal(contextResult.StructuredContent)
+	wantContextJSON, _ := json.Marshal(wantContext)
+	if !equalJSON(contextJSON, wantContextJSON) {
+		t.Fatalf("MCP/direct context differ\ngot=%s\nwant=%s", contextJSON, wantContextJSON)
+	}
+	wantEvents, err := service.Events(ctx, agentcontext.EventPageRequest{Mode: "latest", Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsResult, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: ListEventsTool, Arguments: map[string]any{}})
+	if err != nil || eventsResult.IsError {
+		t.Fatalf("events result=%#v err=%v", eventsResult, err)
+	}
+	eventsJSON, _ := json.Marshal(eventsResult.StructuredContent)
+	wantEventsJSON, _ := json.Marshal(wantEvents)
+	if !equalJSON(eventsJSON, wantEventsJSON) {
+		t.Fatalf("MCP/direct events differ\ngot=%s\nwant=%s", eventsJSON, wantEventsJSON)
+	}
 	call := func() {
 		result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: ListEventsTool, Arguments: map[string]any{}})
 		if err != nil {
@@ -175,7 +202,7 @@ func TestSuccessfulEventsReadOnlyAndConcurrent(t *testing.T) {
 		t.Fatalf("explicit replay failed: result=%#v err=%v", replay, err)
 	}
 	if after := fileDigest(t, path); after != before {
-		t.Fatalf("MCP reads mutated store: before=%s after=%s", before, after)
+		t.Fatalf("MCP reads mutated store: before=%v after=%v", before, after)
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -184,21 +211,36 @@ func TestSuccessfulEventsReadOnlyAndConcurrent(t *testing.T) {
 	}
 }
 
-func fileDigest(t *testing.T, path string) string {
+func equalJSON(a, b []byte) bool {
+	var left, right any
+	return json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && reflect.DeepEqual(left, right)
+}
+
+type fileSnapshot struct {
+	Digest  string
+	Size    int64
+	ModTime int64
+}
+
+func fileDigest(t *testing.T, path string) fileSnapshot {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	return fileSnapshot{Digest: hex.EncodeToString(sum[:]), Size: info.Size(), ModTime: info.ModTime().UnixNano()}
 }
 
 type fakeService struct {
 	contextErr     error
 	eventsErr      error
 	entered        chan struct{}
-	contextProfile string
+	contextAccount string
 	eventsRequest  agentcontext.EventPageRequest
 }
 
@@ -211,27 +253,27 @@ func (f *fakeService) Context(ctx context.Context) (agentcontext.Context, error)
 	return agentcontext.Context{SchemaVersion: agentcontext.SchemaVersion, GeneratedAt: time.Now(), Sources: []agentcontext.Source{}, Providers: []agentcontext.Provider{}, Events: []agentcontext.Event{}}, f.contextErr
 }
 
-func (f *fakeService) ContextForProfile(ctx context.Context, profile string) (agentcontext.Context, error) {
-	f.contextProfile = profile
+func (f *fakeService) ContextForAccount(ctx context.Context, account string) (agentcontext.Context, error) {
+	f.contextAccount = account
 	return f.Context(ctx)
 }
 func (f *fakeService) Events(_ context.Context, request agentcontext.EventPageRequest) (agentcontext.EventPage, error) {
 	f.eventsRequest = request
-	return agentcontext.EventPage{SchemaVersion: agentcontext.EventsSchemaVersion, GeneratedAt: time.Now(), Events: []agentcontext.Event{}, Cursor: agentcontext.EventPageCursor{Next: "v1.0000000000000000", HighWater: "v1.0000000000000000"}}, f.eventsErr
+	return agentcontext.EventPage{SchemaVersion: agentcontext.EventsSchemaVersion, GeneratedAt: time.Now(), AccountID: "acct-00000000000000000001", Events: []agentcontext.Event{}, Cursor: agentcontext.EventPageCursor{Next: "v1.0000000000000000", HighWater: "v1.0000000000000000"}}, f.eventsErr
 }
 
-func TestProfileArgumentsReachMCPService(t *testing.T) {
+func TestAccountArgumentsReachMCPService(t *testing.T) {
 	fake := &fakeService{}
 	cs, closeFn := testClient(t, NewServer(fake))
 	defer closeFn()
-	if _, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: GetContextTool, Arguments: map[string]any{"profile": "work"}}); err != nil {
+	if _, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: GetContextTool, Arguments: map[string]any{"account": "work"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: ListEventsTool, Arguments: map[string]any{"profile": "personal"}}); err != nil {
+	if _, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: ListEventsTool, Arguments: map[string]any{"account": "personal"}}); err != nil {
 		t.Fatal(err)
 	}
-	if fake.contextProfile != "work" || fake.eventsRequest.ProfileID != "personal" {
-		t.Fatalf("context=%q events=%+v", fake.contextProfile, fake.eventsRequest)
+	if fake.contextAccount != "work" || fake.eventsRequest.Account != "personal" {
+		t.Fatalf("context=%q events=%+v", fake.contextAccount, fake.eventsRequest)
 	}
 }
 
@@ -244,7 +286,7 @@ func TestSafeToolErrors(t *testing.T) {
 		{"future", &agentcontext.EventPageError{ReasonCode: "cursor_future"}, "cursor_future"},
 		{"expired", &agentcontext.EventPageError{ReasonCode: "cursor_expired"}, "cursor_expired"},
 		{"unavailable", &agentcontext.EventPageError{ReasonCode: "events_unavailable"}, "events_unavailable"},
-		{"profile", &agentcontext.ProfileError{ReasonCode: "profile_unavailable"}, "profile_unavailable"},
+		{"account", &agentcontext.AccountError{ReasonCode: "account_unavailable"}, "account_unavailable"},
 		{"private", errors.New("open /Users/arda/.secrets/account-token: permission denied"), "data unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
