@@ -8,12 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/agensfield/scriba/internal/codexauth"
 )
 
-var profileIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var ntfyTopicPattern = regexp.MustCompile(`^[-_A-Za-z0-9]{1,64}$`)
 
@@ -43,7 +42,6 @@ type ServerConfig struct {
 	Enabled                          bool             `json:"enabled"`
 	StatePath                        string           `json:"statePath,omitempty"`
 	Environment                      string           `json:"environment"`
-	AccountLabel                     string           `json:"accountLabel,omitempty"`
 	StartupHeartbeatRateLimitMinutes int              `json:"startupHeartbeatRateLimitMinutes"`
 	ObservationRetentionDays         int              `json:"observationRetentionDays"`
 	ContextAPI                       ContextAPIConfig `json:"contextAPI"`
@@ -77,13 +75,12 @@ type DeliveryConfig struct {
 }
 
 type Config struct {
-	SchemaVersion    int       `json:"schemaVersion"`
-	DefaultProfileID string    `json:"defaultProfileId"`
-	Profiles         []Profile `json:"profiles"`
-	CacheDir         string    `json:"cacheDir,omitempty"`
-	Timezone         string    `json:"timezone,omitempty"`
-	Locale           string    `json:"locale"`
-	Providers        struct {
+	SchemaVersion  int      `json:"schemaVersion"`
+	CodexAuthPaths []string `json:"codexAuthPaths,omitempty"`
+	CacheDir       string   `json:"cacheDir,omitempty"`
+	Timezone       string   `json:"timezone,omitempty"`
+	Locale         string   `json:"locale"`
+	Providers      struct {
 		Claude ProviderConfig `json:"claude"`
 		Codex  ProviderConfig `json:"codex"`
 	} `json:"providers"`
@@ -92,18 +89,9 @@ type Config struct {
 	Deliveries DeliveryConfig `json:"deliveries,omitempty"`
 }
 
-type Profile struct {
-	ID             string   `json:"id"`
-	Label          string   `json:"label"`
-	Enabled        bool     `json:"enabled"`
-	CodexAuthPaths []string `json:"codexAuthPaths"`
-}
-
 func Default() Config {
 	var cfg Config
-	cfg.SchemaVersion = 2
-	cfg.DefaultProfileID = "default"
-	cfg.Profiles = []Profile{{ID: "default", Label: "personal", Enabled: true, CodexAuthPaths: codexauth.AuthPaths()}}
+	cfg.SchemaVersion = 3
 	cfg.Locale = "en-US"
 	cfg.Providers.Claude = ProviderConfig{Enabled: true}
 	cfg.Providers.Codex = ProviderConfig{Enabled: true}
@@ -120,7 +108,6 @@ func Default() Config {
 	cfg.Server = ServerConfig{
 		Enabled:                          false,
 		Environment:                      "dev",
-		AccountLabel:                     "personal",
 		StartupHeartbeatRateLimitMinutes: 30,
 		ObservationRetentionDays:         120,
 	}
@@ -160,10 +147,8 @@ func Load(path string) (Config, error) {
 	if header.SchemaVersion != nil && *header.SchemaVersion != 0 {
 		loadedVersion = *header.SchemaVersion
 	}
-	if loadedVersion == 2 {
-		cfg.DefaultProfileID = ""
-		cfg.Profiles = nil
-		cfg.Server.AccountLabel = ""
+	if loadedVersion < 1 || loadedVersion > 3 {
+		return cfg, errors.New("unsupported config schemaVersion")
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return cfg, err
@@ -192,34 +177,26 @@ func Load(path string) (Config, error) {
 	if cfg.Telegram.Alerts.WeeklyPercent == 0 {
 		cfg.Telegram.Alerts.WeeklyPercent = 80
 	}
-	if loadedVersion == 1 {
-		label := strings.TrimSpace(cfg.Server.AccountLabel)
-		if label == "" {
-			label = "personal"
+	if loadedVersion == 2 {
+		cfg.CodexAuthPaths, err = legacyAuthPaths(data)
+		if err != nil {
+			return cfg, err
 		}
-		cfg.SchemaVersion = 2
-		cfg.DefaultProfileID = "default"
-		cfg.Profiles = []Profile{{ID: "default", Label: label, Enabled: true, CodexAuthPaths: codexauth.AuthPaths()}}
-		return cfg, Validate(cfg)
 	}
-	if loadedVersion != 2 {
-		return cfg, errors.New("unsupported config schemaVersion")
-	}
-	cfg.SchemaVersion = 2
+	cfg.SchemaVersion = 3
 	if err := Validate(cfg); err != nil {
 		return cfg, err
 	}
-	cfg.Server.AccountLabel = defaultProfileLabel(cfg)
 	return cfg, nil
 }
 
-func defaultProfileLabel(cfg Config) string {
-	for _, profile := range cfg.Profiles {
-		if profile.ID == cfg.DefaultProfileID {
-			return profile.Label
-		}
+// AuthPaths resolves the configured credential sources. Explicit configuration
+// never falls back to ambient credentials if a file is missing.
+func (cfg Config) AuthPaths() []string {
+	if cfg.CodexAuthPaths != nil {
+		return append([]string(nil), cfg.CodexAuthPaths...)
 	}
-	return ""
+	return codexauth.AuthPaths()
 }
 
 func Save(path string, cfg Config) error {
@@ -229,7 +206,6 @@ func Save(path string, cfg Config) error {
 	if path == "" {
 		return errors.New("could not resolve config path")
 	}
-	cfg.Server.AccountLabel = ""
 	if err := Validate(cfg); err != nil {
 		return err
 	}
@@ -244,7 +220,7 @@ func Save(path string, cfg Config) error {
 }
 
 func Validate(cfg Config) error {
-	if cfg.SchemaVersion != 2 {
+	if cfg.SchemaVersion != 3 {
 		return errors.New("unsupported config schemaVersion")
 	}
 	if cfg.Server.ContextAPI.SocketPath != "" && !filepath.IsAbs(cfg.Server.ContextAPI.SocketPath) {
@@ -253,47 +229,19 @@ func Validate(cfg Config) error {
 	if cfg.Server.ObservationRetentionDays <= 0 || cfg.Server.ObservationRetentionDays > MaxObservationRetentionDays {
 		return fmt.Errorf("server.observationRetentionDays must be between 1 and %d", MaxObservationRetentionDays)
 	}
-	if cfg.DefaultProfileID == "" {
-		return errors.New("defaultProfileId is required")
+	if cfg.CodexAuthPaths != nil && len(cfg.CodexAuthPaths) == 0 {
+		return errors.New("codexAuthPaths must contain at least one auth path when configured")
 	}
-	enabled := 0
-	ids := make(map[string]struct{}, len(cfg.Profiles))
-	paths := make(map[string]string)
-	defaultEnabled := false
-	for i, profile := range cfg.Profiles {
-		if len(profile.ID) > 32 || !profileIDPattern.MatchString(profile.ID) {
-			return fmt.Errorf("profiles[%d].id must be a lowercase slug of at most 32 characters", i)
+	seen := make(map[string]bool)
+	for i, path := range cfg.CodexAuthPaths {
+		if !filepath.IsAbs(path) {
+			return fmt.Errorf("codexAuthPaths[%d] must be absolute", i)
 		}
-		if _, exists := ids[profile.ID]; exists {
-			return fmt.Errorf("duplicate profile id %q", profile.ID)
+		clean := filepath.Clean(path)
+		if seen[clean] {
+			return fmt.Errorf("duplicate codex auth path %q", clean)
 		}
-		ids[profile.ID] = struct{}{}
-		if strings.TrimSpace(profile.Label) == "" {
-			return fmt.Errorf("profiles[%d].label must be nonempty", i)
-		}
-		if profile.Enabled {
-			enabled++
-			defaultEnabled = defaultEnabled || profile.ID == cfg.DefaultProfileID
-			if len(profile.CodexAuthPaths) == 0 {
-				return fmt.Errorf("profiles[%d].codexAuthPaths must contain an explicit auth path", i)
-			}
-		}
-		for j, path := range profile.CodexAuthPaths {
-			if !filepath.IsAbs(path) {
-				return fmt.Errorf("profiles[%d].codexAuthPaths[%d] must be absolute", i, j)
-			}
-			clean := filepath.Clean(path)
-			if owner, exists := paths[clean]; exists {
-				return fmt.Errorf("codex auth path %q is duplicated by profiles %q and %q", clean, owner, profile.ID)
-			}
-			paths[clean] = profile.ID
-		}
-	}
-	if enabled == 0 {
-		return errors.New("at least one profile must be enabled")
-	}
-	if !defaultEnabled {
-		return errors.New("defaultProfileId must identify an enabled profile")
+		seen[clean] = true
 	}
 	if err := validateDeliveries(cfg.Deliveries); err != nil {
 		return err
@@ -304,7 +252,7 @@ func Validate(cfg Config) error {
 func validateDeliveries(cfg DeliveryConfig) error {
 	seen := make(map[string]struct{}, len(cfg.Webhooks)+len(cfg.Ntfy))
 	validateID := func(kind, id string) error {
-		if len(id) > 32 || !profileIDPattern.MatchString(id) {
+		if len(id) > 32 || !slugPattern.MatchString(id) {
 			return fmt.Errorf("%s id must be a lowercase slug of at most 32 characters", kind)
 		}
 		target := kind + ":" + id

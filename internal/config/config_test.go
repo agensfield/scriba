@@ -60,7 +60,7 @@ func TestObservationRetentionMustBePositive(t *testing.T) {
 	}
 }
 
-func TestDefaultIsValidV2WithDiscoveredAuthPaths(t *testing.T) {
+func TestDefaultDiscoversAuthPaths(t *testing.T) {
 	codexHome := t.TempDir()
 	t.Setenv("CODEX_HOME", codexHome)
 	cfg := Default()
@@ -68,7 +68,7 @@ func TestDefaultIsValidV2WithDiscoveredAuthPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := filepath.Join(codexHome, "auth.json")
-	if cfg.SchemaVersion != 2 || cfg.DefaultProfileID != "default" || len(cfg.Profiles) != 1 || cfg.Profiles[0].CodexAuthPaths[0] != want {
+	if cfg.SchemaVersion != 3 || len(cfg.AuthPaths()) != 1 || cfg.AuthPaths()[0] != want {
 		t.Fatalf("unexpected default: %+v", cfg)
 	}
 }
@@ -85,7 +85,7 @@ func TestLoadV1NormalizesWithoutRewriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 2 || cfg.DefaultProfileID != "default" || len(cfg.Profiles) != 1 || cfg.Profiles[0].Label != "work" || cfg.Server.AccountLabel != "work" || len(cfg.Providers.Codex.Paths) != 0 {
+	if cfg.SchemaVersion != 3 || cfg.AuthPaths()[0] != filepath.Join(codexHome, "auth.json") || len(cfg.Providers.Codex.Paths) != 0 {
 		t.Fatalf("unexpected normalized config: %+v", cfg)
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != legacy {
@@ -105,7 +105,7 @@ func TestLoadVersionlessV1NormalizesWithoutRewriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 2 || cfg.DefaultProfileID != "default" || len(cfg.Profiles) != 1 || cfg.Profiles[0].Label != "legacy-work" || cfg.Server.AccountLabel != "legacy-work" {
+	if cfg.SchemaVersion != 3 || cfg.AuthPaths()[0] != filepath.Join(codexHome, "auth.json") {
 		t.Fatalf("unexpected normalized config: %+v", cfg)
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != legacy {
@@ -132,14 +132,10 @@ func TestV2LoadDoesNotDiscoverMissingProfilesOrPaths(t *testing.T) {
 	}
 }
 
-func TestV2RoundTrip(t *testing.T) {
+func TestAuthSourcesRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := Default()
-	cfg.Profiles = []Profile{
-		{ID: "personal", Label: "Personal", Enabled: true, CodexAuthPaths: []string{"/auth/personal.json"}},
-		{ID: "work", Label: "Work", Enabled: true, CodexAuthPaths: []string{"/auth/work.json"}},
-	}
-	cfg.DefaultProfileID = "work"
+	cfg.CodexAuthPaths = []string{"/auth/work.json", "/auth/personal.json"}
 	if err := Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -147,42 +143,28 @@ func TestV2RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Profiles) != 2 || got.DefaultProfileID != "work" || got.Profiles[1].CodexAuthPaths[0] != "/auth/work.json" || got.Server.AccountLabel != "Work" {
+	if len(got.AuthPaths()) != 2 || got.AuthPaths()[0] != "/auth/work.json" || got.AuthPaths()[1] != "/auth/personal.json" {
 		t.Fatalf("round trip mismatch: %+v", got)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "accountLabel") {
-		t.Fatalf("v2 persisted compatibility-only accountLabel: %s", data)
-	}
 	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil || raw["schemaVersion"] != float64(2) {
-		t.Fatalf("invalid saved v2: %v, %s", err, data)
+	if err := json.Unmarshal(data, &raw); err != nil || raw["schemaVersion"] != float64(3) {
+		t.Fatalf("invalid saved config: %v, %s", err, data)
 	}
 }
 
-func TestProfileValidation(t *testing.T) {
+func TestAuthSourceValidation(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*Config)
 	}{
-		{"bad id", func(c *Config) { c.Profiles[0].ID = "Not_A_Slug" }},
-		{"long id", func(c *Config) { c.Profiles[0].ID = strings.Repeat("a", 33) }},
-		{"empty label", func(c *Config) { c.Profiles[0].Label = "  " }},
-		{"no enabled", func(c *Config) { c.Profiles[0].Enabled = false }},
-		{"missing default", func(c *Config) { c.DefaultProfileID = "missing" }},
-		{"relative auth", func(c *Config) { c.Profiles[0].CodexAuthPaths = []string{"auth.json"} }},
-		{"missing auth", func(c *Config) { c.Profiles[0].CodexAuthPaths = nil }},
-		{"duplicate auth", func(c *Config) {
-			c.Profiles[0].CodexAuthPaths = append(c.Profiles[0].CodexAuthPaths, c.Profiles[0].CodexAuthPaths[0])
-		}},
-		{"duplicate id", func(c *Config) { c.Profiles = append(c.Profiles, c.Profiles[0]) }},
-		{"cleaned path overlap", func(c *Config) {
-			c.Profiles = append(c.Profiles, Profile{ID: "work", Label: "Work", Enabled: true, CodexAuthPaths: []string{"/tmp/x/../auth.json"}})
-			c.Profiles[0].CodexAuthPaths = []string{"/tmp/auth.json"}
-		}},
+		{"relative auth", func(c *Config) { c.CodexAuthPaths = []string{"auth.json"} }},
+		{"empty explicit sources", func(c *Config) { c.CodexAuthPaths = []string{} }},
+		{"duplicate auth", func(c *Config) { c.CodexAuthPaths = []string{"/tmp/auth.json", "/tmp/auth.json"} }},
+		{"cleaned path overlap", func(c *Config) { c.CodexAuthPaths = []string{"/tmp/auth.json", "/tmp/x/../auth.json"} }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

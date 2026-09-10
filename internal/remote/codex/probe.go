@@ -72,10 +72,24 @@ type resetCredit struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// FetchOptions binds one request to explicit Codex credential files. Empty
-// paths preserve legacy discovery for callers that have not adopted profiles.
+// FetchOptions binds one request to explicit Codex credential files and,
+// when provided, the strong provider account identity selected by the caller.
 type FetchOptions struct {
-	AuthPaths []string
+	AuthPaths         []string
+	ExpectedAccountID string
+}
+
+// AccountBindingError means credentials no longer prove the account selected
+// for a live request. Callers should resolve the account again.
+type AccountBindingError struct {
+	Changed bool
+}
+
+func (e *AccountBindingError) Error() string {
+	if e.Changed {
+		return "codex account changed while preparing request; select the account again"
+	}
+	return "codex account identity is unavailable; select the account again"
 }
 
 type ProfileResult struct {
@@ -226,6 +240,9 @@ func FetchProfileWithOptions(ctx context.Context, client *http.Client, opts Fetc
 	if err != nil {
 		return ProfileResult{}, err
 	}
+	if err := verifyExpectedAccount(auth, opts.ExpectedAccountID); err != nil {
+		return ProfileResult{}, err
+	}
 	if !auth.OK {
 		return ProfileResult{
 			ProviderID: "codex",
@@ -238,6 +255,9 @@ func FetchProfileWithOptions(ctx context.Context, client *http.Client, opts Fetc
 	if isAuthHTTPError(err) {
 		auth, err = loadAuth(ctx, client, true, opts.AuthPaths)
 		if err != nil {
+			return ProfileResult{}, err
+		}
+		if err := verifyExpectedAccount(auth, opts.ExpectedAccountID); err != nil {
 			return ProfileResult{}, err
 		}
 		if !auth.OK {
@@ -264,6 +284,9 @@ func FetchLimitsWithOptions(ctx context.Context, client *http.Client, opts Fetch
 	if err != nil {
 		return remote.ProbeResult{}, err
 	}
+	if err := verifyExpectedAccount(auth, opts.ExpectedAccountID); err != nil {
+		return remote.ProbeResult{}, err
+	}
 	if !auth.OK {
 		return remote.ProbeResult{
 			ProviderID: "codex",
@@ -276,6 +299,9 @@ func FetchLimitsWithOptions(ctx context.Context, client *http.Client, opts Fetch
 	if isAuthHTTPError(err) {
 		auth, err = loadAuth(ctx, client, true, opts.AuthPaths)
 		if err != nil {
+			return remote.ProbeResult{}, err
+		}
+		if err := verifyExpectedAccount(auth, opts.ExpectedAccountID); err != nil {
 			return remote.ProbeResult{}, err
 		}
 		if !auth.OK {
@@ -294,6 +320,21 @@ func FetchLimitsWithOptions(ctx context.Context, client *http.Client, opts Fetch
 		Provenance:   []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", FetchedAt: now}},
 		AuthState:    auth,
 	}, nil
+}
+
+func verifyExpectedAccount(auth remote.AuthState, expected string) error {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return nil
+	}
+	actual := strings.TrimSpace(auth.AccountID)
+	if actual == "" {
+		return &AccountBindingError{}
+	}
+	if actual != expected {
+		return &AccountBindingError{Changed: true}
+	}
+	return nil
 }
 
 func profileResult(parsed profileResponse, auth remote.AuthState, fetchedAt string) ProfileResult {

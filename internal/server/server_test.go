@@ -3,15 +3,18 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/agensfield/scriba/internal/accounts"
 	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/radar"
@@ -29,7 +32,7 @@ func TestRefreshSeedsBaselineThenNotifiesResetOnce(t *testing.T) {
 		probeResult("2026-06-09T12:00:00Z", "2026-06-02T17:00:00Z"),
 	}}
 	notifier := &fakeNotifier{}
-	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal", JokeTone: "spicy"})
+	srv := New(openStore(t), fetcher, notifier, testServerConfig(t, Config{JokeTone: "spicy"}))
 
 	first, err := srv.RefreshNow(ctx)
 	if err != nil {
@@ -69,7 +72,7 @@ func TestRefreshMigrationPolicyBootstrapDoesNotNotifyAccountBaseline(t *testing.
 	ctx := context.Background()
 	s := openStore(t)
 	legacyResult := probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")
-	legacyObservation := New(s, nil, nil, Config{AccountLabel: "personal"}).observation(legacyResult)
+	legacyObservation := New(s, nil, nil, testServerConfig(t, Config{})).observation(legacyResult)
 	legacyDecision := resetwatch.Decide(legacyObservation, nil, resetwatch.DefaultOptions())
 	if _, err := s.ApplyDecision(ctx, legacyObservation, legacyDecision); err != nil {
 		t.Fatalf("seed legacy v7 history: %v", err)
@@ -78,7 +81,7 @@ func TestRefreshMigrationPolicyBootstrapDoesNotNotifyAccountBaseline(t *testing.
 	notifier := &fakeNotifier{}
 	srv := New(s, &fakeFetcher{results: []remote.ProbeResult{
 		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:01:00Z"),
-	}}, notifier, Config{AccountLabel: "personal"})
+	}}, notifier, testServerConfig(t, Config{}))
 	result, err := srv.RefreshNow(ctx)
 	if err != nil {
 		t.Fatalf("migration refresh: %v", err)
@@ -90,7 +93,7 @@ func TestRefreshMigrationPolicyBootstrapDoesNotNotifyAccountBaseline(t *testing.
 
 func TestPollIntervalSetting(t *testing.T) {
 	ctx := context.Background()
-	srv := New(openStore(t), nil, nil, Config{})
+	srv := New(openStore(t), nil, nil, testServerConfig(t, Config{}))
 	interval, err := srv.PollInterval(ctx)
 	if err != nil {
 		t.Fatalf("default interval: %v", err)
@@ -129,7 +132,7 @@ func TestRefreshEmitsLimitWarningsOncePerCheckpoint(t *testing.T) {
 		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
 	}}
 	notifier := &fakeNotifier{}
-	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal"})
+	srv := New(openStore(t), fetcher, notifier, testServerConfig(t, Config{}))
 	first, err := srv.RefreshNow(ctx)
 	if err != nil {
 		t.Fatalf("first refresh: %v", err)
@@ -166,7 +169,7 @@ func TestRefreshEmitsGrantExpiryWarningsOncePerCheckpoint(t *testing.T) {
 		probeResultWithGrant("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z", expiresAt),
 	}}
 	notifier := &fakeNotifier{}
-	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal"})
+	srv := New(openStore(t), fetcher, notifier, testServerConfig(t, Config{}))
 	first, err := srv.RefreshNow(ctx)
 	if err != nil {
 		t.Fatalf("first refresh: %v", err)
@@ -202,12 +205,12 @@ func TestPollOnceUsesAtomicApplyAndMapsTypedResults(t *testing.T) {
 	}
 	spy := &atomicPollStore{Store: base, result: want}
 	notifier := &fakeNotifier{}
-	srv := New(spy, &fakeFetcher{results: []remote.ProbeResult{probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")}}, notifier, Config{
+	srv := New(spy, &fakeFetcher{results: []remote.ProbeResult{probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")}}, notifier, testServerConfig(t, Config{
 		NotificationTarget: "telegram:42",
 		JokeTone:           "spicy",
-	})
+	}))
 
-	got, err := srv.pollOnce(ctx)
+	got, _, err := pollTestSource(ctx, srv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,9 +236,9 @@ func TestPollOnceAtomicApplyFailureDoesNotNotify(t *testing.T) {
 	base := openStore(t)
 	spy := &atomicPollStore{Store: base, err: errors.New("atomic write failed")}
 	notifier := &fakeNotifier{}
-	srv := New(spy, &fakeFetcher{results: []remote.ProbeResult{probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")}}, notifier, Config{})
+	srv := New(spy, &fakeFetcher{results: []remote.ProbeResult{probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z")}}, notifier, testServerConfig(t, Config{}))
 
-	if _, err := srv.pollOnce(context.Background()); err == nil || err.Error() != "atomic write failed" {
+	if _, _, err := pollTestSource(context.Background(), srv); err == nil || err.Error() != "atomic write failed" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if spy.applyCalls != 1 || spy.oldCalls != 0 {
@@ -260,7 +263,7 @@ func TestRefreshEmitsResetGrantLoadedOnlyForNewCredits(t *testing.T) {
 		}),
 	}}
 	notifier := &fakeNotifier{}
-	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal"})
+	srv := New(openStore(t), fetcher, notifier, testServerConfig(t, Config{}))
 	first, err := srv.RefreshNow(ctx)
 	if err != nil {
 		t.Fatalf("first refresh: %v", err)
@@ -302,7 +305,7 @@ func TestRefreshEmitsRadarProbabilityAlertsOnUpwardMilestones(t *testing.T) {
 		radarCurrent("2026-06-01T12:10:00Z", 0.76),
 		radarCurrent("2026-06-01T12:15:00Z", 0.30),
 	}}
-	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal"})
+	srv := New(openStore(t), fetcher, notifier, testServerConfig(t, Config{}))
 	srv.SetRadarFetcher(radarFetcher)
 	for i := 0; i < 4; i++ {
 		if _, err := srv.RefreshNow(ctx); err != nil {
@@ -325,7 +328,7 @@ func TestStartupHeartbeatOnlySendsOnce(t *testing.T) {
 		probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"),
 	}}
 	notifier := &fakeNotifier{}
-	srv := New(openStore(t), fetcher, notifier, Config{AccountLabel: "personal", StartupHeartbeat: true})
+	srv := New(openStore(t), fetcher, notifier, testServerConfig(t, Config{StartupHeartbeat: true}))
 	for i := 0; i < 3; i++ {
 		if _, err := srv.RefreshNow(ctx); err != nil {
 			t.Fatalf("refresh %d: %v", i, err)
@@ -344,7 +347,7 @@ func TestHealthRecordsPollFailuresAndRecovery(t *testing.T) {
 		return remote.ProbeResult{AuthState: remote.AuthState{OK: false}}, nil
 	})
 	notifier := &fakeNotifier{}
-	srv := New(openStore(t), fetcher, notifier, Config{})
+	srv := New(openStore(t), fetcher, notifier, testServerConfig(t, Config{}))
 	for i := 0; i < FailureAlertThreshold; i++ {
 		if _, err := srv.RefreshNow(ctx); err == nil {
 			t.Fatal("expected refresh failure")
@@ -388,7 +391,7 @@ func TestRefreshNowIsSingleFlight(t *testing.T) {
 		<-release
 		return probeResult("2026-06-06T21:00:00Z", "2026-05-31T17:00:00Z"), nil
 	})
-	srv := New(openStore(t), fetcher, nil, Config{})
+	srv := New(openStore(t), fetcher, nil, testServerConfig(t, Config{}))
 	errs := make(chan error, 1)
 	go func() {
 		_, err := srv.RefreshNow(ctx)
@@ -419,7 +422,7 @@ func TestRunDoesNotLogShutdownCancellationAsPollFailure(t *testing.T) {
 		<-ctx.Done()
 		return remote.ProbeResult{}, ctx.Err()
 	})
-	srv := New(openStore(t), fetcher, nil, Config{})
+	srv := New(openStore(t), fetcher, nil, testServerConfig(t, Config{}))
 	var logs bytes.Buffer
 	srv.logger = slog.New(slog.NewTextHandler(&logs, nil))
 	done := make(chan error, 1)
@@ -431,117 +434,6 @@ func TestRunDoesNotLogShutdownCancellationAsPollFailure(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "poll failed") || strings.Contains(logs.String(), "context canceled") {
 		t.Fatalf("shutdown cancellation logged as failure: %s", logs.String())
-	}
-}
-
-func TestRefreshProfilesLogsSanitizedFailureClassification(t *testing.T) {
-	ctx := context.Background()
-	fetcher := fakeFetcherFunc(func(context.Context) (remote.ProbeResult, error) {
-		return remote.ProbeResult{}, context.DeadlineExceeded
-	})
-	srv := New(openStore(t), fetcher, nil, Config{})
-	var logs bytes.Buffer
-	srv.logger = slog.New(slog.NewTextHandler(&logs, nil))
-
-	if _, err := srv.RefreshProfilesNow(ctx); !errors.Is(err, ErrAllProfilesFailed) {
-		t.Fatalf("refresh err=%v", err)
-	}
-	got := logs.String()
-	for _, field := range []string{"msg=\"scriba profile poll failed\"", "profile_ref=default", "stage=fetch", "failure_kind=network", "error_code=timeout"} {
-		if !strings.Contains(got, field) {
-			t.Fatalf("missing %q in log: %s", field, got)
-		}
-	}
-}
-
-func TestHealthMarksExpiredAttemptInterrupted(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-	if err := st.RecordProfilePollAttempt(ctx, "default", time.Now().Add(-DefaultRefreshTimeout-time.Second).UTC()); err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, nil, nil, Config{})
-	health, err := srv.Health(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if health.Status != HealthDegraded || health.FailureKind != "interrupted" {
-		t.Fatalf("unexpected health: %#v", health)
-	}
-}
-
-func TestHealthPreservesConfiguredProfileOrderAndMissingDefault(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-	if err := st.SyncProfiles(ctx, []store.ProfileSpec{
-		{ProfileRef: "personal", Label: "Stored Personal", ProviderID: "codex", Enabled: true, IsDefault: true},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, nil, nil, Config{Profiles: []Profile{
-		{Ref: "personal", Label: "Personal"},
-		{Ref: "work", Label: "Work", Default: true},
-	}})
-	health, err := srv.Health(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(health.Profiles) != 2 {
-		t.Fatalf("profiles=%+v", health.Profiles)
-	}
-	if health.Profiles[0].Profile.Ref != "personal" || health.Profiles[0].Profile.Label != "Stored Personal" || health.Profiles[0].IsDefault {
-		t.Fatalf("first profile=%+v", health.Profiles[0])
-	}
-	missing := health.Profiles[1]
-	if missing.Profile.Ref != "work" || missing.Profile.Label != "Work" || !missing.IsDefault || missing.Status != HealthUnknown {
-		t.Fatalf("missing profile=%+v", missing)
-	}
-	if health.Status != HealthUnknown {
-		t.Fatalf("health status=%s", health.Status)
-	}
-}
-
-func TestProfileReadSelectionUsesConfiguredDefaultAndMappedAccount(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-	if err := st.SyncProfiles(ctx, []store.ProfileSpec{
-		{ProfileRef: "personal", Label: "Personal", ProviderID: "codex", Enabled: true, IsDefault: true},
-		{ProfileRef: "work", Label: "Work", ProviderID: "codex", Enabled: true},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	base := time.Date(2026, 7, 13, 3, 0, 0, 0, time.UTC)
-	for i, ref := range []string{"personal", "work"} {
-		used := 20 + float64(60*i)
-		at := base.Add(time.Duration(i) * time.Hour)
-		obs := resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "acct-" + ref}, ObservedAt: at, SnapshotJSON: []byte(`{}`), Windows: []resetwatch.Window{{Label: resetwatch.LabelWeeklyLimit, UsedPercent: &used, ResetAt: base.Add(7 * 24 * time.Hour)}}}
-		input := store.CodexPollInput{ProfileRef: ref, Observation: obs, ResetOptions: resetwatch.DefaultOptions(), CommittedAt: at.Add(time.Second)}
-		if _, err := st.ApplyCodexPoll(ctx, input); err != nil {
-			t.Fatal(err)
-		}
-	}
-	srv := New(st, nil, nil, Config{Profiles: []Profile{
-		{Ref: "personal", Label: "Personal", Default: true, AuthPaths: []string{"/auth/personal.json"}},
-		{Ref: "work", Label: "Work", AuthPaths: []string{"/auth/work.json"}},
-	}})
-	for _, tc := range []struct{ requested, account string }{{"", "acct-personal"}, {"work", "acct-work"}} {
-		obs, ok, err := srv.LatestObservationForProfile(ctx, tc.requested)
-		if err != nil || !ok || obs.Account.Ref != tc.account {
-			t.Fatalf("requested=%q obs=%+v ok=%v err=%v", tc.requested, obs, ok, err)
-		}
-	}
-	if _, _, err := srv.LatestObservationForProfile(ctx, "unknown"); !errors.Is(err, ErrProfileUnavailable) {
-		t.Fatalf("unknown err=%v", err)
-	}
-	withoutAuth := New(st, nil, nil, Config{Profiles: []Profile{{Ref: "personal", Label: "Personal", Default: true}}})
-	if _, err := withoutAuth.CodexProfileForProfile(ctx, ""); !errors.Is(err, ErrProfileAuthPaths) {
-		t.Fatalf("missing auth paths err=%v", err)
-	}
-	if _, err := withoutAuth.PlanCodexReset(ctx, ""); !errors.Is(err, ErrProfileAuthPaths) {
-		t.Fatalf("reset plan missing auth paths err=%v", err)
-	}
-	if _, err := withoutAuth.ConsumeCodexReset(ctx, "", remotecodex.ResetAccountPin{}, remote.ResetCredit{ID: "credit"}, "request"); !errors.Is(err, ErrProfileAuthPaths) {
-		t.Fatalf("reset consume missing auth paths err=%v", err)
 	}
 }
 
@@ -569,53 +461,46 @@ func TestSanitizeCodexAuthStateRemovesPrivateDiagnostics(t *testing.T) {
 	}
 }
 
-func TestHealthReportsConfiguredProfileUnknownWhenDurableRowIsDisabled(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-	if err := st.SyncProfiles(ctx, []store.ProfileSpec{
-		{ProfileRef: "personal", Label: "Old Personal", ProviderID: "codex", Enabled: false},
-		{ProfileRef: "work", Label: "Work", ProviderID: "codex", Enabled: true, IsDefault: true},
-	}); err != nil {
-		t.Fatal(err)
+func TestCodexResetPlanPublicJSONOmitsPrivateAccountIdentity(t *testing.T) {
+	payload := CodexResetPlan{
+		Account: store.Account{ID: "acct-public", Ref: "private-account-ref", ProviderID: "codex", SourceRefs: []string{"src-private"}},
+		Plan: remotecodex.RateLimitResetPlan{
+			ProviderID: "codex",
+			AuthState:  remote.AuthState{OK: true, AccountID: "private-account-ref", AccessToken: "private-token"},
+		},
 	}
-	health, err := New(st, nil, nil, Config{Profiles: []Profile{
-		{Ref: "personal", Label: "Personal", Default: true},
-	}}).Health(ctx)
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(health.Profiles) != 1 || health.Profiles[0].Profile.Ref != "personal" || health.Profiles[0].Profile.Label != "Personal" || !health.Profiles[0].IsDefault || health.Profiles[0].Status != HealthUnknown {
-		t.Fatalf("profiles=%+v", health.Profiles)
+	for _, private := range []string{"private-account-ref", "private-token", "src-private", "accountPin"} {
+		if strings.Contains(string(raw), private) {
+			t.Fatalf("reset plan leaked %q: %s", private, raw)
+		}
 	}
 }
 
-func TestHealthDegradesForQueueWithoutOverwritingPollFailure(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-	now := time.Now().UTC()
-	if err := st.StageTelegramUpdates(ctx, "bot", []store.TelegramUpdateInput{{UpdateID: 1, RawJSON: `{}`}}, now); err != nil {
+func testServerConfig(t *testing.T, cfg Config) Config {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(path, []byte(`{"tokens":{"access_token":"test-token","account_id":"acct_123"},"last_refresh":"2026-09-10T00:00:00Z"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := st.MarkTelegramUpdateDead(ctx, "bot", 1, "bad update", now); err != nil || !ok {
-		t.Fatalf("dead ok=%v err=%v", ok, err)
+	cfg.Sources = []accounts.Source{{Ref: accounts.SourceRef(path), Path: path}}
+	return cfg
+}
+
+func pollTestSource(ctx context.Context, srv *Server) (PollResult, string, error) {
+	if err := srv.accounts.Sync(ctx); err != nil {
+		return PollResult{}, "sync", err
 	}
-	attempt := now.Add(time.Second)
-	if err := st.RecordProfilePollAttempt(ctx, "default", attempt); err != nil {
-		t.Fatal(err)
+	source := srv.cfg.Sources[0]
+	inspection := accounts.Inspect(source)
+	if err := srv.store.ObserveAuthSource(ctx, source.Ref, inspection.Account, time.Now().UTC()); err != nil {
+		return PollResult{}, "observe", err
 	}
-	if err := st.RecordProfilePollFailure(ctx, "default", attempt, attempt.Add(time.Second), store.ProfileFailureAuth, store.ProfileErrorUnauthorized); err != nil {
-		t.Fatal(err)
-	}
-	health, err := New(st, nil, nil, Config{}).Health(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if health.Status != HealthDegraded || health.QueueReason != "dead_letters" || health.TelegramInbox.Dead != 1 {
-		t.Fatalf("health: %#v", health)
-	}
-	if health.FailureKind != "auth" || health.LastError != store.ProfileErrorUnauthorized {
-		t.Fatalf("poll failure overwritten: %#v", health)
-	}
+	return srv.pollSource(ctx, source, inspection)
 }
 
 func openStore(t *testing.T) *store.Store {
@@ -673,7 +558,7 @@ func (s *atomicPollStore) InsertResetGrantEvents(context.Context, resetwatch.Obs
 	return nil, errors.New("legacy InsertResetGrantEvents called")
 }
 
-func (f *fakeFetcher) FetchLimits(context.Context) (remote.ProbeResult, error) {
+func (f *fakeFetcher) FetchLimits(context.Context, accounts.Source, string) (remote.ProbeResult, error) {
 	if f.index >= len(f.results) {
 		return f.results[len(f.results)-1], nil
 	}
@@ -684,7 +569,7 @@ func (f *fakeFetcher) FetchLimits(context.Context) (remote.ProbeResult, error) {
 
 type fakeFetcherFunc func(context.Context) (remote.ProbeResult, error)
 
-func (f fakeFetcherFunc) FetchLimits(ctx context.Context) (remote.ProbeResult, error) {
+func (f fakeFetcherFunc) FetchLimits(ctx context.Context, _ accounts.Source, _ string) (remote.ProbeResult, error) {
 	return f(ctx)
 }
 

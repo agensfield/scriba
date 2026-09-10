@@ -101,6 +101,9 @@ func PlanRateLimitReset(ctx context.Context, client *http.Client, opts FetchOpti
 	if err != nil {
 		return RateLimitResetPlan{}, err
 	}
+	if err := verifyExpectedAccount(auth, opts.ExpectedAccountID); err != nil {
+		return RateLimitResetPlan{}, err
+	}
 	if !auth.OK {
 		return RateLimitResetPlan{}, fmt.Errorf("codex auth unavailable: %s", auth.Error)
 	}
@@ -112,6 +115,9 @@ func PlanRateLimitReset(ctx context.Context, client *http.Client, opts FetchOpti
 	if isAuthHTTPError(err) {
 		auth, err = loadAuth(ctx, client, true, opts.AuthPaths)
 		if err != nil {
+			return RateLimitResetPlan{}, err
+		}
+		if err := verifyExpectedAccount(auth, opts.ExpectedAccountID); err != nil {
 			return RateLimitResetPlan{}, err
 		}
 		if !auth.OK {

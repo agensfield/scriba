@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agensfield/scriba/internal/accounts"
 	"github.com/agensfield/scriba/internal/budget"
 	"github.com/agensfield/scriba/internal/buildinfo"
 	"github.com/agensfield/scriba/internal/model"
@@ -25,22 +26,14 @@ const (
 	DefaultRefreshTimeout       = 90 * time.Second
 	SettingPollInterval         = "poll_interval"
 	maxObservationRetentionDays = 36500
-	SettingPollAttemptAt        = "poll_attempt_at"
 	SettingLastPruneAt          = "last_prune_at"
-	SettingPollSuccessAt        = "poll_success_at"
-	SettingPollFailureAt        = "poll_failure_at"
-	SettingPollFailureCount     = "poll_failure_count"
-	SettingPollFailureError     = "poll_failure_error"
-	SettingHealthAlertState     = "health_alert_state"
 	SettingRadarMilestone       = "radar_probability_milestone"
 	FailureAlertThreshold       = 3
 )
 
 var (
-	ErrRefreshInProgress  = errors.New("refresh already in progress")
-	ErrAllProfilesFailed  = errors.New("all profiles failed")
-	ErrProfileAuthPaths   = errors.New("explicit profile requires auth paths")
-	ErrProfileUnavailable = errors.New("profile unavailable")
+	ErrRefreshInProgress = errors.New("refresh already in progress")
+	ErrAllSourcesFailed  = errors.New("all auth sources failed")
 )
 
 type Store interface {
@@ -49,24 +42,25 @@ type Store interface {
 	SetSetting(context.Context, string, string) error
 	LoadLastResetEvent(context.Context) (resetwatch.Event, bool, error)
 	LoadLatestObservation(context.Context) (resetwatch.Observation, bool, error)
-	LoadLatestObservationForProfile(context.Context, string) (resetwatch.Observation, bool, error)
+	LoadLatestObservationForAccount(context.Context, string) (resetwatch.Observation, bool, error)
 	PruneObservations(context.Context, time.Time, bool) (store.PruneResult, error)
 	InsertRadarAlertEvent(context.Context, radar.ProbabilityAlert, ...string) (bool, error)
 	Stats(context.Context) (store.Stats, error)
-	ListProfileHealth(context.Context) ([]store.ProfileHealth, error)
-	RecordProfilePollAttempt(context.Context, string, time.Time) error
-	RecordProfilePollSuccess(context.Context, string, time.Time, time.Time) error
-	RecordProfilePollFailure(context.Context, string, time.Time, time.Time, string, string) error
-	AbortProfilePollAttempt(context.Context, string, time.Time) error
-	CompareAndSwapProfileAlertState(context.Context, string, string, string) (bool, error)
+	SyncAuthSources(context.Context, []store.SourceSpec) error
+	ObserveAuthSource(context.Context, string, resetwatch.Account, time.Time) error
+	ListAccounts(context.Context) ([]store.Account, error)
+	ResolveAccount(context.Context, string) (store.Account, bool, error)
+	SetAccountAlias(context.Context, string, string) error
+	ListSourceHealth(context.Context) ([]store.SourceHealth, error)
+	RecordSourcePollAttempt(context.Context, string, time.Time) error
+	RecordSourcePollSuccess(context.Context, string, time.Time, time.Time) error
+	RecordSourcePollFailure(context.Context, string, time.Time, time.Time, string, string) error
+	AbortSourcePollAttempt(context.Context, string, time.Time) error
+	CompareAndSwapSourceAlertState(context.Context, string, string, string) (bool, error)
 }
 
 type Fetcher interface {
-	FetchLimits(context.Context) (remote.ProbeResult, error)
-}
-
-type ProfileFetcher interface {
-	FetchProfileLimits(context.Context, Profile) (remote.ProbeResult, error)
+	FetchLimits(context.Context, accounts.Source, string) (remote.ProbeResult, error)
 }
 
 type RadarFetcher interface {
@@ -85,25 +79,21 @@ type Notifier interface {
 }
 
 type Config struct {
-	Profiles                 []Profile
+	Sources                  []accounts.Source
 	NotificationTarget       string
 	NotificationTargets      []string
-	AccountLabel             string
 	JokeTone                 string
 	StartupHeartbeat         bool
 	ObservationRetentionDays int
 }
 
-type Profile struct {
-	Ref, Label         string
-	AuthPaths          []string
-	Default            bool
-	AllowAuthDiscovery bool
+type AccountIdentity struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
 }
 
-type ProfileIdentity struct {
-	Ref   string `json:"ref"`
-	Label string `json:"label"`
+type SourceIdentity struct {
+	Ref string `json:"ref"`
 }
 
 type Server struct {
@@ -112,25 +102,25 @@ type Server struct {
 	radar    RadarFetcher
 	notifier Notifier
 	cfg      Config
+	accounts *accounts.Resolver
 	logger   *slog.Logger
 
-	mu             sync.Mutex
-	refreshing     bool
-	heartbeat      bool
-	intervalCh     chan struct{}
-	profileTimeout time.Duration
+	mu            sync.Mutex
+	refreshing    bool
+	heartbeat     bool
+	intervalCh    chan struct{}
+	sourceTimeout time.Duration
 }
 
 type BaselineNotice struct {
-	Profile      ProfileIdentity
-	Account      resetwatch.Account
+	Account      AccountIdentity
 	ObservedAt   time.Time
 	Windows      []resetwatch.Window
 	SnapshotJSON []byte
 }
 
 type PollResult struct {
-	Profile        ProfileIdentity
+	Account        AccountIdentity
 	Observation    resetwatch.Observation
 	Decision       resetwatch.Decision
 	Inserted       int
@@ -142,18 +132,24 @@ type PollResult struct {
 	Baseline       bool
 }
 
-type ProfilePollFailure struct {
+type CodexResetPlan struct {
+	Account store.Account                  `json:"account"`
+	Plan    remotecodex.RateLimitResetPlan `json:"plan"`
+}
+
+type SourcePollFailure struct {
 	Kind, Code string
 }
 
-type ProfilePollResult struct {
-	Profile ProfileIdentity
+type SourcePollResult struct {
+	Source  SourceIdentity
+	Account AccountIdentity
 	PollResult
-	Failure *ProfilePollFailure
+	Failure *SourcePollFailure
 }
 
 type RefreshResult struct {
-	Profiles    []ProfilePollResult
+	Sources     []SourcePollResult
 	RadarAlerts []radar.ProbabilityAlert
 }
 
@@ -193,25 +189,32 @@ type Health struct {
 	QueueReason              string           `json:"queueReason,omitempty"`
 	Outbox                   store.QueueStats `json:"outbox"`
 	TelegramInbox            store.InboxStats `json:"telegramInbox"`
-	Profiles                 []ProfileHealth  `json:"profiles,omitempty"`
+	Sources                  []SourceHealth   `json:"sources,omitempty"`
+	Accounts                 []AccountHealth  `json:"accounts,omitempty"`
 }
 
-type ProfileHealth struct {
-	Profile             ProfileIdentity `json:"profile"`
-	IsDefault           bool            `json:"isDefault"`
-	Status              HealthStatus    `json:"status"`
-	LastSuccessAt       *time.Time      `json:"lastSuccessAt,omitempty"`
-	LastAttemptAt       *time.Time      `json:"lastAttemptAt,omitempty"`
-	LastFailureAt       *time.Time      `json:"lastFailureAt,omitempty"`
-	FailureKind         string          `json:"failureKind,omitempty"`
-	LastErrorCode       string          `json:"lastErrorCode,omitempty"`
-	ConsecutiveFailures int             `json:"consecutiveFailures"`
-	NextPollEstimateAt  *time.Time      `json:"nextPollEstimateAt,omitempty"`
-	IsStale             bool            `json:"isStale"`
+type SourceHealth struct {
+	Source              SourceIdentity   `json:"source"`
+	Account             *AccountIdentity `json:"account,omitempty"`
+	Status              HealthStatus     `json:"status"`
+	LastSuccessAt       *time.Time       `json:"lastSuccessAt,omitempty"`
+	LastAttemptAt       *time.Time       `json:"lastAttemptAt,omitempty"`
+	LastFailureAt       *time.Time       `json:"lastFailureAt,omitempty"`
+	FailureKind         string           `json:"failureKind,omitempty"`
+	LastErrorCode       string           `json:"lastErrorCode,omitempty"`
+	ConsecutiveFailures int              `json:"consecutiveFailures"`
+	NextPollEstimateAt  *time.Time       `json:"nextPollEstimateAt,omitempty"`
+	IsStale             bool             `json:"isStale"`
+}
+
+type AccountHealth struct {
+	Account store.Account `json:"account"`
+	Status  HealthStatus  `json:"status"`
+	IsStale bool          `json:"isStale"`
 }
 
 type HealthNotice struct {
-	Profile  ProfileIdentity
+	Source   SourceIdentity
 	Health   Health
 	Recovery bool
 }
@@ -227,24 +230,21 @@ func New(st Store, fetcher Fetcher, notifier Notifier, cfg Config) *Server {
 	if notifier == nil {
 		notifier = NoopNotifier{}
 	}
-	if cfg.AccountLabel == "" {
-		cfg.AccountLabel = "personal"
-	}
-	if len(cfg.Profiles) == 0 {
-		cfg.Profiles = []Profile{{Ref: "default", Label: cfg.AccountLabel, Default: true, AllowAuthDiscovery: true}}
-	}
 	if cfg.ObservationRetentionDays == 0 {
 		cfg.ObservationRetentionDays = 120
 	}
+	accountResolver := accounts.New(st, cfg.Sources)
+	cfg.Sources = accountResolver.Sources()
 	return &Server{
-		store:          st,
-		fetcher:        fetcher,
-		notifier:       notifier,
-		cfg:            cfg,
-		logger:         slog.Default(),
-		heartbeat:      cfg.StartupHeartbeat,
-		intervalCh:     make(chan struct{}, 1),
-		profileTimeout: DefaultRefreshTimeout,
+		store:         st,
+		fetcher:       fetcher,
+		notifier:      notifier,
+		cfg:           cfg,
+		accounts:      accountResolver,
+		logger:        slog.Default(),
+		heartbeat:     cfg.StartupHeartbeat,
+		intervalCh:    make(chan struct{}, 1),
+		sourceTimeout: DefaultRefreshTimeout,
 	}
 }
 
@@ -286,37 +286,22 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) RefreshNow(ctx context.Context) (PollResult, error) {
-	result, err := s.RefreshProfilesNow(ctx)
-	for _, profile := range result.Profiles {
-		if profile.Failure == nil && profile.Profile.Ref == s.defaultProfile().Ref {
-			profile.RadarAlerts = result.RadarAlerts
-			return profile.PollResult, err
-		}
-	}
-	for _, profile := range result.Profiles {
-		if profile.Failure == nil {
-			profile.RadarAlerts = result.RadarAlerts
-			return profile.PollResult, err
+	result, err := s.RefreshSourcesNow(ctx)
+	for _, source := range result.Sources {
+		if source.Failure == nil {
+			source.RadarAlerts = result.RadarAlerts
+			return source.PollResult, err
 		}
 	}
 	return PollResult{RadarAlerts: result.RadarAlerts}, err
 }
 
-func (s *Server) RefreshProfilesNow(ctx context.Context) (RefreshResult, error) {
+func (s *Server) RefreshSourcesNow(ctx context.Context) (RefreshResult, error) {
 	if !s.beginRefresh() {
 		return RefreshResult{}, ErrRefreshInProgress
 	}
 	defer s.endRefresh()
-	return s.refreshProfiles(ctx)
-}
-
-func (s *Server) defaultProfile() Profile {
-	for _, profile := range s.cfg.Profiles {
-		if profile.Default {
-			return profile
-		}
-	}
-	return s.cfg.Profiles[0]
+	return s.refreshSources(ctx)
 }
 
 func (s *Server) PollInterval(ctx context.Context) (time.Duration, error) {
@@ -353,32 +338,28 @@ func (s *Server) LatestObservation(ctx context.Context) (resetwatch.Observation,
 	return s.store.LoadLatestObservation(ctx)
 }
 
-func (s *Server) LatestObservationForProfile(ctx context.Context, profileRef string) (resetwatch.Observation, bool, error) {
-	profile, err := s.configuredProfile(profileRef)
+func (s *Server) Accounts(ctx context.Context) ([]store.Account, error) {
+	return s.accounts.Accounts(ctx)
+}
+
+func (s *Server) SetAccountAlias(ctx context.Context, selector, alias string) error {
+	return s.accounts.SetAlias(ctx, selector, alias)
+}
+
+func (s *Server) LatestObservationForAccount(ctx context.Context, selector string) (resetwatch.Observation, bool, error) {
+	account, err := s.accounts.Resolve(ctx, selector)
 	if err != nil {
 		return resetwatch.Observation{}, false, err
 	}
-	return s.store.LoadLatestObservationForProfile(ctx, profile.Ref)
+	return s.store.LoadLatestObservationForAccount(ctx, account.ID)
 }
 
-func (s *Server) CodexProfile(ctx context.Context) (remotecodex.ProfileResult, error) {
-	profile, err := remotecodex.FetchProfile(ctx, nil)
+func (s *Server) CodexActivityForAccount(ctx context.Context, selector string) (remotecodex.ProfileResult, error) {
+	live, err := s.accounts.ResolveLive(ctx, selector)
 	if err != nil {
 		return remotecodex.ProfileResult{}, err
 	}
-	profile.SchemaVersion = model.SchemaVersion
-	return profile, nil
-}
-
-func (s *Server) CodexProfileForProfile(ctx context.Context, profileRef string) (remotecodex.ProfileResult, error) {
-	profile, err := s.configuredProfile(profileRef)
-	if err != nil {
-		return remotecodex.ProfileResult{}, err
-	}
-	if len(profile.AuthPaths) == 0 && !profile.AllowAuthDiscovery {
-		return remotecodex.ProfileResult{}, ErrProfileAuthPaths
-	}
-	result, err := remotecodex.FetchProfileWithOptions(ctx, nil, remotecodex.FetchOptions{AuthPaths: append([]string(nil), profile.AuthPaths...)})
+	result, err := remotecodex.FetchProfileWithOptions(ctx, nil, live.FetchOptions())
 	if err != nil {
 		return remotecodex.ProfileResult{}, err
 	}
@@ -386,31 +367,28 @@ func (s *Server) CodexProfileForProfile(ctx context.Context, profileRef string) 
 	return sanitizeCodexProfileResult(result), nil
 }
 
-func (s *Server) PlanCodexReset(ctx context.Context, profileRef string) (remotecodex.RateLimitResetPlan, error) {
-	profile, err := s.configuredProfile(profileRef)
+func (s *Server) PlanCodexReset(ctx context.Context, selector string) (CodexResetPlan, error) {
+	live, err := s.accounts.ResolveLive(ctx, selector)
 	if err != nil {
-		return remotecodex.RateLimitResetPlan{}, err
+		return CodexResetPlan{}, err
 	}
-	if len(profile.AuthPaths) == 0 && !profile.AllowAuthDiscovery {
-		return remotecodex.RateLimitResetPlan{}, ErrProfileAuthPaths
-	}
-	plan, err := remotecodex.PlanRateLimitReset(ctx, nil, remotecodex.FetchOptions{AuthPaths: append([]string(nil), profile.AuthPaths...)}, "")
+	plan, err := remotecodex.PlanRateLimitReset(ctx, nil, live.FetchOptions(), "")
 	if err != nil {
-		return remotecodex.RateLimitResetPlan{}, err
+		return CodexResetPlan{}, err
 	}
 	plan.AuthState = sanitizeCodexAuthState(plan.AuthState)
-	return plan, nil
+	return CodexResetPlan{Account: live.Account, Plan: plan}, nil
 }
 
-func (s *Server) ConsumeCodexReset(ctx context.Context, profileRef string, accountPin remotecodex.ResetAccountPin, credit remote.ResetCredit, requestID string) (remotecodex.RateLimitResetResult, error) {
-	profile, err := s.configuredProfile(profileRef)
+func (s *Server) ConsumeCodexReset(ctx context.Context, selector string, accountPin remotecodex.ResetAccountPin, credit remote.ResetCredit, requestID string) (remotecodex.RateLimitResetResult, error) {
+	live, err := s.accounts.ResolveLive(ctx, selector)
 	if err != nil {
+		if errors.Is(err, accounts.ErrCredentialsUnavailable) {
+			return remotecodex.RateLimitResetResult{}, &remotecodex.ResetAccountBindingError{}
+		}
 		return remotecodex.RateLimitResetResult{}, err
 	}
-	if len(profile.AuthPaths) == 0 && !profile.AllowAuthDiscovery {
-		return remotecodex.RateLimitResetResult{}, ErrProfileAuthPaths
-	}
-	result, err := remotecodex.ConsumeRateLimitResetCredit(ctx, nil, remotecodex.FetchOptions{AuthPaths: append([]string(nil), profile.AuthPaths...)}, accountPin, credit, requestID)
+	result, err := remotecodex.ConsumeRateLimitResetCredit(ctx, nil, remotecodex.FetchOptions{AuthPaths: []string{live.Source.Path}}, accountPin, credit, requestID)
 	if err != nil {
 		return remotecodex.RateLimitResetResult{}, err
 	}
@@ -435,20 +413,6 @@ func sanitizeCodexProfileResult(result remotecodex.ProfileResult) remotecodex.Pr
 		result.Provenance[i].Error = ""
 	}
 	return result
-}
-
-func (s *Server) configuredProfile(ref string) (Profile, error) {
-	trimmed := strings.TrimSpace(ref)
-	if ref != trimmed {
-		return Profile{}, ErrProfileUnavailable
-	}
-	ref = trimmed
-	for _, profile := range s.cfg.Profiles {
-		if (ref == "" && profile.Default) || (ref != "" && profile.Ref == ref) {
-			return profile, nil
-		}
-	}
-	return Profile{}, ErrProfileUnavailable
 }
 
 func (s *Server) Stats(ctx context.Context) (Stats, error) {
@@ -489,106 +453,64 @@ func (s *Server) Health(ctx context.Context) (Health, error) {
 	}
 	health.Outbox = queueStats.Outbox
 	health.TelegramInbox = queueStats.TelegramInbox
-	profileRows, err := s.store.ListProfileHealth(ctx)
+
+	accountRows, err := s.accounts.Accounts(ctx)
 	if err != nil {
 		return health, err
-	}
-	if len(profileRows) > 0 {
-		health.Profiles = make([]ProfileHealth, 0, len(profileRows))
-		health.Status = HealthOK
-		rowsByRef := make(map[string]store.ProfileHealth, len(profileRows))
-		for _, row := range profileRows {
-			rowsByRef[row.ProfileRef] = row
-		}
-		for _, configured := range s.cfg.Profiles {
-			row, exists := rowsByRef[configured.Ref]
-			if !exists || !row.Enabled {
-				profile := ProfileHealth{Profile: ProfileIdentity{Ref: configured.Ref, Label: configured.Label}, IsDefault: configured.Default, Status: HealthUnknown}
-				health.Profiles = append(health.Profiles, profile)
-				health.Status = worseHealth(health.Status, profile.Status)
-				continue
-			}
-			profile := profileHealthFromStore(row, interval, health.StaleAfter, time.Now().UTC())
-			profile.IsDefault = configured.Default
-			health.Profiles = append(health.Profiles, profile)
-			health.Status = worseHealth(health.Status, profile.Status)
-			if configured.Default {
-				health.LastSuccessAt = profile.LastSuccessAt
-				health.LastAttemptAt = profile.LastAttemptAt
-				health.LastFailureAt = profile.LastFailureAt
-				health.FailureKind = profile.FailureKind
-				health.LastError = profile.LastErrorCode
-				health.ConsecutiveFailures = profile.ConsecutiveFailures
-				health.NextPollEstimateAt = profile.NextPollEstimateAt
-				health.IsStale = profile.IsStale
-			}
-		}
-		if len(health.Profiles) == 0 {
-			health.Status = HealthUnknown
-		}
-		return applyQueueHealth(health), nil
-	}
-	success, ok, err := s.timeSetting(ctx, SettingPollSuccessAt)
-	if err != nil {
-		return health, err
-	}
-	if ok {
-		health.LastSuccessAt = &success
-	}
-	attempt, ok, err := s.timeSetting(ctx, SettingPollAttemptAt)
-	if err != nil {
-		return health, err
-	}
-	if ok {
-		health.LastAttemptAt = &attempt
-	}
-	failure, ok, err := s.timeSetting(ctx, SettingPollFailureAt)
-	if err != nil {
-		return health, err
-	}
-	if ok {
-		health.LastFailureAt = &failure
-	}
-	count, err := s.intSetting(ctx, SettingPollFailureCount)
-	if err != nil {
-		return health, err
-	}
-	health.ConsecutiveFailures = count
-	if value, ok, err := s.store.GetSetting(ctx, SettingPollFailureError); err != nil {
-		return health, err
-	} else if ok && strings.TrimSpace(value) != "" {
-		health.LastError = value
-		health.FailureKind = classifyPollError(value)
 	}
 	now := time.Now().UTC()
-	if health.LastAttemptAt != nil &&
-		(health.LastSuccessAt == nil || health.LastAttemptAt.After(*health.LastSuccessAt)) &&
-		(health.LastFailureAt == nil || health.LastAttemptAt.After(*health.LastFailureAt)) &&
-		now.Sub(*health.LastAttemptAt) > DefaultRefreshTimeout {
-		health.Status = HealthDegraded
-		health.FailureKind = "interrupted"
-		health.LastError = "previous poll was interrupted before completion"
-		return applyQueueHealth(health), nil
+	accountsByRef := make(map[string]AccountIdentity, len(accountRows))
+	for _, account := range accountRows {
+		identity := accountIdentity(account)
+		accountsByRef[account.Ref] = identity
+		accountHealth := AccountHealth{Account: account, Status: HealthUnknown}
+		if !account.LastSeenAt.IsZero() {
+			accountHealth.IsStale = now.Sub(account.LastSeenAt) > health.StaleAfter
+			if accountHealth.IsStale {
+				accountHealth.Status = HealthStale
+			} else {
+				accountHealth.Status = HealthOK
+			}
+		}
+		health.Accounts = append(health.Accounts, accountHealth)
 	}
-	if health.LastFailureAt != nil && (health.LastSuccessAt == nil || health.LastFailureAt.After(*health.LastSuccessAt)) && count > 0 {
-		health.Status = HealthDegraded
-		next := health.LastFailureAt.Add(pollBackoff(count))
-		health.NextPollEstimateAt = &next
-		return applyQueueHealth(health), nil
+
+	sourceRows, err := s.store.ListSourceHealth(ctx)
+	if err != nil {
+		return health, err
 	}
-	if health.LastSuccessAt != nil {
-		next := health.LastSuccessAt.Add(interval)
-		health.NextPollEstimateAt = &next
-		health.IsStale = now.Sub(*health.LastSuccessAt) > health.StaleAfter
-		if health.IsStale {
-			health.Status = HealthStale
-		} else {
-			health.Status = HealthOK
+	rowsByRef := make(map[string]store.SourceHealth, len(sourceRows))
+	for _, row := range sourceRows {
+		rowsByRef[row.SourceRef] = row
+	}
+	if len(s.cfg.Sources) > 0 {
+		health.Status = HealthOK
+		for _, configured := range s.cfg.Sources {
+			row, exists := rowsByRef[configured.Ref]
+			if !exists || !row.Enabled {
+				source := SourceHealth{Source: SourceIdentity{Ref: configured.Ref}, Status: HealthUnknown}
+				health.Sources = append(health.Sources, source)
+				health.Status = worseHealth(health.Status, source.Status)
+				continue
+			}
+			source := sourceHealthFromStore(row, accountsByRef[row.AccountRef], interval, health.StaleAfter, now)
+			health.Sources = append(health.Sources, source)
+			health.Status = worseHealth(health.Status, source.Status)
+		}
+		if len(health.Sources) > 0 {
+			primary := health.Sources[0]
+			health.LastSuccessAt = primary.LastSuccessAt
+			health.LastAttemptAt = primary.LastAttemptAt
+			health.LastFailureAt = primary.LastFailureAt
+			health.FailureKind = primary.FailureKind
+			health.LastError = primary.LastErrorCode
+			health.ConsecutiveFailures = primary.ConsecutiveFailures
+			health.NextPollEstimateAt = primary.NextPollEstimateAt
+			health.IsStale = primary.IsStale
 		}
 	}
 	return applyQueueHealth(health), nil
 }
-
 func applyQueueHealth(health Health) Health {
 	switch {
 	case health.Outbox.DeadLetter > 0 || health.TelegramInbox.Dead > 0:
@@ -601,20 +523,26 @@ func applyQueueHealth(health Health) Health {
 	return health
 }
 
-func (s *Server) pollProfile(ctx context.Context, profile Profile) (PollResult, string, error) {
-	result, err := s.fetchProfileLimits(ctx, profile)
+func (s *Server) pollSource(ctx context.Context, source accounts.Source, inspection accounts.Inspection) (PollResult, string, error) {
+	result, err := s.fetcher.FetchLimits(ctx, source, inspection.Account.Ref)
 	if err != nil {
 		return PollResult{}, "fetch", err
 	}
 	if !result.AuthState.OK {
 		return PollResult{}, "auth", errors.New("codex auth unavailable")
 	}
-	obs := s.observationForProfile(result, profile)
+	if result.AuthState.AccountID == "" {
+		return PollResult{}, "auth", &remotecodex.AccountBindingError{}
+	}
+	if result.AuthState.AccountID != inspection.Account.Ref {
+		return PollResult{}, "auth", &remotecodex.AccountBindingError{Changed: true}
+	}
+	obs := s.observationForAccount(result)
 	if len(obs.Windows) == 0 {
 		return PollResult{}, "shape", errors.New("codex limits response had no reset windows")
 	}
 	applied, err := s.store.ApplyCodexPoll(ctx, store.CodexPollInput{
-		ProfileRef:          profile.Ref,
+		SourceRef:           source.Ref,
 		Observation:         obs,
 		NotificationTarget:  s.cfg.NotificationTarget,
 		NotificationTargets: append([]string(nil), s.cfg.NotificationTargets...),
@@ -626,12 +554,20 @@ func (s *Server) pollProfile(ctx context.Context, profile Profile) (PollResult, 
 	if err != nil {
 		return PollResult{}, "apply", err
 	}
+	account, ok, err := s.store.ResolveAccount(ctx, store.AccountID(obs.ProviderID, obs.Account.Ref))
+	if err != nil {
+		return PollResult{}, "apply", err
+	}
+	if !ok {
+		return PollResult{}, "apply", accounts.ErrAccountNotFound
+	}
+	identity := accountIdentity(account)
 	baseline := applied.AccountBaseline
 	decision := applied.LegacyDecision
 	inserted := len(applied.ResetEvents)
 	heartbeat := s.consumeStartupHeartbeat()
 	if baseline || heartbeat {
-		if err := s.notifier.NotifyBaseline(ctx, BaselineNotice{Profile: ProfileIdentity{Ref: profile.Ref, Label: profile.Label}, Account: obs.Account, ObservedAt: obs.ObservedAt, Windows: obs.Windows, SnapshotJSON: obs.SnapshotJSON}); err != nil {
+		if err := s.notifier.NotifyBaseline(ctx, BaselineNotice{Account: identity, ObservedAt: obs.ObservedAt, Windows: obs.Windows, SnapshotJSON: obs.SnapshotJSON}); err != nil {
 			s.logger.Warn("scriba baseline notification failed", "error", err)
 		}
 	}
@@ -666,14 +602,8 @@ func (s *Server) pollProfile(ctx context.Context, profile Profile) (PollResult, 
 			s.logger.Warn("scriba reset grant loaded notification failed", "event_id", event.ID, "error", err)
 		}
 	}
-	return PollResult{Profile: ProfileIdentity{Ref: profile.Ref, Label: profile.Label}, Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, PacingWarnings: pacingWarnings, GrantWarnings: grantWarnings, ResetGrants: resetGrants, Baseline: baseline}, "", nil
+	return PollResult{Account: identity, Observation: obs, Decision: decision, Inserted: inserted, Warnings: warnings, PacingWarnings: pacingWarnings, GrantWarnings: grantWarnings, ResetGrants: resetGrants, Baseline: baseline}, "", nil
 }
-
-func (s *Server) pollOnce(ctx context.Context) (PollResult, error) {
-	result, _, err := s.pollProfile(ctx, s.defaultProfile())
-	return result, err
-}
-
 func (s *Server) pollRadar(ctx context.Context) ([]radar.ProbabilityAlert, error) {
 	if s.radar == nil {
 		return nil, nil
@@ -732,30 +662,6 @@ func (s *Server) PruneObservations(ctx context.Context, compact bool) (store.Pru
 	return s.store.PruneObservations(ctx, cutoff, compact)
 }
 
-func (s *Server) timeSetting(ctx context.Context, key string) (time.Time, bool, error) {
-	value, ok, err := s.store.GetSetting(ctx, key)
-	if err != nil || !ok || strings.TrimSpace(value) == "" {
-		return time.Time{}, ok, err
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return time.Time{}, false, nil
-	}
-	return parsed.UTC(), true, nil
-}
-
-func (s *Server) intSetting(ctx context.Context, key string) (int, error) {
-	value, ok, err := s.store.GetSetting(ctx, key)
-	if err != nil || !ok || strings.TrimSpace(value) == "" {
-		return 0, err
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < 0 {
-		return 0, nil
-	}
-	return parsed, nil
-}
-
 func (s *Server) pruneIfDue(ctx context.Context) error {
 	value, ok, err := s.store.GetSetting(ctx, SettingLastPruneAt)
 	if err != nil {
@@ -782,15 +688,14 @@ func (s *Server) pruneIfDue(ctx context.Context) error {
 }
 
 func (s *Server) observation(result remote.ProbeResult) resetwatch.Observation {
-	return s.observationForProfile(result, s.defaultProfile())
+	return s.observationForAccount(result)
 }
 
-func (s *Server) observationForProfile(result remote.ProbeResult, profile Profile) resetwatch.Observation {
+func (s *Server) observationForAccount(result remote.ProbeResult) resetwatch.Observation {
 	plan := planFromLines(result.Lines)
 	auth := result.AuthState
 	account := resetwatch.Account{
-		Ref:   accountRef(auth),
-		Label: profile.Label,
+		Ref:   strings.TrimSpace(auth.AccountID),
 		Email: auth.Email,
 		Plan:  plan,
 	}
@@ -831,15 +736,8 @@ func (s *Server) consumeStartupHeartbeat() bool {
 	return true
 }
 
-func (CodexFetcher) FetchLimits(ctx context.Context) (remote.ProbeResult, error) {
-	return remotecodex.FetchLimits(ctx, nil)
-}
-
-func (CodexFetcher) FetchProfileLimits(ctx context.Context, profile Profile) (remote.ProbeResult, error) {
-	if len(profile.AuthPaths) == 0 && !profile.AllowAuthDiscovery {
-		return remote.ProbeResult{}, ErrProfileAuthPaths
-	}
-	return remotecodex.FetchLimitsWithOptions(ctx, nil, remotecodex.FetchOptions{AuthPaths: profile.AuthPaths})
+func (CodexFetcher) FetchLimits(ctx context.Context, source accounts.Source, expectedAccountID string) (remote.ProbeResult, error) {
+	return remotecodex.FetchLimitsWithOptions(ctx, nil, remotecodex.FetchOptions{AuthPaths: []string{source.Path}, ExpectedAccountID: expectedAccountID})
 }
 
 func (NoopNotifier) NotifyBaseline(context.Context, BaselineNotice) error {
@@ -874,8 +772,8 @@ func (NoopNotifier) NotifyHealth(context.Context, HealthNotice) error {
 	return nil
 }
 
-func accountRef(auth remote.AuthState) string {
-	return remote.AccountRef(auth)
+func accountIdentity(account store.Account) AccountIdentity {
+	return AccountIdentity{ID: account.ID, DisplayName: account.DisplayName()}
 }
 
 func planFromLines(lines []model.MetricLine) string {
@@ -930,20 +828,6 @@ func pollBackoff(attempts int) time.Duration {
 		return 5 * time.Minute
 	default:
 		return 5 * time.Minute
-	}
-}
-
-func classifyPollError(message string) string {
-	lowered := strings.ToLower(message)
-	switch {
-	case strings.Contains(lowered, "auth"), strings.Contains(lowered, "token"), strings.Contains(lowered, "unauthorized"), strings.Contains(lowered, "forbidden"), strings.Contains(lowered, "401"), strings.Contains(lowered, "403"):
-		return "auth"
-	case strings.Contains(lowered, "timeout"), strings.Contains(lowered, "deadline"):
-		return "timeout"
-	case strings.Contains(lowered, "temporary"), strings.Contains(lowered, "connection"), strings.Contains(lowered, "network"):
-		return "network"
-	default:
-		return "backend"
 	}
 }
 

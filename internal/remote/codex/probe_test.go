@@ -130,6 +130,91 @@ func TestExplicitAuthPathsIsolateLimitsAndProfileRequests(t *testing.T) {
 	}
 }
 
+func TestExpectedAccountPinsLimitsAndActivityBeforeRequest(t *testing.T) {
+	dir := t.TempDir()
+	authPath := writeTestAuth(t, dir, "auth", "token-b", "acct-b")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+	opts := FetchOptions{AuthPaths: []string{authPath}, ExpectedAccountID: "acct-a"}
+
+	_, limitsErr := FetchLimitsWithOptions(context.Background(), server.Client(), opts)
+	_, activityErr := FetchProfileWithOptions(context.Background(), server.Client(), opts)
+	for name, err := range map[string]error{"limits": limitsErr, "activity": activityErr} {
+		var bindingErr *AccountBindingError
+		if !errors.As(err, &bindingErr) || !bindingErr.Changed {
+			t.Fatalf("%s error=%v, want changed-account binding error", name, err)
+		}
+	}
+	if requests != 0 {
+		t.Fatalf("provider requests=%d, want 0", requests)
+	}
+}
+
+func TestExpectedAccountMissingCredentialsReturnsBindingError(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing.json")
+	_, err := FetchLimitsWithOptions(context.Background(), nil, FetchOptions{AuthPaths: []string{missing}, ExpectedAccountID: "acct-a"})
+	var bindingErr *AccountBindingError
+	if !errors.As(err, &bindingErr) || bindingErr.Changed {
+		t.Fatalf("error=%v, want unavailable account binding error", err)
+	}
+}
+
+func TestExpectedAccountAllowsSameAccountTokenRotation(t *testing.T) {
+	dir := t.TempDir()
+	authPath := writeTestAuth(t, dir, "auth", "token-a", "acct-a")
+	writeTestAuth(t, dir, "auth", "token-b", "acct-a")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if got := r.Header.Get("Authorization"); got != "Bearer token-b" {
+			t.Errorf("authorization=%q", got)
+		}
+		_, _ = fmt.Fprint(w, `{"rate_limit":{"primary_window":{"used_percent":1,"reset_at":1784492145,"limit_window_seconds":604800}}}`)
+	}))
+	defer server.Close()
+	oldUsage := usageURL
+	usageURL = server.URL
+	t.Cleanup(func() { usageURL = oldUsage })
+
+	result, err := FetchLimitsWithOptions(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}, ExpectedAccountID: "acct-a"})
+	if err != nil || !result.AuthState.OK || requests != 1 {
+		t.Fatalf("result=%+v requests=%d err=%v", result, requests, err)
+	}
+}
+
+func TestExpectedAccountRecheckedAfterForcedRefresh(t *testing.T) {
+	dir := t.TempDir()
+	authPath := writeTestAuth(t, dir, "auth", "token-a", "acct-a")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		if requests == 1 {
+			payload := `{"tokens":{"access_token":"token-b","account_id":"acct-b"},"last_refresh":"2026-07-12T00:00:00Z"}`
+			if err := os.WriteFile(authPath, []byte(payload), 0o600); err != nil {
+				t.Errorf("rotate auth: %v", err)
+			}
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{}`)
+	}))
+	defer server.Close()
+	oldUsage := usageURL
+	usageURL = server.URL
+	t.Cleanup(func() { usageURL = oldUsage })
+
+	_, err := FetchLimitsWithOptions(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}, ExpectedAccountID: "acct-a"})
+	var bindingErr *AccountBindingError
+	if !errors.As(err, &bindingErr) || !bindingErr.Changed {
+		t.Fatalf("error=%v, want changed-account binding error", err)
+	}
+	if requests != 1 {
+		t.Fatalf("provider requests=%d, want no retry for changed account", requests)
+	}
+}
+
 func TestExplicitMissingAuthPathNeverFallsBackToCodexHome(t *testing.T) {
 	dir := t.TempDir()
 	_ = writeTestAuth(t, dir, "auth", "ambient-token", "ambient-account")
