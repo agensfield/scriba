@@ -34,6 +34,16 @@ func TestDifferentialReceiptAndCanonicalExpectedProjection(t *testing.T) {
 			Decision string `json:"decision"`
 			Reason   string `json:"reason"`
 		} `json:"policies"`
+		PeerProjections struct {
+			CCUsage struct {
+				RatesPerMillion map[string]struct {
+					ShortInput  string `json:"short_input"`
+					ShortOutput string `json:"short_output"`
+					LongInput   string `json:"long_input"`
+					LongOutput  string `json:"long_output"`
+				} `json:"rates_per_million"`
+			} `json:"ccusage"`
+		} `json:"peer_projections"`
 	}
 	if err := json.Unmarshal(receiptData, &receipt); err != nil {
 		t.Fatal(err)
@@ -100,9 +110,25 @@ func TestDifferentialReceiptAndCanonicalExpectedProjection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, ok := pricing.Cost(c.Model, pricing.Usage{InputTokens: c.InputTokens, OutputTokens: c.OutputTokens}, pricing.StandardSpeedMultiplier)
-		if !ok || math.Abs(got-want) > 1e-12 {
-			t.Fatalf("%s input %d cost=%0.12f want=%s", c.Model, c.InputTokens, got, c.CostUSD)
+		frozen, ok := receipt.PeerProjections.CCUsage.RatesPerMillion[c.Model]
+		if !ok {
+			t.Fatalf("missing frozen ccusage pricing for %s", c.Model)
+		}
+		inputRate, outputRate := frozen.ShortInput, frozen.ShortOutput
+		if c.RateTier == "long" {
+			inputRate, outputRate = frozen.LongInput, frozen.LongOutput
+		}
+		inputPerMillion, err := strconv.ParseFloat(inputRate, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outputPerMillion, err := strconv.ParseFloat(outputRate, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frozenCost := (float64(c.InputTokens)*inputPerMillion + float64(c.OutputTokens)*outputPerMillion) / 1_000_000
+		if math.Abs(frozenCost-want) > 1e-12 {
+			t.Fatalf("%s input %d frozen cost=%0.12f want=%s", c.Model, c.InputTokens, frozenCost, c.CostUSD)
 		}
 	}
 }

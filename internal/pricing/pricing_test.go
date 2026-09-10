@@ -12,9 +12,9 @@ func TestLookupPublishedRates(t *testing.T) {
 		long  Rates
 	}{
 		{"gpt-6-astra", Rates{10e-6, 1e-6, 50e-6, 12.5e-6}, Rates{20e-6, 2e-6, 75e-6, 25e-6}},
-		{"gpt-5.6-sol", Rates{5e-6, 0.5e-6, 30e-6, 6.25e-6}, Rates{10e-6, 1e-6, 45e-6, 12.5e-6}},
-		{"gpt-5.6-terra", Rates{2.5e-6, 0.25e-6, 15e-6, 3.125e-6}, Rates{5e-6, 0.5e-6, 22.5e-6, 6.25e-6}},
-		{"gpt-5.6-luna", Rates{1e-6, 0.1e-6, 6e-6, 1.25e-6}, Rates{2e-6, 0.2e-6, 9e-6, 2.5e-6}},
+		{"gpt-5.6-sol", Rates{4e-6, 0.4e-6, 20e-6, 5e-6}, Rates{8e-6, 0.8e-6, 30e-6, 10e-6}},
+		{"gpt-5.6-terra", Rates{2e-6, 0.2e-6, 12e-6, 2.5e-6}, Rates{4e-6, 0.4e-6, 18e-6, 5e-6}},
+		{"gpt-5.6-luna", Rates{0.2e-6, 0.02e-6, 1.2e-6, 0.25e-6}, Rates{0.4e-6, 0.04e-6, 1.8e-6, 0.5e-6}},
 		{"gpt-5.5", Rates{5e-6, 0.5e-6, 30e-6, 0}, Rates{10e-6, 1e-6, 45e-6, 0}},
 		{"gpt-5.4", Rates{2.5e-6, 0.25e-6, 15e-6, 0}, Rates{5e-6, 0.5e-6, 22.5e-6, 0}},
 	}
@@ -41,7 +41,7 @@ func TestCostUsesWholeRequestTierAboveThreshold(t *testing.T) {
 	if !ok {
 		t.Fatal("pricing missing")
 	}
-	wantShort := 200_000*5e-6 + 72_000*0.5e-6 + 1_000*30e-6
+	wantShort := 200_000*4e-6 + 72_000*0.4e-6 + 1_000*20e-6
 	closeEnough(t, short, wantShort)
 
 	usage.InputTokens++
@@ -49,7 +49,7 @@ func TestCostUsesWholeRequestTierAboveThreshold(t *testing.T) {
 	if !ok {
 		t.Fatal("pricing missing")
 	}
-	wantLong := 200_001*10e-6 + 72_000*1e-6 + 1_000*45e-6
+	wantLong := 200_001*8e-6 + 72_000*0.8e-6 + 1_000*30e-6
 	closeEnough(t, long, wantLong)
 }
 
@@ -68,18 +68,18 @@ func TestCostExactForEachPublishedModelAndTier(t *testing.T) {
 		},
 		{
 			"gpt-5.6-sol",
-			80_000*5e-6 + 20_000*0.5e-6 + 2_000*30e-6,
-			280_000*10e-6 + 20_000*1e-6 + 2_000*45e-6,
+			80_000*4e-6 + 20_000*0.4e-6 + 2_000*20e-6,
+			280_000*8e-6 + 20_000*0.8e-6 + 2_000*30e-6,
 		},
 		{
 			"gpt-5.6-terra",
-			80_000*2.5e-6 + 20_000*0.25e-6 + 2_000*15e-6,
-			280_000*5e-6 + 20_000*0.5e-6 + 2_000*22.5e-6,
+			80_000*2e-6 + 20_000*0.2e-6 + 2_000*12e-6,
+			280_000*4e-6 + 20_000*0.4e-6 + 2_000*18e-6,
 		},
 		{
 			"gpt-5.6-luna",
-			80_000*1e-6 + 20_000*0.1e-6 + 2_000*6e-6,
-			280_000*2e-6 + 20_000*0.2e-6 + 2_000*9e-6,
+			80_000*0.2e-6 + 20_000*0.02e-6 + 2_000*1.2e-6,
+			280_000*0.4e-6 + 20_000*0.04e-6 + 2_000*1.8e-6,
 		},
 		{
 			"gpt-5.5",
@@ -153,7 +153,7 @@ func TestCostClampsCachedInputAndDoesNotRebillReasoning(t *testing.T) {
 	if !ok {
 		t.Fatal("pricing missing")
 	}
-	closeEnough(t, got, 100*0.1e-6+10*6e-6)
+	closeEnough(t, got, 100*0.02e-6+10*1.2e-6)
 }
 
 func TestCostAppliesSpeedMultiplier(t *testing.T) {
