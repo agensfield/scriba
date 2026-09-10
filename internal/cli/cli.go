@@ -1137,14 +1137,6 @@ func renderUpdateCheck(check updater.Check) string {
 	return strings.Join(lines, "\n")
 }
 
-func liveCodexLimitsPayload() (codexLimitsPayload, error) {
-	payload, cleanup, err := liveCodexLimitsPayloadFor(context.Background(), options{})
-	if cleanup != nil {
-		defer cleanup()
-	}
-	return payload, err
-}
-
 func liveCodexLimitsPayloadFor(ctx context.Context, opts options) (codexLimitsPayload, func(), error) {
 	fetchOpts, cleanup, err := resolveLiveCodexOptions(ctx, opts)
 	if err != nil {
