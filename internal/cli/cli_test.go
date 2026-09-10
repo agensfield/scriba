@@ -236,8 +236,8 @@ func TestCodexGroupHelpListsResetGrants(t *testing.T) {
 	if !strings.Contains(text, "scriba codex reset-grants") {
 		t.Fatalf("codex help missing reset-grants command:\n%s", text)
 	}
-	if !strings.Contains(text, "scriba codex profile") {
-		t.Fatalf("codex help missing profile command:\n%s", text)
+	if !strings.Contains(text, "scriba codex activity") {
+		t.Fatalf("codex help missing activity command:\n%s", text)
 	}
 	if !strings.Contains(text, "scriba codex reset --dry-run") {
 		t.Fatalf("codex help missing reset command:\n%s", text)
@@ -376,10 +376,10 @@ func contains(values []string, want string) bool {
 	return false
 }
 
-func TestRenderCodexProfileShowsHumanStats(t *testing.T) {
+func TestRenderCodexActivityShowsHumanStats(t *testing.T) {
 	rank := int64(2)
 	total := int64(7)
-	text := stripANSI(renderCodexProfile(remotecodex.ProfileResult{
+	text := stripANSI(renderCodexActivity(remotecodex.ProfileResult{
 		Profile:  remotecodex.Profile{Username: "ardasevinc", DisplayName: "Arda Sevinc"},
 		Metadata: remotecodex.ProfileMetadata{StatsAsOf: "2026-06-28", GeneratedAt: "2026-06-29T00:01:45Z"},
 		AuthState: remote.AuthState{
@@ -407,7 +407,7 @@ func TestRenderCodexProfileShowsHumanStats(t *testing.T) {
 	}))
 
 	for _, want := range []string{
-		"Codex profile",
+		"Codex activity",
 		"Arda Sevinc @ardasevinc",
 		"stats as of 2026-06-28",
 		"tokens        8.3B lifetime",

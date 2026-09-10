@@ -172,15 +172,15 @@ func dispatch(args []string) error {
 			}
 			return runBudget(args[0], opts)
 		}
-		if args[0] == "codex" && (args[1] == "profile" || args[1] == "profile-stats") {
+		if args[0] == "codex" && args[1] == "activity" {
 			opts, _, err := parse(args[2:], flagSpec{
-				Use:   "scriba codex profile [flags]",
+				Use:   "scriba codex activity [flags]",
 				Flags: []string{"json", "config", "cache-dir", "redact"},
 			})
 			if err != nil {
 				return err
 			}
-			return runCodexProfile(opts)
+			return runCodexActivity(opts)
 		}
 		if args[0] == "codex" && (args[1] == "reset-grants" || args[1] == "grants") {
 			opts, _, err := parse(args[2:], flagSpec{
@@ -688,13 +688,13 @@ func runCodexLimits(opts options) error {
 	return output(opts, payload, render.CodexLimits(payload.Lines, false))
 }
 
-func runCodexProfile(opts options) error {
+func runCodexActivity(opts options) error {
 	profile, err := remotecodex.FetchProfile(context.Background(), nil)
 	if err != nil {
 		return err
 	}
 	profile.SchemaVersion = model.SchemaVersion
-	return output(opts, profile, renderCodexProfile(profile))
+	return output(opts, profile, renderCodexActivity(profile))
 }
 
 func runCodexResetGrants(opts options) error {
@@ -824,9 +824,9 @@ func confirmCodexReset(r io.Reader, w io.Writer) (bool, error) {
 	}
 }
 
-func renderCodexProfile(profile remotecodex.ProfileResult) string {
+func renderCodexActivity(profile remotecodex.ProfileResult) string {
 	var b strings.Builder
-	b.WriteString(cliHeader("Codex profile"))
+	b.WriteString(cliHeader("Codex activity"))
 	b.WriteString("\n")
 	identity := profile.Profile.DisplayName
 	if identity == "" {
@@ -1710,7 +1710,7 @@ func commands() map[string][]string {
 	return map[string][]string{
 		"root":     {"doctor", "status", "context", "mcp", "claude", "codex", "schema", "config", "policy", "outbox", "cache", "bench", "telegram", "server", "update", "version"},
 		"claude":   {"summary", "daily", "weekly", "monthly", "sessions", "session", "blocks", "budget"},
-		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "reset", "profile", "budget"},
+		"codex":    {"summary", "daily", "weekly", "monthly", "sessions", "session", "limits", "reset-grants", "reset", "activity", "budget"},
 		"config":   {"path", "show", "init", "telegram"},
 		"policy":   {"validate", "list", "explain"},
 		"outbox":   {"list"},
@@ -1756,14 +1756,14 @@ Commands:
   scriba codex limits
   scriba codex reset-grants
   scriba codex reset
-  scriba codex profile
+  scriba codex activity
   scriba codex budget
 
 Live commands:
   limits           fetch current Codex windows from ChatGPT/Codex auth
   reset-grants     show available reset grants and their expirations
   reset            redeem the available reset grant expiring soonest
-  profile          show ChatGPT/Codex profile token activity
+  activity         show ChatGPT/Codex profile token activity
   budget           derive quota pacing and exhaustion risk from live limits
 
 Common flags:
@@ -1778,7 +1778,7 @@ Examples:
   scriba codex budget
   scriba codex reset-grants
   scriba codex reset --dry-run
-  scriba codex profile`
+  scriba codex activity`
 	case "config":
 		return `scriba config - Manage Scriba configuration.
 
@@ -1877,7 +1877,7 @@ Commands:
   mcp               MCP stdio server for agent context
   doctor            auth, paths, cache, and provider diagnostics
   claude            Claude Code usage reports
-  codex             Codex usage reports, live limits, reset grants, profile
+  codex             Codex usage reports, live limits, reset grants, activity
   server            resident Codex watcher and Telegram bot
   update            check or install the latest tagged release
   config            config file and Telegram settings
@@ -1892,7 +1892,7 @@ Common flows:
   scriba doctor
   scriba codex limits
   scriba codex reset-grants
-  scriba codex profile
+  scriba codex activity
   scriba update --check
   scriba server run --env prod
 
