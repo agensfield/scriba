@@ -13,9 +13,6 @@ import (
 func TestV7ProducersEnqueueTypedPayloadsOnce(t *testing.T) {
 	ctx, target := context.Background(), "telegram:producer"
 	s := openTestStore(t)
-	if err := s.SyncProfiles(ctx, []ProfileSpec{{"primary", "codex", "Primary", true, true}}); err != nil {
-		t.Fatal(err)
-	}
 	acct := resetwatch.Account{Ref: "acct", Label: "personal", Email: "a@example.com", Plan: "Plus"}
 	now := parseTime("2026-07-12T12:00:00Z")
 	warning := resetwatch.WarningEvent{ID: "warning-1", ProviderID: "codex", Account: acct, Label: resetwatch.LabelFiveHour, ThresholdRemaining: 5, UsedPercent: 96, RemainingPercent: 4, ResetAt: now.Add(time.Hour), SnapshotJSON: []byte(`{"warning":true}`), DetectedAt: now}
@@ -67,7 +64,7 @@ func TestV7ProducersEnqueueTypedPayloadsOnce(t *testing.T) {
 	}
 
 	wantTypes := map[string]any{"reset": resetwatch.Event{}, "limit_warning": resetwatch.WarningEvent{}, "reset_grant_warning": resetwatch.GrantExpiryWarning{}, "reset_grant": resetwatch.ResetGrantEvent{}, "radar_alert": radar.ProbabilityAlert{}}
-	rows, err := s.db.Query(`select id,event_kind,source,coalesce(profile_ref,''),coalesce(account_ref,''),event_id,target,payload_version,payload_json,status,attempts,available_at,coalesce(lease_token,''),lease_expires_at,delivered_at,coalesce(provider_message_id,''),coalesce(last_error,''),dead_lettered_at,created_at,updated_at from notification_outbox where source='scriba-v7' order by event_kind`)
+	rows, err := s.db.Query(`select id,event_kind,source,coalesce(account_ref,''),event_id,target,payload_version,payload_json,status,attempts,available_at,coalesce(lease_token,''),lease_expires_at,delivered_at,coalesce(provider_message_id,''),coalesce(last_error,''),dead_lettered_at,created_at,updated_at from notification_outbox where source='scriba-v7' order by event_kind`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,11 +83,11 @@ func TestV7ProducersEnqueueTypedPayloadsOnce(t *testing.T) {
 			t.Fatalf("%s decoded %T", m.EventKind, decoded)
 		}
 		if m.EventKind == "radar_alert" {
-			if m.ProfileRef != "" || m.AccountRef != "" {
+			if m.AccountRef != "" {
 				t.Fatal("radar attribution is not global")
 			}
-		} else if m.ProfileRef != "primary" || m.AccountRef != "acct" {
-			t.Fatalf("%s attribution=%q/%q", m.EventKind, m.ProfileRef, m.AccountRef)
+		} else if m.AccountRef != "acct" {
+			t.Fatalf("%s attribution=%q", m.EventKind, m.AccountRef)
 		}
 		seen[m.EventKind]++
 	}
@@ -124,9 +121,6 @@ func TestV7ProducersEnqueueTypedPayloadsOnce(t *testing.T) {
 func TestLegacyAccountProducersWithoutTargetsBindConfiguredDefault(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
-	if err := s.SyncProfiles(ctx, []ProfileSpec{{"primary", "codex", "Primary", true, true}}); err != nil {
-		t.Fatal(err)
-	}
 	acct := resetwatch.Account{Ref: "acct", Label: "personal"}
 	now := parseTime("2026-07-12T12:00:00Z")
 	base := observation("2026-07-12T10:00:00Z", "2026-07-19T10:00:00Z", "2026-07-12T15:00:00Z")
@@ -157,12 +151,12 @@ func TestLegacyAccountProducersWithoutTargetsBindConfiguredDefault(t *testing.T)
 	if _, err := s.InsertRadarAlertEvent(ctx, alert); err != nil {
 		t.Fatal(err)
 	}
-	var mapping, outbox, resets, warnings, grantWarnings, grantEvents, radarRows int
-	if err := s.db.QueryRow(`select (select count(*) from profile_accounts where profile_ref='primary' and account_ref='acct'),(select count(*) from notification_outbox),(select count(*) from reset_events),(select count(*) from limit_warning_events),(select count(*) from reset_grant_warning_events),(select count(*) from reset_grant_events),(select count(*) from radar_alert_events)`).Scan(&mapping, &outbox, &resets, &warnings, &grantWarnings, &grantEvents, &radarRows); err != nil {
+	var accounts, outbox, resets, warnings, grantWarnings, grantEvents, radarRows int
+	if err := s.db.QueryRow(`select (select count(*) from accounts where account_ref='acct'),(select count(*) from notification_outbox),(select count(*) from reset_events),(select count(*) from limit_warning_events),(select count(*) from reset_grant_warning_events),(select count(*) from reset_grant_events),(select count(*) from radar_alert_events)`).Scan(&accounts, &outbox, &resets, &warnings, &grantWarnings, &grantEvents, &radarRows); err != nil {
 		t.Fatal(err)
 	}
-	if mapping != 1 || outbox != 0 || resets < 1 || warnings != 1 || grantWarnings != 1 || grantEvents < 1 || radarRows != 1 {
-		t.Fatalf("mapping=%d outbox=%d rows=%d/%d/%d/%d radar=%d", mapping, outbox, resets, warnings, grantWarnings, grantEvents, radarRows)
+	if accounts != 1 || outbox != 0 || resets < 1 || warnings != 1 || grantWarnings != 1 || grantEvents < 1 || radarRows != 1 {
+		t.Fatalf("accounts=%d outbox=%d rows=%d/%d/%d/%d radar=%d", accounts, outbox, resets, warnings, grantWarnings, grantEvents, radarRows)
 	}
 }
 

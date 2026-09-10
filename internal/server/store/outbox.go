@@ -25,22 +25,22 @@ var (
 )
 
 type OutboxMessage struct {
-	ID, EventKind, Source, ProfileRef, AccountRef, EventID, Target string
-	PayloadVersion                                                 int
-	PayloadJSON, Status                                            string
-	Attempts                                                       int
-	AvailableAt                                                    time.Time
-	LeaseToken                                                     string
-	LeaseExpiresAt, DeliveredAt, DeadLetteredAt                    *time.Time
-	ProviderMessageID, LastError                                   string
-	CreatedAt, UpdatedAt                                           time.Time
+	ID, EventKind, Source, AccountRef, EventID, Target string
+	PayloadVersion                                     int
+	PayloadJSON, Status                                string
+	Attempts                                           int
+	AvailableAt                                        time.Time
+	LeaseToken                                         string
+	LeaseExpiresAt, DeliveredAt, DeadLetteredAt        *time.Time
+	ProviderMessageID, LastError                       string
+	CreatedAt, UpdatedAt                               time.Time
 }
 
 type OutboxEnqueue struct {
-	ID, EventKind, Source, ProfileRef, AccountRef, EventID, Target string
-	PayloadVersion                                                 int
-	PayloadJSON                                                    string
-	AvailableAt                                                    time.Time
+	ID, EventKind, Source, AccountRef, EventID, Target string
+	PayloadVersion                                     int
+	PayloadJSON                                        string
+	AvailableAt                                        time.Time
 }
 
 type OutboxStats struct{ Pending, Leased, Delivered, DeadLetter int }
@@ -79,37 +79,23 @@ func EnqueueOutbox(ctx context.Context, tx *sql.Tx, in OutboxEnqueue, now time.T
 	}
 	switch in.EventKind {
 	case "reset", "limit_warning", "pacing_warning", "reset_grant_warning", "reset_grant":
-		if in.AccountRef == "" || in.ProfileRef == "" {
+		if in.AccountRef == "" {
 			return ErrOutboxScope
 		}
 	case "radar_alert":
-		if in.AccountRef != "" || in.ProfileRef != "" {
+		if in.AccountRef != "" {
 			return ErrOutboxScope
 		}
 	default:
 		return ErrOutboxEventKind
 	}
 	if in.AccountRef != "" {
-		if !validProfileRef(in.ProfileRef) {
-			return ErrInvalidProfile
-		}
-		var enabled int
-		if err := tx.QueryRowContext(ctx, `select enabled from profiles where profile_ref=?`, in.ProfileRef).Scan(&enabled); errors.Is(err, sql.ErrNoRows) {
-			return ErrProfileMissing
-		} else if err != nil {
+		var exists int
+		if err := tx.QueryRowContext(ctx, `select count(*) from accounts where account_ref=?`, in.AccountRef).Scan(&exists); err != nil {
 			return err
 		}
-		if enabled != 1 {
-			return ErrProfileDisabled
-		}
-		var owner string
-		if err := tx.QueryRowContext(ctx, `select profile_ref from profile_accounts where account_ref=?`, in.AccountRef).Scan(&owner); errors.Is(err, sql.ErrNoRows) {
-			return ErrProfileAccountUnbound
-		} else if err != nil {
-			return err
-		}
-		if owner != in.ProfileRef {
-			return ErrProfileAccountOwned
+		if exists != 1 {
+			return ErrAccountMissing
 		}
 	}
 	if in.AvailableAt.IsZero() {
@@ -119,8 +105,8 @@ func EnqueueOutbox(ctx context.Context, tx *sql.Tx, in OutboxEnqueue, now time.T
 		in.ID = OutboxID(in.EventKind, in.EventID, in.Target)
 	}
 	r, err := tx.ExecContext(ctx, `insert into notification_outbox
-(id,event_kind,source,profile_ref,account_ref,event_id,target,payload_version,payload_json,status,attempts,available_at,created_at,updated_at)
-values(?,?,?,?,?,?,?,?,?,'pending',0,?,?,?) on conflict(event_kind,event_id,target) do nothing`, in.ID, in.EventKind, in.Source, nullString(in.ProfileRef), nullString(in.AccountRef), in.EventID, in.Target, in.PayloadVersion, in.PayloadJSON, formatTime(in.AvailableAt), formatTime(now), formatTime(now))
+(id,event_kind,source,account_ref,event_id,target,payload_version,payload_json,status,attempts,available_at,created_at,updated_at)
+values(?,?,?,?,?,?,?,?,'pending',0,?,?,?) on conflict(event_kind,event_id,target) do nothing`, in.ID, in.EventKind, in.Source, nullString(in.AccountRef), in.EventID, in.Target, in.PayloadVersion, in.PayloadJSON, formatTime(in.AvailableAt), formatTime(now), formatTime(now))
 	if err != nil {
 		return err
 	}
@@ -128,13 +114,13 @@ values(?,?,?,?,?,?,?,?,?,'pending',0,?,?,?) on conflict(event_kind,event_id,targ
 	if n == 1 {
 		return nil
 	}
-	var id, source, profile, account, payload string
+	var id, source, account, payload string
 	var version int
-	err = tx.QueryRowContext(ctx, `select id,source,coalesce(profile_ref,''),coalesce(account_ref,''),payload_version,payload_json from notification_outbox where event_kind=? and event_id=? and target=?`, in.EventKind, in.EventID, in.Target).Scan(&id, &source, &profile, &account, &version, &payload)
+	err = tx.QueryRowContext(ctx, `select id,source,coalesce(account_ref,''),payload_version,payload_json from notification_outbox where event_kind=? and event_id=? and target=?`, in.EventKind, in.EventID, in.Target).Scan(&id, &source, &account, &version, &payload)
 	if err != nil {
 		return err
 	}
-	if id != in.ID || source != in.Source || profile != in.ProfileRef || account != in.AccountRef || version != in.PayloadVersion || payload != in.PayloadJSON {
+	if id != in.ID || source != in.Source || account != in.AccountRef || version != in.PayloadVersion || payload != in.PayloadJSON {
 		return errors.New("conflicting outbox semantic duplicate")
 	}
 	return nil
@@ -168,7 +154,7 @@ func (s *Store) ClaimOutboxForTarget(ctx context.Context, target string, now tim
 	}
 	rows, err := tx.QueryContext(ctx, `update notification_outbox set status='leased',attempts=attempts+1,lease_token=?,lease_expires_at=?,updated_at=? where id in
 (select id from notification_outbox where target=? and attempts < ? and ((status='pending' and available_at<=?) or (status='leased' and lease_expires_at<=?)) order by available_at,created_at,id limit ?)
-returning id,event_kind,source,coalesce(profile_ref,''),coalesce(account_ref,''),event_id,target,payload_version,payload_json,status,attempts,available_at,coalesce(lease_token,''),lease_expires_at,delivered_at,coalesce(provider_message_id,''),coalesce(last_error,''),dead_lettered_at,created_at,updated_at`, token, formatTime(now.Add(lease)), formatTime(now), target, OutboxMaxAttempts, formatTime(now), formatTime(now), limit)
+returning id,event_kind,source,coalesce(account_ref,''),event_id,target,payload_version,payload_json,status,attempts,available_at,coalesce(lease_token,''),lease_expires_at,delivered_at,coalesce(provider_message_id,''),coalesce(last_error,''),dead_lettered_at,created_at,updated_at`, token, formatTime(now.Add(lease)), formatTime(now), target, OutboxMaxAttempts, formatTime(now), formatTime(now), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +234,7 @@ func scanOutbox(r scanner) (OutboxMessage, error) {
 	var m OutboxMessage
 	var a, c, u string
 	var ln, dn, ddn sql.NullString
-	err := r.Scan(&m.ID, &m.EventKind, &m.Source, &m.ProfileRef, &m.AccountRef, &m.EventID, &m.Target, &m.PayloadVersion, &m.PayloadJSON, &m.Status, &m.Attempts, &a, &m.LeaseToken, &ln, &dn, &m.ProviderMessageID, &m.LastError, &ddn, &c, &u)
+	err := r.Scan(&m.ID, &m.EventKind, &m.Source, &m.AccountRef, &m.EventID, &m.Target, &m.PayloadVersion, &m.PayloadJSON, &m.Status, &m.Attempts, &a, &m.LeaseToken, &ln, &dn, &m.ProviderMessageID, &m.LastError, &ddn, &c, &u)
 	if err != nil {
 		return m, err
 	}
@@ -282,22 +268,6 @@ func changed(r sql.Result, e error) (bool, error) {
 }
 
 func enqueueEvent(ctx context.Context, tx *sql.Tx, kind, id, account, target string, event any) error {
-	profile := ""
-	if account != "" {
-		err := tx.QueryRowContext(ctx, `select profile_ref from profile_accounts where account_ref=?`, account).Scan(&profile)
-		if errors.Is(err, sql.ErrNoRows) {
-			var provider string
-			if err = tx.QueryRowContext(ctx, `select provider_id from accounts where account_ref=?`, account).Scan(&provider); err == nil {
-				profile, err = resolveDefaultProfile(ctx, tx, provider)
-				if err == nil {
-					err = bindProfileAccount(ctx, tx, profile, provider, account, time.Now())
-				}
-			}
-		}
-		if err != nil {
-			return fmt.Errorf("resolve outbox profile: %w", err)
-		}
-	}
 	if target == "" {
 		return nil
 	}
@@ -305,7 +275,7 @@ func enqueueEvent(ctx context.Context, tx *sql.Tx, kind, id, account, target str
 	if err != nil {
 		return err
 	}
-	return EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "scriba-v7", ProfileRef: profile, AccountRef: account, EventID: id, Target: target, PayloadVersion: 1, PayloadJSON: payload}, time.Now())
+	return EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "scriba-v7", AccountRef: account, EventID: id, Target: target, PayloadVersion: 1, PayloadJSON: payload}, time.Now())
 }
 
 func enqueueEventTargets(ctx context.Context, tx *sql.Tx, kind, id, account string, targets []string, event any) error {

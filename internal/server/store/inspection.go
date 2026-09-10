@@ -60,7 +60,7 @@ func (s *Store) ListOutbox(ctx context.Context, filter OutboxFilter) ([]OutboxMe
 	if err := validateInspectionLimit(filter.Limit); err != nil {
 		return nil, err
 	}
-	query := `select id,event_kind,source,coalesce(profile_ref,''),coalesce(account_ref,''),event_id,target,payload_version,payload_json,status,attempts,available_at,coalesce(lease_token,''),lease_expires_at,delivered_at,coalesce(provider_message_id,''),coalesce(last_error,''),dead_lettered_at,created_at,updated_at from notification_outbox where 1=1`
+	query := `select id,event_kind,source,coalesce(account_ref,''),event_id,target,payload_version,payload_json,status,attempts,available_at,coalesce(lease_token,''),lease_expires_at,delivered_at,coalesce(provider_message_id,''),coalesce(last_error,''),dead_lettered_at,created_at,updated_at from notification_outbox where 1=1`
 	args := make([]any, 0, 4)
 	query, args = appendStringFilter(query, args, "id", filter.ID)
 	query, args = appendStringFilter(query, args, "status", filter.Status)

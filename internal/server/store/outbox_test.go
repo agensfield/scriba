@@ -47,7 +47,7 @@ func TestOutboxEnqueueRollback(t *testing.T) {
 func TestOutboxCanonicalKindScope(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	if _, err := s.db.Exec(`insert into accounts values('acct','codex','','','','2026-07-13T00:00:00Z');insert into profile_accounts values('default','codex','acct',1,'2026-07-13T00:00:00Z','2026-07-13T00:00:00Z')`); err != nil {
+	if _, err := s.db.Exec(`insert into accounts(account_ref,provider_id,label,email,plan,updated_at,alias,first_seen_at) values('acct','codex','','','','2026-07-13T00:00:00Z','','2026-07-13T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	accountKinds := []string{"reset", "limit_warning", "reset_grant_warning", "reset_grant"}
@@ -55,7 +55,7 @@ func TestOutboxCanonicalKindScope(t *testing.T) {
 		t.Run(kind+" valid", func(t *testing.T) {
 			tx, _ := s.db.BeginTx(ctx, nil)
 			defer func() { _ = tx.Rollback() }()
-			if err := EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "test", ProfileRef: "default", AccountRef: "acct", EventID: kind + "-valid", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, time.Now()); err != nil {
+			if err := EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: kind, Source: "test", AccountRef: "acct", EventID: kind + "-valid", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -73,7 +73,7 @@ func TestOutboxCanonicalKindScope(t *testing.T) {
 			}
 		})
 	}
-	for name, in := range map[string]OutboxEnqueue{"radar valid": {EventKind: "radar_alert", Source: "test", EventID: "radar-valid", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, "radar account rejected": {EventKind: "radar_alert", Source: "test", ProfileRef: "default", AccountRef: "acct", EventID: "radar-bad", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, "unknown": {EventKind: "mystery", Source: "test", EventID: "unknown", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}} {
+	for name, in := range map[string]OutboxEnqueue{"radar valid": {EventKind: "radar_alert", Source: "test", EventID: "radar-valid", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, "radar account rejected": {EventKind: "radar_alert", Source: "test", AccountRef: "acct", EventID: "radar-bad", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}, "unknown": {EventKind: "mystery", Source: "test", EventID: "unknown", Target: "t", PayloadVersion: 1, PayloadJSON: `{}`}} {
 		t.Run(name, func(t *testing.T) {
 			tx, _ := s.db.BeginTx(ctx, nil)
 			defer func() { _ = tx.Rollback() }()

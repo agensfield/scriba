@@ -59,6 +59,9 @@ func (s *Store) migrateProfiles(ctx context.Context) (retErr error) {
 	if err = conn.QueryRowContext(ctx, `select max(version) from schema_migrations`).Scan(&version); err != nil {
 		return err
 	}
+	if version.Valid && version.Int64 >= SchemaVersion {
+		return nil
+	}
 	if version.Valid && version.Int64 >= ProfileSchemaVersion {
 		return validateProfileSchema(ctx, conn)
 	}
@@ -116,8 +119,8 @@ func (s *Store) migrateProfiles(ctx context.Context) (retErr error) {
 	if invalidOutbox != 0 {
 		return fmt.Errorf("profile migration found %d invalid outbox ownership rows", invalidOutbox)
 	}
-	if s.profileMigrationFault != nil {
-		if err = s.profileMigrationFault("after_outbox_backfill"); err != nil {
+	if s.accountMigrationFault != nil {
+		if err = s.accountMigrationFault("after_profile_outbox_backfill"); err != nil {
 			return err
 		}
 	}

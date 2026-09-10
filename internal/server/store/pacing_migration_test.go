@@ -7,7 +7,7 @@ import (
 
 func TestPacingSchemaMigrationFromV11IsIdempotent(t *testing.T) {
 	s := openTestStore(t)
-	if _, err := s.db.Exec(`drop table pacing_warning_events; drop table pacing_alert_states; delete from schema_migrations where version=12`); err != nil {
+	if _, err := s.db.Exec(`drop table pacing_warning_events; drop table pacing_alert_states; delete from schema_migrations where version>=12`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.migratePacingAlerts(context.Background()); err != nil {
@@ -37,7 +37,7 @@ func TestPacingSchemaMigrationRejectsMalformedStampedV12(t *testing.T) {
 
 func TestPacingSchemaMigrationFailureRollsBackPartialObjects(t *testing.T) {
 	s := openTestStore(t)
-	if _, err := s.db.Exec(`drop table pacing_warning_events; drop table pacing_alert_states; delete from schema_migrations where version=12; create table pacing_warning_events(blocker text)`); err != nil {
+	if _, err := s.db.Exec(`drop table pacing_warning_events; drop table pacing_alert_states; delete from schema_migrations where version>=12; create table pacing_warning_events(blocker text)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.migratePacingAlerts(context.Background()); err == nil {

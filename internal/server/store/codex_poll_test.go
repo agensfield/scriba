@@ -451,7 +451,7 @@ func TestApplyCodexPollDuplicateFanoutTargetRollsBackWholePoll(t *testing.T) {
 	}
 	assertPollCounts(t, s, 0, 0, 0)
 	var accounts, mappings, states int
-	if err := s.db.QueryRow(`select (select count(*) from accounts),(select count(*) from profile_accounts),(select count(*) from policy_states)`).Scan(&accounts, &mappings, &states); err != nil {
+	if err := s.db.QueryRow(`select (select count(*) from accounts),(select count(*) from auth_sources),(select count(*) from policy_states)`).Scan(&accounts, &mappings, &states); err != nil {
 		t.Fatal(err)
 	}
 	if accounts != 0 || mappings != 0 || states != 0 {
@@ -503,9 +503,6 @@ func TestPersistPolicyEventsPayloadParityAllKinds(t *testing.T) {
 	if _, err := s.db.Exec(`insert into accounts(account_ref,provider_id,label,email,plan,updated_at) values(?,?,?,?,?,?)`, obs.Account.Ref, "codex", obs.Account.Label, obs.Account.Email, obs.Account.Plan, formatTime(committed)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`insert into profile_accounts values('default','codex',?,1,?,?)`, obs.Account.Ref, formatTime(at), formatTime(at)); err != nil {
-		t.Fatal(err)
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -519,7 +516,7 @@ func TestPersistPolicyEventsPayloadParityAllKinds(t *testing.T) {
 		{ID: "grant_warning_fixture", RuleID: "current.grant.expiry", Kind: policy.EventGrantExpiryCheckpoint, Subject: fallback.CreditID, Checkpoint: 3, Grant: policy.GrantObservation{ID: fallback.CreditID, Title: credit.Title, ExpiresAt: credit.ExpiresAt}, DetectedAt: at},
 	}
 	chooser := resetwatch.JokeChooserFunc(func(resetwatch.Event) string { return "configured-joke" })
-	got, err := persistPolicyEvents(ctx, tx, obs, legacy, events, "current-v1", "fixture-hash", "default", []string{"telegram:42"}, chooser, committed)
+	got, err := persistPolicyEvents(ctx, tx, obs, legacy, events, "current-v1", "fixture-hash", []string{"telegram:42"}, chooser, committed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,7 +580,7 @@ func TestPersistPolicyEventsPayloadParityAllKinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repaired, err := persistPolicyEvents(ctx, repair, obs, legacy, events, "current-v1", "fixture-hash", "default", []string{"telegram:42"}, chooser, committed.Add(time.Minute))
+	repaired, err := persistPolicyEvents(ctx, repair, obs, legacy, events, "current-v1", "fixture-hash", []string{"telegram:42"}, chooser, committed.Add(time.Minute))
 	if err != nil {
 		_ = repair.Rollback()
 		t.Fatal(err)
@@ -615,15 +612,12 @@ func TestTypedEventSemanticConflictRollsBack(t *testing.T) {
 	if _, err := s.db.Exec(`insert into accounts(account_ref,provider_id,label,email,plan,updated_at) values(?,?,?,?,?,?)`, obs.Account.Ref, "codex", obs.Account.Label, obs.Account.Email, obs.Account.Plan, formatTime(at)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`insert into profile_accounts values('default','codex',?,1,?,?)`, obs.Account.Ref, formatTime(at), formatTime(at)); err != nil {
-		t.Fatal(err)
-	}
 	v := resetwatch.WarningEvent{ID: "same-id", ProviderID: "codex", Account: obs.Account, Label: resetwatch.LabelFiveHour, ThresholdRemaining: 20, UsedPercent: 81, RemainingPercent: 19, ResetAt: at.Add(5 * time.Hour), SnapshotJSON: obs.SnapshotJSON, DetectedAt: at}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = insertWarningEventTx(ctx, tx, v, "default", []string{"telegram:42"}, at); err != nil {
+	if _, err = insertWarningEventTx(ctx, tx, v, []string{"telegram:42"}, at); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -637,7 +631,7 @@ func TestTypedEventSemanticConflictRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = insertWarningEventTx(ctx, tx, v, "default", []string{"telegram:42"}, at.Add(time.Minute)); err == nil {
+	if _, err = insertWarningEventTx(ctx, tx, v, []string{"telegram:42"}, at.Add(time.Minute)); err == nil {
 		t.Fatal("expected immutable typed-event conflict")
 	}
 }

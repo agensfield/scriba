@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 12
+const SchemaVersion = 13
 
 const deliverySendLease = 10 * time.Minute
 
@@ -30,7 +30,7 @@ type Store struct {
 	path                  string
 	applyCodexPollFault   func(string) error
 	loadPolicyReplayFault func(string) error
-	profileMigrationFault func(string) error
+	accountMigrationFault func(string) error
 }
 
 type Delivery struct {
@@ -240,6 +240,9 @@ on conflict(version) do nothing`, 6, formatTime(time.Now()))
 		return err
 	}
 	if err := s.migratePacingAlerts(ctx); err != nil {
+		return err
+	}
+	if err := s.migrateAccounts(ctx); err != nil {
 		return err
 	}
 	return s.ensureRetentionIndexes(ctx)
@@ -702,27 +705,6 @@ func (s *Store) LoadLatestObservationForProvider(ctx context.Context, providerID
 		return resetwatch.Observation{}, false, errors.New("provider id is required")
 	}
 	return s.loadLatestObservation(ctx, providerID, "")
-}
-
-// LoadLatestObservationForProfile resolves one enabled profile's current
-// provider account, then loads only that account's newest observation.
-func (s *Store) LoadLatestObservationForProfile(ctx context.Context, profileRef string) (resetwatch.Observation, bool, error) {
-	if !validProfileRef(profileRef) {
-		return resetwatch.Observation{}, false, ErrInvalidProfile
-	}
-	var providerID, accountRef string
-	err := s.db.QueryRowContext(ctx, `
-select p.provider_id,pa.account_ref
-from profiles p
-join profile_accounts pa on pa.profile_ref=p.profile_ref and pa.provider_id=p.provider_id and pa.is_current=1
-where p.profile_ref=? and p.enabled=1`, profileRef).Scan(&providerID, &accountRef)
-	if errors.Is(err, sql.ErrNoRows) {
-		return resetwatch.Observation{}, false, nil
-	}
-	if err != nil {
-		return resetwatch.Observation{}, false, err
-	}
-	return s.loadLatestObservation(ctx, providerID, accountRef)
 }
 
 func (s *Store) loadLatestObservation(ctx context.Context, providerID, accountRef string) (resetwatch.Observation, bool, error) {
@@ -1543,15 +1525,15 @@ func deliveryBackoff(attempts int) time.Duration {
 
 func upsertAccount(ctx context.Context, tx *sql.Tx, obs resetwatch.Observation) error {
 	_, err := tx.ExecContext(ctx, `
-insert into accounts (account_ref, provider_id, label, email, plan, updated_at)
-values (?, ?, ?, ?, ?, ?)
+insert into accounts (account_ref, provider_id, label, email, plan, updated_at, alias, first_seen_at)
+values (?, ?, ?, ?, ?, ?, '', ?)
 on conflict(account_ref) do update set
   provider_id = excluded.provider_id,
   label = excluded.label,
   email = excluded.email,
   plan = excluded.plan,
   updated_at = excluded.updated_at`,
-		obs.Account.Ref, providerID(obs.ProviderID), obs.Account.Label, obs.Account.Email, obs.Account.Plan, formatTime(time.Now()))
+		obs.Account.Ref, providerID(obs.ProviderID), obs.Account.Label, obs.Account.Email, obs.Account.Plan, formatTime(time.Now()), formatTime(obs.ObservedAt))
 	return err
 }
 
@@ -1637,29 +1619,29 @@ on conflict(id) do nothing`,
 
 func upsertEventAccount(ctx context.Context, tx *sql.Tx, event resetwatch.Event) error {
 	_, err := tx.ExecContext(ctx, `
-insert into accounts (account_ref, provider_id, label, email, plan, updated_at)
-values (?, ?, ?, ?, ?, ?)
+insert into accounts (account_ref, provider_id, label, email, plan, updated_at, alias, first_seen_at)
+values (?, ?, ?, ?, ?, ?, '', ?)
 on conflict(account_ref) do update set
   provider_id = excluded.provider_id,
   label = excluded.label,
   email = excluded.email,
   plan = excluded.plan,
   updated_at = excluded.updated_at`,
-		event.Account.Ref, providerID(event.ProviderID), event.Account.Label, event.Account.Email, event.Account.Plan, formatTime(time.Now()))
+		event.Account.Ref, providerID(event.ProviderID), event.Account.Label, event.Account.Email, event.Account.Plan, formatTime(time.Now()), formatTime(event.DetectedAt))
 	return err
 }
 
 func upsertWarningAccount(ctx context.Context, tx *sql.Tx, warning resetwatch.WarningEvent) error {
 	_, err := tx.ExecContext(ctx, `
-insert into accounts (account_ref, provider_id, label, email, plan, updated_at)
-values (?, ?, ?, ?, ?, ?)
+insert into accounts (account_ref, provider_id, label, email, plan, updated_at, alias, first_seen_at)
+values (?, ?, ?, ?, ?, ?, '', ?)
 on conflict(account_ref) do update set
   provider_id = excluded.provider_id,
   label = excluded.label,
   email = excluded.email,
   plan = excluded.plan,
   updated_at = excluded.updated_at`,
-		warning.Account.Ref, providerID(warning.ProviderID), warning.Account.Label, warning.Account.Email, warning.Account.Plan, formatTime(time.Now()))
+		warning.Account.Ref, providerID(warning.ProviderID), warning.Account.Label, warning.Account.Email, warning.Account.Plan, formatTime(time.Now()), formatTime(warning.DetectedAt))
 	return err
 }
 
@@ -1668,15 +1650,15 @@ func upsertGrantWarningAccount(ctx context.Context, tx *sql.Tx, warning resetwat
 		return nil
 	}
 	_, err := tx.ExecContext(ctx, `
-insert into accounts (account_ref, provider_id, label, email, plan, updated_at)
-values (?, ?, ?, ?, ?, ?)
+insert into accounts (account_ref, provider_id, label, email, plan, updated_at, alias, first_seen_at)
+values (?, ?, ?, ?, ?, ?, '', ?)
 on conflict(account_ref) do update set
   provider_id = excluded.provider_id,
   label = excluded.label,
   email = excluded.email,
   plan = excluded.plan,
   updated_at = excluded.updated_at`,
-		warning.Account.Ref, providerID(warning.ProviderID), warning.Account.Label, warning.Account.Email, warning.Account.Plan, formatTime(time.Now()))
+		warning.Account.Ref, providerID(warning.ProviderID), warning.Account.Label, warning.Account.Email, warning.Account.Plan, formatTime(time.Now()), formatTime(warning.DetectedAt))
 	return err
 }
 

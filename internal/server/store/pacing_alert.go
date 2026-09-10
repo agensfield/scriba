@@ -30,7 +30,7 @@ func derivePacingReport(ctx context.Context, tx *sql.Tx, obs resetwatch.Observat
 	return budget.Evaluate(budget.Input{ProviderID: obs.ProviderID, Observation: budgetadapter.FromResetwatch(obs), History: history, HistoryState: historyState}, obs.ObservedAt), nil
 }
 
-func persistPacingAlerts(ctx context.Context, tx *sql.Tx, obs resetwatch.Observation, report budget.Report, profile string, targets []string, clockJitter time.Duration, committedAt time.Time) ([]budget.PacingAlert, error) {
+func persistPacingAlerts(ctx context.Context, tx *sql.Tx, obs resetwatch.Observation, report budget.Report, targets []string, clockJitter time.Duration, committedAt time.Time) ([]budget.PacingAlert, error) {
 	var inserted []budget.PacingAlert
 	for _, window := range report.Windows {
 		if !pacingWindowKeys[window.Key] || window.ResetAt == nil {
@@ -51,7 +51,7 @@ func persistPacingAlerts(ctx context.Context, tx *sql.Tx, obs resetwatch.Observa
 		}
 		if alerted == 0 && pacingAlertable(window) {
 			alert := newPacingAlert(obs, window, cycleReset)
-			added, insertErr := insertPacingAlertTx(ctx, tx, alert, profile, targets, committedAt)
+			added, insertErr := insertPacingAlertTx(ctx, tx, alert, targets, committedAt)
 			if insertErr != nil {
 				return nil, insertErr
 			}
@@ -102,7 +102,7 @@ func newPacingAlert(obs resetwatch.Observation, window budget.Window, cycleReset
 	}
 }
 
-func insertPacingAlertTx(ctx context.Context, tx *sql.Tx, alert budget.PacingAlert, profile string, targets []string, committedAt time.Time) (bool, error) {
+func insertPacingAlertTx(ctx context.Context, tx *sql.Tx, alert budget.PacingAlert, targets []string, committedAt time.Time) (bool, error) {
 	r, err := tx.ExecContext(ctx, `insert into pacing_warning_events(id,provider_id,account_ref,account_label,window_key,label,risk,confidence,used_percent,remaining_percent,pace_per_hour,safe_per_hour,projected_exhaustion_at,reset_at,detected_at,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do nothing`, alert.ID, alert.ProviderID, alert.AccountRef, alert.AccountLabel, alert.WindowKey, alert.Label, alert.Risk, alert.Confidence, alert.UsedPercent, alert.RemainingPercentPoints, alert.PacePercentPointsPerHour, alert.SafePercentPointsPerHour, formatTime(alert.ProjectedExhaustionAt), formatTime(alert.ResetAt), formatTime(alert.DetectedAt), formatTime(committedAt))
 	if err != nil {
 		return false, err
@@ -123,7 +123,7 @@ func insertPacingAlertTx(ctx context.Context, tx *sql.Tx, alert budget.PacingAle
 		if encodeErr != nil {
 			return false, encodeErr
 		}
-		if enqueueErr := EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: "pacing_warning", Source: "budget-v1", ProfileRef: profile, AccountRef: alert.AccountRef, EventID: alert.ID, Target: target, PayloadVersion: 1, PayloadJSON: payload}, committedAt); enqueueErr != nil {
+		if enqueueErr := EnqueueOutbox(ctx, tx, OutboxEnqueue{EventKind: "pacing_warning", Source: "budget-v1", AccountRef: alert.AccountRef, EventID: alert.ID, Target: target, PayloadVersion: 1, PayloadJSON: payload}, committedAt); enqueueErr != nil {
 			return false, enqueueErr
 		}
 	}
