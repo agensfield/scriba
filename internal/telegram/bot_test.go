@@ -632,6 +632,34 @@ func TestResetConfirmationRetryKeepsOriginalIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestResetConfirmationRetiresAccountChangedPreview(t *testing.T) {
+	credit := remote.ResetCredit{ID: "credit", Status: "available"}
+	controller := &fakeController{
+		resetPlan:       remotecodex.RateLimitResetPlan{Credit: credit},
+		resetConsumeErr: &remotecodex.ResetAccountBindingError{Changed: true},
+	}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	_, markup := svc.handleCommandFor(t.Context(), "/reset", 123, 7)
+	confirm := markup.(models.InlineKeyboardMarkup).InlineKeyboard[0][0].CallbackData
+	_, token, _ := parseResetCallback(confirm)
+	query := resetTestQuery(confirm, 123, 7)
+	if err := svc.handleResetCallback(t.Context(), query); err != nil {
+		t.Fatal(err)
+	}
+	if controller.resetConsumes != 1 || svc.pendingResets[token] != nil {
+		t.Fatalf("consumes=%d pending=%v", controller.resetConsumes, svc.pendingResets[token])
+	}
+	if err := svc.handleResetCallback(t.Context(), query); err != nil {
+		t.Fatal(err)
+	}
+	if controller.resetConsumes != 1 {
+		t.Fatalf("retired confirmation consumed again: %d", controller.resetConsumes)
+	}
+	if text := RenderCodexResetAccountChanged("default"); !strings.Contains(text, "account changed") || !strings.Contains(text, "Preview the reset again") {
+		t.Fatalf("account-changed message=%q", text)
+	}
+}
+
 func TestResetCallbacksUseClosedVersionedShape(t *testing.T) {
 	valid := "reset:v1:confirm:0123456789abcdef0123"
 	if action, token, ok := parseResetCallback(valid); !ok || action != "confirm" || token != "0123456789abcdef0123" || callbackKind(valid) != "reset:v1" {
@@ -971,7 +999,7 @@ func (f *fakeController) PlanCodexReset(_ context.Context, profile string) (remo
 	return f.resetPlan, f.resetPlanErr
 }
 
-func (f *fakeController) ConsumeCodexReset(_ context.Context, profile string, credit remote.ResetCredit, requestID string) (remotecodex.RateLimitResetResult, error) {
+func (f *fakeController) ConsumeCodexReset(_ context.Context, profile string, _ remotecodex.ResetAccountPin, credit remote.ResetCredit, requestID string) (remotecodex.RateLimitResetResult, error) {
 	f.resetConsumes++
 	f.resetProfile = profile
 	f.resetCredit = credit

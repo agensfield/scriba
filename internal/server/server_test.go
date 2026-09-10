@@ -540,7 +540,7 @@ func TestProfileReadSelectionUsesConfiguredDefaultAndMappedAccount(t *testing.T)
 	if _, err := withoutAuth.PlanCodexReset(ctx, ""); !errors.Is(err, ErrProfileAuthPaths) {
 		t.Fatalf("reset plan missing auth paths err=%v", err)
 	}
-	if _, err := withoutAuth.ConsumeCodexReset(ctx, "", remote.ResetCredit{ID: "credit"}, "request"); !errors.Is(err, ErrProfileAuthPaths) {
+	if _, err := withoutAuth.ConsumeCodexReset(ctx, "", remotecodex.ResetAccountPin{}, remote.ResetCredit{ID: "credit"}, "request"); !errors.Is(err, ErrProfileAuthPaths) {
 		t.Fatalf("reset consume missing auth paths err=%v", err)
 	}
 }

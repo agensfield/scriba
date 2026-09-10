@@ -3,11 +3,16 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/agensfield/scriba/internal/remote"
 )
 
 func TestPlanRateLimitResetSelectsSoonestExpiringAvailableCreditWithoutPosting(t *testing.T) {
@@ -92,7 +97,7 @@ func TestConsumeRateLimitResetCreditPostsExactCreditAndIdempotencyKey(t *testing
 	withResetTestURLs(t, server.URL)
 
 	credit := remoteResetCredit(resetCredit{ID: "credit-1", Status: "available", Title: "Full reset"})
-	result, err := ConsumeRateLimitResetCredit(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, credit, "request-1")
+	result, err := ConsumeRateLimitResetCredit(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, mustResetAccountPin(t, "acct-a"), credit, "request-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +116,7 @@ func TestConsumeRateLimitResetCreditAcceptsEveryDocumentedOutcome(t *testing.T) 
 			}))
 			defer server.Close()
 			withResetTestURLs(t, server.URL)
-			result, err := ConsumeRateLimitResetCredit(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, remoteResetCredit(resetCredit{ID: "credit"}), "request")
+			result, err := ConsumeRateLimitResetCredit(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, mustResetAccountPin(t, "acct"), remoteResetCredit(resetCredit{ID: "credit"}), "request")
 			if err != nil || result.Outcome != outcome {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
@@ -140,10 +145,142 @@ func TestConsumeRateLimitResetCreditRetriesOnceWithSameIdempotencyKey(t *testing
 	}))
 	defer server.Close()
 	withResetTestURLs(t, server.URL)
-	result, err := ConsumeRateLimitResetCredit(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, remoteResetCredit(resetCredit{ID: "credit"}), "stable-request")
+	result, err := ConsumeRateLimitResetCredit(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, mustResetAccountPin(t, "acct"), remoteResetCredit(resetCredit{ID: "credit"}), "stable-request")
 	if err != nil || result.Outcome != ResetOutcomeAlreadyRedeemed || requests != 2 {
 		t.Fatalf("result=%+v requests=%d err=%v", result, requests, err)
 	}
+}
+
+func TestConsumeRateLimitResetCreditRejectsAccountSwitchBeforePost(t *testing.T) {
+	dir := t.TempDir()
+	authPath := writeTestAuth(t, dir, "auth", "token-a", "acct-a")
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/usage":
+			_, _ = fmt.Fprint(w, `{"rate_limit_reset_credits":{"available_count":1}}`)
+		case "/credits":
+			_, _ = fmt.Fprint(w, `{"available_count":1,"credits":[{"id":"credit-a","status":"available"}]}`)
+		case "/consume":
+			posts++
+			_, _ = fmt.Fprint(w, `{"code":"reset"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	withResetTestURLs(t, server.URL)
+
+	plan, err := PlanRateLimitReset(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestAuth(t, dir, "auth", "token-b", "acct-b")
+	_, err = ConsumeRateLimitResetCredit(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, plan.AccountPin, plan.Credit, "request-a")
+	var bindingErr *ResetAccountBindingError
+	if !errors.As(err, &bindingErr) || !bindingErr.Changed {
+		t.Fatalf("error=%v, want changed-account binding error", err)
+	}
+	if posts != 0 {
+		t.Fatalf("consume posts=%d, want 0", posts)
+	}
+}
+
+func TestConsumeRateLimitResetCreditAllowsTokenRotationForPreviewAccount(t *testing.T) {
+	dir := t.TempDir()
+	authPath := writeTestAuth(t, dir, "auth", "token-a", "acct-a")
+	server := resetPlanTestServer(t)
+	defer server.Close()
+	withResetTestURLs(t, server.URL)
+	plan, err := PlanRateLimitReset(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Close()
+
+	posts := 0
+	consumeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		if got := r.Header.Get("Authorization"); got != "Bearer token-b" {
+			t.Errorf("authorization=%q", got)
+		}
+		_, _ = fmt.Fprint(w, `{"code":"reset","windows_reset":1}`)
+	}))
+	defer consumeServer.Close()
+	consumeRateLimitResetCreditURL = consumeServer.URL
+	writeTestAuth(t, dir, "auth", "token-b", "acct-a")
+	result, err := ConsumeRateLimitResetCredit(context.Background(), consumeServer.Client(), FetchOptions{AuthPaths: []string{authPath}}, plan.AccountPin, plan.Credit, "request-a")
+	if err != nil || result.Outcome != ResetOutcomeReset || posts != 1 {
+		t.Fatalf("result=%+v posts=%d err=%v", result, posts, err)
+	}
+}
+
+func TestConsumeRateLimitResetCreditRechecksAccountAfterAuthRefresh(t *testing.T) {
+	dir := t.TempDir()
+	authPath := writeTestAuth(t, dir, "auth", "token-a", "acct-a")
+	pin := mustResetAccountPin(t, "acct-a")
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		if posts == 1 {
+			payload := `{"tokens":{"access_token":"token-b","account_id":"acct-b"},"last_refresh":"2026-07-12T00:00:00Z"}`
+			if err := os.WriteFile(authPath, []byte(payload), 0o600); err != nil {
+				t.Errorf("rotate auth: %v", err)
+			}
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"code":"reset"}`)
+	}))
+	defer server.Close()
+	withResetTestURLs(t, server.URL)
+
+	_, err := ConsumeRateLimitResetCredit(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, pin, remoteResetCredit(resetCredit{ID: "credit-a"}), "request-a")
+	var bindingErr *ResetAccountBindingError
+	if !errors.As(err, &bindingErr) || !bindingErr.Changed {
+		t.Fatalf("error=%v, want changed-account binding error", err)
+	}
+	if posts != 1 {
+		t.Fatalf("consume posts=%d, want only the initial unauthorized post", posts)
+	}
+}
+
+func TestResetAccountPinRequiresProviderAccountAndStaysOutOfJSON(t *testing.T) {
+	dir := t.TempDir()
+	authPath := writeTestAuth(t, dir, "auth", "token", "")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+	withResetTestURLs(t, server.URL)
+	_, err := PlanRateLimitReset(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, "")
+	var bindingErr *ResetAccountBindingError
+	if !errors.As(err, &bindingErr) || bindingErr.Changed || requests != 0 {
+		t.Fatalf("error=%v requests=%d, want unverifiable identity before requests", err, requests)
+	}
+
+	authPath = writeTestAuth(t, dir, "auth", "token", "acct")
+	_, err = ConsumeRateLimitResetCredit(context.Background(), server.Client(), FetchOptions{AuthPaths: []string{authPath}}, ResetAccountPin{}, remote.ResetCredit{ID: "credit"}, "request")
+	if !errors.As(err, &bindingErr) || bindingErr.Changed || requests != 0 {
+		t.Fatalf("missing preview pin error=%v requests=%d, want no redemption request", err, requests)
+	}
+
+	plan := RateLimitResetPlan{AccountPin: mustResetAccountPin(t, "private-account"), AuthState: remote.AuthState{OK: true, AccountID: "private-account"}}
+	raw, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "private-account") || strings.Contains(string(raw), "accountPin") || strings.Contains(string(raw), "AccountPin") {
+		t.Fatalf("private account identity leaked in plan JSON: %s", raw)
+	}
+}
+
+func mustResetAccountPin(t *testing.T, accountID string) ResetAccountPin {
+	t.Helper()
+	pin, err := resetAccountPin(remote.AuthState{AccountID: accountID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pin
 }
 
 func resetPlanTestServer(t *testing.T) *httptest.Server {

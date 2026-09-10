@@ -173,6 +173,10 @@ func RenderCodexResetCancelled(profileID string) string {
 	return renderSelectedProfile(profileID, "<b>Codex reset cancelled</b>\nNo reset grant was spent.")
 }
 
+func RenderCodexResetAccountChanged(profileID string) string {
+	return renderSelectedProfile(profileID, "<b>Codex account changed</b>\nNo reset grant was spent. Preview the reset again for the current account.")
+}
+
 func RenderCodexResetRetry(profileID string) string {
 	return renderSelectedProfile(profileID, "<b>Codex reset failed</b>\nThe same confirmation can be retried safely with its original idempotency key.")
 }

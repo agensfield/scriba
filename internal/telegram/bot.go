@@ -39,7 +39,7 @@ type Controller interface {
 	LatestObservationForProfile(context.Context, string) (resetwatch.Observation, bool, error)
 	CodexProfileForProfile(context.Context, string) (remotecodex.ProfileResult, error)
 	PlanCodexReset(context.Context, string) (remotecodex.RateLimitResetPlan, error)
-	ConsumeCodexReset(context.Context, string, remote.ResetCredit, string) (remotecodex.RateLimitResetResult, error)
+	ConsumeCodexReset(context.Context, string, remotecodex.ResetAccountPin, remote.ResetCredit, string) (remotecodex.RateLimitResetResult, error)
 	Stats(context.Context) (server.Stats, error)
 	Health(context.Context) (server.Health, error)
 }
@@ -618,16 +618,24 @@ func (s *Service) handleResetCallback(ctx context.Context, query *models.Callbac
 		return s.answerCallback(ctx, query.ID, "reset already in progress")
 	}
 	pending.InFlight = true
-	profileID, credit, requestID := pending.ProfileID, pending.Plan.Credit, pending.RequestID
+	profileID, accountPin, credit, requestID := pending.ProfileID, pending.Plan.AccountPin, pending.Plan.Credit, pending.RequestID
 	s.mu.Unlock()
 
-	result, err := s.controller.ConsumeCodexReset(ctx, profileID, credit, requestID)
+	result, err := s.controller.ConsumeCodexReset(ctx, profileID, accountPin, credit, requestID)
 	s.mu.Lock()
 	pending.InFlight = false
+	var accountBindingErr *remotecodex.ResetAccountBindingError
+	accountChanged := errors.As(err, &accountBindingErr)
 	if err == nil {
 		pending.Result = &result
+	} else if accountChanged {
+		delete(s.pendingResets, token)
 	}
 	s.mu.Unlock()
+	if accountChanged {
+		_ = s.answerCallback(ctx, query.ID, "account changed; preview reset again")
+		return s.editCallbackMessage(ctx, query, RenderCodexResetAccountChanged(profileID), selectedProfileKeyboard(profileID))
+	}
 	if err != nil {
 		_ = s.answerCallback(ctx, query.ID, "reset failed; confirmation remains retryable")
 		return s.editCallbackMessage(ctx, query, RenderCodexResetRetry(profileID), resetConfirmationKeyboard(token))

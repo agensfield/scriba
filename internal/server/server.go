@@ -402,7 +402,7 @@ func (s *Server) PlanCodexReset(ctx context.Context, profileRef string) (remotec
 	return plan, nil
 }
 
-func (s *Server) ConsumeCodexReset(ctx context.Context, profileRef string, credit remote.ResetCredit, requestID string) (remotecodex.RateLimitResetResult, error) {
+func (s *Server) ConsumeCodexReset(ctx context.Context, profileRef string, accountPin remotecodex.ResetAccountPin, credit remote.ResetCredit, requestID string) (remotecodex.RateLimitResetResult, error) {
 	profile, err := s.configuredProfile(profileRef)
 	if err != nil {
 		return remotecodex.RateLimitResetResult{}, err
@@ -410,7 +410,7 @@ func (s *Server) ConsumeCodexReset(ctx context.Context, profileRef string, credi
 	if len(profile.AuthPaths) == 0 && !profile.AllowAuthDiscovery {
 		return remotecodex.RateLimitResetResult{}, ErrProfileAuthPaths
 	}
-	result, err := remotecodex.ConsumeRateLimitResetCredit(ctx, nil, remotecodex.FetchOptions{AuthPaths: append([]string(nil), profile.AuthPaths...)}, credit, requestID)
+	result, err := remotecodex.ConsumeRateLimitResetCredit(ctx, nil, remotecodex.FetchOptions{AuthPaths: append([]string(nil), profile.AuthPaths...)}, accountPin, credit, requestID)
 	if err != nil {
 		return remotecodex.RateLimitResetResult{}, err
 	}

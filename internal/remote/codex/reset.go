@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,25 @@ const (
 	ResetOutcomeAlreadyRedeemed = "already_redeemed"
 )
 
+// ResetAccountPin is an opaque, private identity for the provider account that
+// owned a reset preview. It is deliberately excluded from serialized output.
+type ResetAccountPin struct {
+	digest [sha256.Size]byte
+}
+
+// ResetAccountBindingError means a reset could not be safely bound to the
+// account that owned its preview. Callers should discard the preview.
+type ResetAccountBindingError struct {
+	Changed bool
+}
+
+func (e *ResetAccountBindingError) Error() string {
+	if e.Changed {
+		return "codex account changed since reset preview; preview the reset again"
+	}
+	return "codex account identity is unavailable; preview the reset again"
+}
+
 // RateLimitResetPlan describes the concrete credit Scriba would redeem.
 type RateLimitResetPlan struct {
 	ProviderID     string             `json:"providerId"`
@@ -48,6 +68,7 @@ type RateLimitResetPlan struct {
 	WeeklyUsed     *float64           `json:"weeklyUsedPercent,omitempty"`
 	WeeklyResetsAt string             `json:"weeklyResetsAt,omitempty"`
 	AuthState      remote.AuthState   `json:"authState"`
+	AccountPin     ResetAccountPin    `json:"-"`
 }
 
 // RateLimitResetResult is the bounded backend outcome of one redemption attempt.
@@ -83,6 +104,10 @@ func PlanRateLimitReset(ctx context.Context, client *http.Client, opts FetchOpti
 	if !auth.OK {
 		return RateLimitResetPlan{}, fmt.Errorf("codex auth unavailable: %s", auth.Error)
 	}
+	accountPin, err := resetAccountPin(auth)
+	if err != nil {
+		return RateLimitResetPlan{}, err
+	}
 	usage, credits, err := fetchResetPlanData(ctx, client, auth)
 	if isAuthHTTPError(err) {
 		auth, err = loadAuth(ctx, client, true, opts.AuthPaths)
@@ -91,6 +116,10 @@ func PlanRateLimitReset(ctx context.Context, client *http.Client, opts FetchOpti
 		}
 		if !auth.OK {
 			return RateLimitResetPlan{}, fmt.Errorf("codex auth unavailable: %s", auth.Error)
+		}
+		accountPin, err = resetAccountPin(auth)
+		if err != nil {
+			return RateLimitResetPlan{}, err
 		}
 		usage, credits, err = fetchResetPlanData(ctx, client, auth)
 	}
@@ -111,12 +140,13 @@ func PlanRateLimitReset(ctx context.Context, client *http.Client, opts FetchOpti
 		WeeklyUsed:     weeklyUsed,
 		WeeklyResetsAt: weeklyResetsAt,
 		AuthState:      auth,
+		AccountPin:     accountPin,
 	}, nil
 }
 
 // ConsumeRateLimitResetCredit redeems one explicit credit. Callers must reuse
 // redeemRequestID when retrying the same logical attempt.
-func ConsumeRateLimitResetCredit(ctx context.Context, client *http.Client, opts FetchOptions, credit remote.ResetCredit, redeemRequestID string) (RateLimitResetResult, error) {
+func ConsumeRateLimitResetCredit(ctx context.Context, client *http.Client, opts FetchOptions, accountPin ResetAccountPin, credit remote.ResetCredit, redeemRequestID string) (RateLimitResetResult, error) {
 	if client == nil {
 		client = defaultHTTPClient
 	}
@@ -133,7 +163,7 @@ func ConsumeRateLimitResetCredit(ctx context.Context, client *http.Client, opts 
 	if !auth.OK {
 		return RateLimitResetResult{}, fmt.Errorf("codex auth unavailable: %s", auth.Error)
 	}
-	parsed, err := consumeResetCredit(ctx, client, auth, credit.ID, redeemRequestID)
+	parsed, err := consumePinnedResetCredit(ctx, client, auth, accountPin, credit.ID, redeemRequestID)
 	if isAuthHTTPError(err) {
 		auth, err = loadAuth(ctx, client, true, opts.AuthPaths)
 		if err != nil {
@@ -142,12 +172,12 @@ func ConsumeRateLimitResetCredit(ctx context.Context, client *http.Client, opts 
 		if !auth.OK {
 			return RateLimitResetResult{}, fmt.Errorf("codex auth unavailable: %s", auth.Error)
 		}
-		parsed, err = consumeResetCredit(ctx, client, auth, credit.ID, redeemRequestID)
+		parsed, err = consumePinnedResetCredit(ctx, client, auth, accountPin, credit.ID, redeemRequestID)
 	} else if retryableResetError(err) {
 		// A response may be lost after the backend commits the reset. Retrying
 		// once with the same key lets the backend return already_redeemed rather
 		// than risking a second logical redemption.
-		parsed, err = consumeResetCredit(ctx, client, auth, credit.ID, redeemRequestID)
+		parsed, err = consumePinnedResetCredit(ctx, client, auth, accountPin, credit.ID, redeemRequestID)
 	}
 	if err != nil {
 		return RateLimitResetResult{}, err
@@ -163,6 +193,28 @@ func ConsumeRateLimitResetCredit(ctx context.Context, client *http.Client, opts 
 		Credit:       credit,
 		AuthState:    auth,
 	}, nil
+}
+
+func resetAccountPin(auth remote.AuthState) (ResetAccountPin, error) {
+	accountID := strings.TrimSpace(auth.AccountID)
+	if accountID == "" {
+		return ResetAccountPin{}, &ResetAccountBindingError{}
+	}
+	return ResetAccountPin{digest: sha256.Sum256([]byte(accountID))}, nil
+}
+
+func consumePinnedResetCredit(ctx context.Context, client *http.Client, auth remote.AuthState, expected ResetAccountPin, creditID, redeemRequestID string) (consumeResetResponse, error) {
+	actual, err := resetAccountPin(auth)
+	if err != nil {
+		return consumeResetResponse{}, err
+	}
+	if expected.digest == ([sha256.Size]byte{}) {
+		return consumeResetResponse{}, &ResetAccountBindingError{}
+	}
+	if actual.digest != expected.digest {
+		return consumeResetResponse{}, &ResetAccountBindingError{Changed: true}
+	}
+	return consumeResetCredit(ctx, client, auth, creditID, redeemRequestID)
 }
 
 func retryableResetError(err error) bool {

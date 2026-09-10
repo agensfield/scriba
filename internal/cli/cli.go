@@ -760,7 +760,7 @@ func runCodexReset(opts options) error {
 	if err != nil {
 		return err
 	}
-	result, err := remotecodex.ConsumeRateLimitResetCredit(context.Background(), nil, remotecodex.FetchOptions{}, plan.Credit, requestID)
+	result, err := remotecodex.ConsumeRateLimitResetCredit(context.Background(), nil, remotecodex.FetchOptions{}, plan.AccountPin, plan.Credit, requestID)
 	if err != nil {
 		return err
 	}
