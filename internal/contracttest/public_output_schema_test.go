@@ -76,6 +76,57 @@ func TestPublicOutputSchemasAllowOptionalOmissions(t *testing.T) {
 	}
 }
 
+func TestCodexSchemasRejectAbsoluteAuthSources(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join("..", "..", "schemas")
+	for _, name := range []string{"codex-limits", "codex-activity", "codex-reset-grants", "codex-reset"} {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			schema, err := publicOutputCompiler(t, root).Compile("https://agensfield.dev/scriba/schemas/" + name + ".schema.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{"/tmp/cold-auth.json", "/home/arda/.codex/auth.json", `C:\\Users\\arda\\auth.json`, `\\\\server\\auth.json`} {
+				payload := codexSchemaPayload(name)
+				payload["authState"].(map[string]any)["source"] = path
+				if err := schema.Validate(payload); err == nil {
+					t.Errorf("accepted private auth source %q", path)
+				}
+			}
+		})
+	}
+}
+
+func codexSchemaPayload(name string) map[string]any {
+	auth := map[string]any{"ok": true}
+	base := map[string]any{"schemaVersion": "scriba.v1", "providerId": "codex", "accountId": "acct-0123456789abcdef0123", "credentialsAvailable": true, "authState": auth}
+	switch name {
+	case "codex-limits":
+		base["source"] = "status-cache"
+		base["mode"] = "fast"
+		base["lines"] = []any{}
+	case "codex-activity":
+		base["source"] = "chatgpt-codex-profile-backend"
+		base["profile"] = map[string]any{}
+		base["stats"] = map[string]any{}
+		base["metadata"] = map[string]any{}
+	case "codex-reset-grants":
+		base["source"] = "status-cache"
+		base["mode"] = "fast"
+		base["resetCredits"] = []any{}
+		base["summary"] = map[string]any{"available": 0}
+	case "codex-reset":
+		base["source"] = "chatgpt-codex-backend"
+		base["dryRun"] = true
+		base["outcome"] = "planned"
+		base["windowsReset"] = 0
+		base["availableBefore"] = 0
+		base["credit"] = map[string]any{"id": "credit-1"}
+	}
+	return base
+}
+
 func TestAgentSchemasRejectNonAllowlistedFields(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..", "schemas")

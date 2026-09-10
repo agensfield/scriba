@@ -201,7 +201,7 @@ func dispatch(args []string) error {
 		if args[0] == "codex" && args[1] == "reset" {
 			opts, rest, err := parse(args[2:], flagSpec{
 				Use:   "scriba codex reset [flags]",
-				Flags: []string{"json", "config", "state-path", "account", "credit", "dry-run", "yes"},
+				Flags: []string{"json", "config", "state-path", "account", "credit", "dry-run", "yes", "redact"},
 			})
 			if err != nil {
 				return err
@@ -747,16 +747,11 @@ func runCodexActivity(opts options) error {
 	if err != nil {
 		return err
 	}
-	profile.AuthState.Source = ""
-	profile.AuthState.Error = ""
-	profile.AuthState.AccessToken = ""
-	profile.AuthState.AccountID = ""
+	profile.AuthState = sanitizeCodexAuthState(profile.AuthState)
 	if profile.Metadata.StatsError != nil {
 		profile.Metadata.StatsError = "profile stats unavailable"
 	}
-	for i := range profile.Provenance {
-		profile.Provenance[i].Error = ""
-	}
+	profile.Provenance = sanitizeCodexProvenance(profile.Provenance)
 	profile.SchemaVersion = model.SchemaVersion
 	return output(opts, codexActivityPayload(profile, live.Account, opts.redact), renderCodexActivityForAccount(profile, live.Account, opts.redact))
 }
@@ -907,7 +902,7 @@ func runCodexReset(opts options) error {
 		WeeklyUsedBefore:     plan.WeeklyUsed,
 		WeeklyResetsAt:       plan.WeeklyResetsAt,
 		Credit:               plan.Credit,
-		AuthState:            plan.AuthState,
+		AuthState:            sanitizeCodexAuthState(plan.AuthState),
 	}
 	if opts.dryRun {
 		return output(opts, payload, renderCodexReset(payload))
@@ -937,7 +932,7 @@ func runCodexReset(opts options) error {
 	payload.DryRun = false
 	payload.Outcome = result.Outcome
 	payload.WindowsReset = result.WindowsReset
-	payload.AuthState = result.AuthState
+	payload.AuthState = sanitizeCodexAuthState(result.AuthState)
 	return output(opts, payload, renderCodexReset(payload))
 }
 
@@ -1238,6 +1233,37 @@ func renderUpdateCheck(check updater.Check) string {
 	return strings.Join(lines, "\n")
 }
 
+func sanitizeCodexAuthState(auth remote.AuthState) remote.AuthState {
+	auth.Source = ""
+	auth.Error = ""
+	auth.AccessToken = ""
+	auth.AccountID = ""
+	return auth
+}
+
+func sanitizeCodexProvenance(provenance []model.SourceProvenance) []model.SourceProvenance {
+	clean := append([]model.SourceProvenance(nil), provenance...)
+	for i := range clean {
+		clean[i].Error = ""
+	}
+	return clean
+}
+
+func sanitizeCodexMetricLines(lines []model.MetricLine) []model.MetricLine {
+	clean := append([]model.MetricLine(nil), lines...)
+	for i := range clean {
+		clean[i].Provenance = sanitizeCodexProvenance(clean[i].Provenance)
+	}
+	return clean
+}
+
+func sanitizeCodexProbeResult(result remote.ProbeResult) remote.ProbeResult {
+	result.AuthState = sanitizeCodexAuthState(result.AuthState)
+	result.Provenance = sanitizeCodexProvenance(result.Provenance)
+	result.Lines = sanitizeCodexMetricLines(result.Lines)
+	return result
+}
+
 func liveCodexLimitsPayloadFor(ctx context.Context, opts options) (codexLimitsPayload, func(), error) {
 	live, cleanup, err := resolveLiveCodex(ctx, opts)
 	if err != nil {
@@ -1248,6 +1274,7 @@ func liveCodexLimitsPayloadFor(ctx context.Context, opts options) (codexLimitsPa
 		cleanup()
 		return codexLimitsPayload{}, nil, err
 	}
+	result = sanitizeCodexProbeResult(result)
 	credentialsAvailable := live.Account.CredentialsAvailable
 	accountAlias := ""
 	if !opts.redact {

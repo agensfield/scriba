@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -366,7 +367,12 @@ func TestLiveLimitsPayloadCarriesResolvedIdentity(t *testing.T) {
 		if opts.ExpectedAccountID != "private-live-limits" || len(opts.AuthPaths) != 1 || opts.AuthPaths[0] != authPath {
 			t.Fatalf("fetch options=%+v", opts)
 		}
-		return remote.ProbeResult{ProviderID: "codex", AuthState: remote.AuthState{OK: true}, Lines: []model.MetricLine{{Type: "progress", Label: "5h limit"}}}, nil
+		return remote.ProbeResult{
+			ProviderID: "codex",
+			AuthState:  remote.AuthState{OK: true, Source: "/tmp/cold-auth.json", Error: "/home/arda/private-refresh-error"},
+			Provenance: []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", Error: "/tmp/cold-provenance-error"}},
+			Lines:      []model.MetricLine{{Type: "progress", Label: "5h limit", Provenance: []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", Error: "/tmp/cold-line-error"}}}},
+		}, nil
 	}
 	t.Cleanup(func() { fetchCodexLimits = oldFetch })
 	payload, cleanup, err := liveCodexLimitsPayloadFor(context.Background(), options{config: configPath})
@@ -376,6 +382,86 @@ func TestLiveLimitsPayloadCarriesResolvedIdentity(t *testing.T) {
 	cleanup()
 	if payload.AccountID != store.AccountID("codex", "private-live-limits") || payload.CredentialsAvailable == nil || !*payload.CredentialsAvailable {
 		t.Fatalf("live payload=%+v", payload)
+	}
+	auth, ok := payload.AuthState.(remote.AuthState)
+	if !ok || auth.Source != "" || auth.Error != "" || len(payload.Provenance) != 1 || payload.Provenance[0].Error != "" || payload.Lines[0].Provenance[0].Error != "" {
+		t.Fatalf("live payload retained private diagnostics: auth=%+v provenance=%+v lines=%+v", payload.AuthState, payload.Provenance, payload.Lines)
+	}
+}
+
+func TestLiveCodexCommandsSanitizePrivateAuthDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	configPath := filepath.Join(dir, "config.json")
+	statePath := filepath.Join(dir, "missing.sqlite")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"token-live-private","account_id":"private-live-private"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":3,"codexAuthPaths":["`+authPath+`"],"server":{"statePath":"`+statePath+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	privateAuth := remote.AuthState{OK: true, Source: "/tmp/cold-auth.json", Error: "/home/arda/private-refresh-error"}
+	oldFetch := fetchCodexLimits
+	fetchCodexLimits = func(_ context.Context, _ *http.Client, _ remotecodex.FetchOptions) (remote.ProbeResult, error) {
+		return remote.ProbeResult{
+			ProviderID: "codex",
+			AuthState:  privateAuth,
+			Provenance: []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", Error: "/tmp/cold-provenance-error"}},
+			Lines:      []model.MetricLine{{Type: "progress", Label: "5h limit", Provenance: []model.SourceProvenance{{Kind: "provider-api", ProviderID: "codex", Error: "/tmp/cold-line-error"}}}},
+		}, nil
+	}
+	oldPlan := planCodexReset
+	planCodexReset = func(_ context.Context, _ *http.Client, _ remotecodex.FetchOptions, _ string) (remotecodex.RateLimitResetPlan, error) {
+		return remotecodex.RateLimitResetPlan{ProviderID: "codex", Source: "chatgpt-codex-backend", Mode: "live", AvailableCount: 1, Credit: remote.ResetCredit{ID: "credit-private", Title: "reset"}, AuthState: privateAuth}, nil
+	}
+	t.Cleanup(func() { fetchCodexLimits = oldFetch; planCodexReset = oldPlan })
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "limits", args: []string{"codex", "limits"}},
+		{name: "grants", args: []string{"codex", "reset-grants"}},
+		{name: "reset", args: []string{"codex", "reset", "--dry-run"}},
+	} {
+		for _, redact := range []bool{false, true} {
+			t.Run(test.name+"/redact="+fmt.Sprint(redact), func(t *testing.T) {
+				var runErr error
+				stdout := captureCLIStdout(t, func() {
+					args := append([]string{}, test.args...)
+					args = append(args, "--json", "--config", configPath)
+					if redact {
+						args = append(args, "--redact")
+					}
+					runErr = dispatch(args)
+				})
+				if runErr != nil {
+					t.Fatal(runErr)
+				}
+				assertPublicAuthState(t, stdout)
+			})
+		}
+	}
+}
+
+func assertPublicAuthState(t *testing.T, stdout string) {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("decode output=%q: %v", stdout, err)
+	}
+	auth, ok := payload["authState"].(map[string]any)
+	if !ok {
+		t.Fatalf("authState=%#v output=%s", payload["authState"], stdout)
+	}
+	for _, key := range []string{"source", "error"} {
+		if value, ok := auth[key].(string); ok && value != "" {
+			t.Fatalf("authState.%s retained private diagnostics: %q", key, value)
+		}
+	}
+	for _, private := range []string{"/tmp/cold-auth.json", "/home/arda/private-refresh-error", "/tmp/cold-provenance-error", "/tmp/cold-line-error"} {
+		if strings.Contains(stdout, private) {
+			t.Fatalf("output retained private path %q: %s", private, stdout)
+		}
 	}
 }
 

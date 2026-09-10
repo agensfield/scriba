@@ -253,10 +253,10 @@ func TestCodexGroupHelpListsResetGrants(t *testing.T) {
 }
 
 func TestCodexResetFlagsParseSafely(t *testing.T) {
-	opts, rest, err := parse([]string{"--credit", "credit-1", "--dry-run", "--json"}, flagSpec{
-		Use: "scriba codex reset [flags]", Flags: []string{"json", "credit", "dry-run", "yes"},
+	opts, rest, err := parse([]string{"--credit", "credit-1", "--dry-run", "--json", "--redact"}, flagSpec{
+		Use: "scriba codex reset [flags]", Flags: []string{"json", "credit", "dry-run", "yes", "redact"},
 	})
-	if err != nil || len(rest) != 0 || opts.credit != "credit-1" || !opts.dryRun || !opts.jsonOut || opts.yes {
+	if err != nil || len(rest) != 0 || opts.credit != "credit-1" || !opts.dryRun || !opts.jsonOut || !opts.redact || opts.yes {
 		t.Fatalf("opts=%+v rest=%v err=%v", opts, rest, err)
 	}
 }
