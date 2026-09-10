@@ -102,6 +102,7 @@ func (r *Resolver) SetAlias(ctx context.Context, selector, alias string) error {
 	if !r.writable {
 		return ErrRegistryUnavailable
 	}
+	checkedAt := r.clock().UTC()
 	snapshot, err := r.snapshot(ctx)
 	if err != nil {
 		return err
@@ -119,7 +120,7 @@ func (r *Resolver) SetAlias(ctx context.Context, selector, alias string) error {
 		}
 		spec := store.SourceSpec{Ref: source.Ref, Enabled: true, Priority: source.Priority}
 		observed := resetwatch.Account{Ref: account.Ref, Email: account.Email, Plan: account.Plan}
-		return r.registry.RegisterAuthSourceAccountAlias(ctx, spec, observed, alias, r.clock().UTC())
+		return r.registry.RegisterAuthSourceAccountAlias(ctx, spec, observed, alias, checkedAt)
 	}
 	return r.registry.SetAccountAlias(ctx, account.ID, alias)
 }

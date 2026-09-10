@@ -34,6 +34,27 @@ type observedSource struct {
 	account resetwatch.Account
 }
 
+type aliasRaceRegistry struct {
+	*store.Store
+	source          Source
+	newerIdentity   time.Time
+	snapshotStarted bool
+	registeredAt    time.Time
+}
+
+func (r *aliasRaceRegistry) ListAccounts(ctx context.Context) ([]store.Account, error) {
+	r.snapshotStarted = true
+	return r.Store.ListAccounts(ctx)
+}
+
+func (r *aliasRaceRegistry) RegisterAuthSourceAccountAlias(ctx context.Context, spec store.SourceSpec, account resetwatch.Account, alias string, checkedAt time.Time) error {
+	r.registeredAt = checkedAt
+	if err := r.Store.ObserveAuthSource(ctx, r.source.Ref, resetwatch.Account{Ref: "private-b"}, r.newerIdentity); err != nil {
+		return err
+	}
+	return r.Store.RegisterAuthSourceAccountAlias(ctx, spec, account, alias, checkedAt)
+}
+
 func (f *fakeRegistry) SyncAuthSources(context.Context, []store.SourceSpec) error {
 	f.syncs++
 	return nil
@@ -373,5 +394,45 @@ func TestResolverAliasCurrentRegistersColdIdentityWithRealStore(t *testing.T) {
 	}
 	if bound[unrelated.Ref] != "private-a" || bound[current.Ref] != "private-b" {
 		t.Fatalf("source bindings=%+v", bound)
+	}
+}
+
+func TestResolverColdAliasSnapshotCannotRewindConcurrentIdentityBinding(t *testing.T) {
+	dir := t.TempDir()
+	source := writeResolverAuth(t, dir, "racing-current", "private-a")
+	st, err := store.Open(filepath.Join(dir, "store.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.SyncAuthSources(context.Background(), []store.SourceSpec{{Ref: source.Ref, Enabled: true, Priority: source.Priority}}); err != nil {
+		t.Fatal(err)
+	}
+	beforeSnapshot := time.Date(2026, 9, 10, 20, 0, 0, 0, time.UTC)
+	concurrentBind := beforeSnapshot.Add(time.Minute)
+	afterSnapshot := concurrentBind.Add(time.Minute)
+	registry := &aliasRaceRegistry{Store: st, source: source, newerIdentity: concurrentBind}
+	resolver := New(registry, []Source{source})
+	resolver.clock = func() time.Time {
+		if registry.snapshotStarted {
+			return afterSnapshot
+		}
+		return beforeSnapshot
+	}
+
+	err = resolver.SetAlias(context.Background(), "current", "personal")
+	if !errors.Is(err, store.ErrSourceIdentityStale) {
+		t.Fatalf("alias race err=%v", err)
+	}
+	if !registry.registeredAt.Equal(beforeSnapshot) {
+		t.Fatalf("registration check=%s want snapshot start=%s", registry.registeredAt, beforeSnapshot)
+	}
+	health, err := st.ListSourceHealth(context.Background())
+	if err != nil || len(health) != 1 || health[0].AccountRef != "private-b" {
+		t.Fatalf("source health=%+v err=%v", health, err)
+	}
+	accounts, err := st.ListAccounts(context.Background())
+	if err != nil || len(accounts) != 1 || accounts[0].Ref != "private-b" || accounts[0].Alias != "" {
+		t.Fatalf("accounts=%+v err=%v", accounts, err)
 	}
 }
