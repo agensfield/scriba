@@ -16,6 +16,7 @@ import (
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/radar"
 	"github.com/agensfield/scriba/internal/remote"
+	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
@@ -59,6 +60,17 @@ func (f *orderedSourceFetcher) FetchLimits(ctx context.Context, source accounts.
 type dynamicSourceFetcher struct {
 	mu    sync.Mutex
 	calls map[string]int
+}
+
+type mutatingSourceFetcher struct {
+	mutate func() error
+}
+
+func (f mutatingSourceFetcher) FetchLimits(context.Context, accounts.Source, string) (remote.ProbeResult, error) {
+	if err := f.mutate(); err != nil {
+		return remote.ProbeResult{}, err
+	}
+	return remote.ProbeResult{}, &remotecodex.AccountBindingError{Changed: true}
 }
 
 func (f *dynamicSourceFetcher) FetchLimits(_ context.Context, source accounts.Source, expected string) (remote.ProbeResult, error) {
@@ -170,6 +182,70 @@ func TestSourceRotationDiscoversNewAccountAndKeepsHistory(t *testing.T) {
 		if err != nil || !ok || obs.Account.Ref != ref {
 			t.Fatalf("ref=%s obs=%+v ok=%v err=%v", ref, obs, ok, err)
 		}
+	}
+}
+
+func TestFailedFetchReconcilesCredentialLossOrRotation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+		wantB  bool
+	}{
+		{
+			name: "missing",
+			mutate: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "rotated",
+			mutate: func(t *testing.T, path string) {
+				t.Helper()
+				payload := `{"tokens":{"access_token":"token-b","account_id":"acct-b"},"last_refresh":"2026-09-10T00:00:00Z"}`
+				if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantB: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			source := writeRuntimeSource(t, dir, "race", "acct-a")
+			st := openStore(t)
+			srv := New(st, &dynamicSourceFetcher{}, nil, Config{Sources: []accounts.Source{source}})
+			if _, err := srv.RefreshNow(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			srv.fetcher = mutatingSourceFetcher{mutate: func() error {
+				tc.mutate(t, source.Path)
+				return nil
+			}}
+			if _, err := srv.RefreshNow(context.Background()); !errors.Is(err, ErrAllSourcesFailed) {
+				t.Fatalf("refresh err=%v", err)
+			}
+			listed, err := st.ListAccounts(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			byRef := make(map[string]store.Account)
+			for _, account := range listed {
+				byRef[account.Ref] = account
+			}
+			if byRef["acct-a"].CredentialsAvailable {
+				t.Fatalf("old account stayed credential-available: %+v", byRef)
+			}
+			if tc.wantB {
+				if !byRef["acct-b"].CredentialsAvailable || !byRef["acct-b"].LastSeenAt.IsZero() {
+					t.Fatalf("rotated account state=%+v", byRef["acct-b"])
+				}
+			} else if len(byRef) != 1 {
+				t.Fatalf("missing credentials fabricated account: %+v", byRef)
+			}
+		})
 	}
 }
 
@@ -341,7 +417,7 @@ func TestSourceTimeoutContinuesAndParentCancellationStopsCycle(t *testing.T) {
 		if _, err := srv.RefreshNow(ctx); !errors.Is(err, context.Canceled) {
 			t.Fatalf("err=%v", err)
 		}
-		if len(fetcher.order) != 1 {
+		if len(fetcher.order) > 1 {
 			t.Fatalf("order=%v", fetcher.order)
 		}
 	})

@@ -51,6 +51,7 @@ type Store interface {
 	ListAccounts(context.Context) ([]store.Account, error)
 	ResolveAccount(context.Context, string) (store.Account, bool, error)
 	SetAccountAlias(context.Context, string, string) error
+	RegisterAuthSourceAccountAlias(context.Context, store.SourceSpec, resetwatch.Account, string, time.Time) error
 	ListSourceHealth(context.Context) ([]store.SourceHealth, error)
 	RecordSourcePollAttempt(context.Context, string, time.Time) error
 	RecordSourcePollSuccess(context.Context, string, time.Time, time.Time) error

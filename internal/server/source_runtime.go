@@ -10,6 +10,7 @@ import (
 	"github.com/agensfield/scriba/internal/model"
 	"github.com/agensfield/scriba/internal/remote"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
+	"github.com/agensfield/scriba/internal/resetwatch"
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
@@ -153,6 +154,18 @@ func (s *Server) refreshSources(ctx context.Context) (RefreshResult, error) {
 		completed := time.Now().UTC()
 		bookkeepingCtx, bookkeepingCancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		if pollErr != nil {
+			if stage == "fetch" || stage == "auth" {
+				postFailure := accounts.Inspect(source)
+				account := postFailure.Account
+				if !postFailure.CredentialsAvailable {
+					account = resetwatch.Account{}
+				}
+				if reconcileErr := s.store.ObserveAuthSource(bookkeepingCtx, source.Ref, account, completed); reconcileErr != nil {
+					_ = s.store.AbortSourcePollAttempt(bookkeepingCtx, source.Ref, attempt)
+					bookkeepingCancel()
+					return result, fmt.Errorf("reconcile auth source after failed poll: %w", reconcileErr)
+				}
+			}
 			if ctx.Err() != nil {
 				_ = s.store.AbortSourcePollAttempt(bookkeepingCtx, source.Ref, attempt)
 				bookkeepingCancel()
