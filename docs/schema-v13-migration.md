@@ -1,7 +1,7 @@
 # Schema v13 Account Migration
 
 Status: copied-production migration and old-binary rollback drill passed;
-production activation pending.
+schema 13 activated on devbox with v0.4.0 on 2026-09-10.
 
 Schema v13 makes provider accounts the durable identity and records credential
 sources separately. It adds optional account aliases and first-seen metadata,
@@ -72,15 +72,32 @@ intentional business-metadata change was the disposable alias. An initial
 attempt with config schema 3 was rejected before database access; the final
 proof used schema 2 and reached the database compatibility guard.
 
-### Live activation remains pending
+### Devbox activation
 
-These copy-only drills do not constitute a live deployment. Before activation,
-take an authoritative stopped-service backup, retain
-the old binary/configuration, and verify the released candidate. After
-activation, verify both retained accounts, current credential bindings,
-account-specific views, aliases, queues, and normal resident polling. An older
-binary must use the pre-migration backup; do not downgrade a v13 database in
-place.
+The authoritative stopped-service schema-12 backup was created at
+`2026-09-10T21:55:38.199340750Z`:
+`scriba-server-backup-20260910T215538.199340750Z-c01ccc09d6b8.sqlite`,
+68,202,496 bytes, SHA-256
+`646ac84aca19a882adf7a7576a7d4588523f37e30b9a5d9eb76f54ae44a3c869`.
+The final copied-production test preserved every compared projection from that
+backup: 27,408 observations, 83,230 observed windows, 65 policy events/replay
+rows, 132 delivered outbox rows, 201 Telegram updates, and both accounts.
+
+The verified public v0.4.0 artifact at `5dc5640` was activated at
+`2026-09-10T21:56:11Z`. The live database opened at schema 13 with integrity OK
+and zero foreign-key violations. Startup polling added one correctly owned
+Antari observation without changing the 65 policy events or 132 delivered
+outbox rows. Personal history remained readable without credentials. Both
+accounts were explicitly named after verifying their identities; source auth
+and the byte-identical v1 configuration were not replaced.
+
+The old binary, original configuration, authoritative backup, and private
+deployment receipts are preserved under
+`~/.local/state/scriba/deployments/release-v0.4.0.o1RYlb`. An older binary must
+use that pre-migration backup; do not downgrade a v13 database in place.
+Stop the service and preserve the failed database and all SQLite sidecars
+before restoring. See [release-v0.4.0.md](release-v0.4.0.md) for the complete
+post-cutover verification receipt.
 
 Raw databases remain owner-only devbox artifacts under Scriba's state directory;
 they do not belong in the repository or Vault.

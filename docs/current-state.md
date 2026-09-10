@@ -9,19 +9,16 @@ and is outside the active roadmap.
 
 ## Release status
 
-The account-centered 0.4.0 implementation has passed focused gates across its
-reviewed component lanes and is being assembled as a release candidate, not yet
-a published or deployed release. It still requires final exact-head integration
-gates, version/release work, schema-13 deployment proof, and the project handoff.
+`v0.4.0` is published and deployed on devbox at
+`5dc56405896be7582aac7b73489c038fa5c67d85`, using database schema 13.
+Exact-head CI, independent reviews, reproducible publication, checksums and
+attestations, public Linux Homebrew upgrade, stopped-service migration, and two
+normal post-cutover polls passed. Both accounts and their history are intact;
+`personal` is readable without credentials and `antari` is current. Full
+evidence is preserved in [`release-v0.4.0.md`](release-v0.4.0.md) and
+[`schema-v13-migration.md`](schema-v13-migration.md).
 
-The latest confirmed published and deployed release remains v0.3.4 at
-`2b8fcd4`, using database schema 12 and the older profile-based product. Its
-evidence is preserved in [`release-v0.3.4.md`](release-v0.3.4.md). Running the
-0.4 candidate against existing state performs the separately rehearsed schema
-12-to-13 migration; documentation does not imply that cutover has happened on
-any live host.
-
-## Candidate 0.4 product
+## Current product
 
 ### Accounts and auth sources
 
@@ -113,16 +110,16 @@ any live host.
 
 ## Evidence boundary
 
-Focused account store, resolver/runtime, CLI, Telegram, transport, migration,
-and pricing gates have passed in their implementation lanes, with independent
-review follow-ups applied. That is implementation evidence, not release or
-deployment proof. The release coordinator owns the final combined exact-head
-gates and will append the authoritative 0.4.0 release and live migration
-receipts if shipment occurs.
+The release receipt distinguishes synthetic tests, copied-production drills,
+public artifact verification, and actual devbox activation. Linux Homebrew
+installation was tested; macOS Go/Swift and cross-built archives passed CI, but
+no macOS Homebrew installation test is claimed. No live reset grant was
+redeemed during verification. The old binary/config and authoritative schema-12
+backup remain available for restore-only rollback.
 
 Older release, schema, and control-plane documents remain immutable historical
 evidence. Their profile terminology describes the product that existed at that
 time and is not current usage guidance. The
 [`control-plane-roadmap.md`](control-plane-roadmap.md) is likewise a historical
 program record; use this document, [`cli.md`](cli.md), and
-[`config.md`](config.md) for the candidate product.
+[`config.md`](config.md) for current usage.
