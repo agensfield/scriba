@@ -14,6 +14,7 @@ import (
 
 	"github.com/dustin/go-humanize"
 
+	accountresolver "github.com/agensfield/scriba/internal/accounts"
 	"github.com/agensfield/scriba/internal/buildinfo"
 	"github.com/agensfield/scriba/internal/config"
 	"github.com/agensfield/scriba/internal/delivery"
@@ -43,8 +44,8 @@ func runServer(command string, opts options) error {
 		return runServerStatus(cfg, opts)
 	case "health":
 		return runServerHealth(cfg, opts)
-	case "profiles":
-		return runServerProfiles(cfg, opts)
+	case "accounts":
+		return runServerAccounts(cfg, opts)
 	case "stats":
 		return runServerStats(cfg, opts)
 	case "refresh":
@@ -79,23 +80,8 @@ func runServerBackup(cfg config.Config, opts options) error {
 	return output(opts, result, human)
 }
 
-func serverProfiles(cfg config.Config) ([]servercore.Profile, []store.ProfileSpec) {
-	runtime := make([]servercore.Profile, 0, len(cfg.Profiles))
-	specs := make([]store.ProfileSpec, 0, len(cfg.Profiles))
-	for _, profile := range cfg.Profiles {
-		isDefault := profile.ID == cfg.DefaultProfileID
-		specs = append(specs, store.ProfileSpec{ProfileRef: profile.ID, ProviderID: "codex", Label: profile.Label, Enabled: profile.Enabled, IsDefault: isDefault})
-		if !profile.Enabled {
-			continue
-		}
-		runtime = append(runtime, servercore.Profile{Ref: profile.ID, Label: profile.Label, AuthPaths: append([]string(nil), profile.CodexAuthPaths...), Default: isDefault})
-	}
-	return runtime, specs
-}
-
-func runtimeServerProfiles(cfg config.Config) []servercore.Profile {
-	profiles, _ := serverProfiles(cfg)
-	return profiles
+func runtimeServerSources(cfg config.Config) []accountresolver.Source {
+	return accountresolver.Sources(cfg)
 }
 
 func runServerRun(cfg config.Config, opts options) error {
@@ -106,10 +92,6 @@ func runServerRun(cfg config.Config, opts options) error {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	profiles, specs := serverProfiles(cfg)
-	if err := st.SyncProfiles(ctx, specs); err != nil {
-		return fmt.Errorf("sync server profiles: %w", err)
-	}
 	heartbeat, err := shouldSendStartupHeartbeat(ctx, st, cfg.Server)
 	if err != nil {
 		return err
@@ -119,9 +101,8 @@ func runServerRun(cfg config.Config, opts options) error {
 		return err
 	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
-		Profiles:                 profiles,
+		Sources:                  runtimeServerSources(cfg),
 		NotificationTargets:      notificationTargets,
-		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		StartupHeartbeat:         heartbeat,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
@@ -238,8 +219,7 @@ func runServerStatus(cfg config.Config, opts options) error {
 		return err
 	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
-		Profiles:                 runtimeServerProfiles(cfg),
-		AccountLabel:             cfg.Server.AccountLabel,
+		Sources:                  runtimeServerSources(cfg),
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
 	})
@@ -267,8 +247,7 @@ func runServerHealth(cfg config.Config, opts options) error {
 	}
 	defer func() { _ = st.Close() }()
 	srv := servercore.New(st, nil, nil, servercore.Config{
-		Profiles:                 runtimeServerProfiles(cfg),
-		AccountLabel:             cfg.Server.AccountLabel,
+		Sources:                  runtimeServerSources(cfg),
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
 	})
@@ -279,22 +258,8 @@ func runServerHealth(cfg config.Config, opts options) error {
 	return output(opts, healthPayload(health), renderServerHealth(health))
 }
 
-func runServerProfiles(cfg config.Config, opts options) error {
-	st, err := store.OpenReadOnly(resolveServerStatePath(cfg.Server.StatePath))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = st.Close() }()
-	srv := servercore.New(st, nil, nil, servercore.Config{
-		Profiles: runtimeServerProfiles(cfg), AccountLabel: cfg.Server.AccountLabel, JokeTone: cfg.Telegram.ResetJokeTone,
-		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
-	})
-	health, err := srv.Health(context.Background())
-	if err != nil {
-		return err
-	}
-	payload := profileHealthPayload(health)
-	return output(opts, payload, renderServerProfiles(payload))
+func runServerAccounts(_ config.Config, opts options) error {
+	return runAccountsList(opts)
 }
 
 func runServerStats(cfg config.Config, opts options) error {
@@ -304,8 +269,7 @@ func runServerStats(cfg config.Config, opts options) error {
 	}
 	defer func() { _ = st.Close() }()
 	srv := servercore.New(st, nil, nil, servercore.Config{
-		Profiles:                 runtimeServerProfiles(cfg),
-		AccountLabel:             cfg.Server.AccountLabel,
+		Sources:                  runtimeServerSources(cfg),
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
 	})
@@ -324,18 +288,13 @@ func runServerRefresh(cfg config.Config, opts options) error {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	profiles, specs := serverProfiles(cfg)
-	if err := st.SyncProfiles(context.Background(), specs); err != nil {
-		return fmt.Errorf("sync server profiles: %w", err)
-	}
 	_, notificationTargets, _, err := deliveryRuntime(cfg)
 	if err != nil {
 		return err
 	}
 	srv := servercore.New(st, nil, nil, servercore.Config{
-		Profiles:                 profiles,
+		Sources:                  runtimeServerSources(cfg),
 		NotificationTargets:      notificationTargets,
-		AccountLabel:             cfg.Server.AccountLabel,
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
 	})
@@ -402,8 +361,7 @@ func runServerPrune(cfg config.Config, opts options) error {
 	}
 	defer func() { _ = st.Close() }()
 	srv := servercore.New(st, nil, nil, servercore.Config{
-		Profiles:                 runtimeServerProfiles(cfg),
-		AccountLabel:             cfg.Server.AccountLabel,
+		Sources:                  runtimeServerSources(cfg),
 		JokeTone:                 cfg.Telegram.ResetJokeTone,
 		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
 	})
@@ -505,11 +463,10 @@ func serverRefreshPayload(result servercore.PollResult) map[string]any {
 		})
 	}
 	return map[string]any{
-		"profileId":     result.Profile.Ref,
-		"profileLabel":  result.Profile.Label,
+		"accountId":     result.Account.ID,
+		"accountName":   result.Account.DisplayName,
 		"baseline":      result.Baseline,
 		"inserted":      result.Inserted,
-		"account":       result.Observation.Account,
 		"windows":       result.Observation.Windows,
 		"events":        events,
 		"warnings":      warnings,
@@ -549,45 +506,9 @@ func healthPayload(health servercore.Health) map[string]any {
 		"queueReason":              health.QueueReason,
 		"outbox":                   health.Outbox,
 		"telegramInbox":            health.TelegramInbox,
-		"profiles":                 profileHealthPayload(health),
+		"sources":                  health.Sources,
+		"accounts":                 health.Accounts,
 	}
-}
-
-type profilesHealthOutput struct {
-	SchemaVersion    string                `json:"schemaVersion"`
-	DefaultProfileID string                `json:"defaultProfileId"`
-	Profiles         []profileHealthOutput `json:"profiles"`
-}
-
-type profileHealthOutput struct {
-	ProfileID           string                  `json:"profileId"`
-	Label               string                  `json:"label"`
-	IsDefault           bool                    `json:"isDefault"`
-	Status              servercore.HealthStatus `json:"status"`
-	LastSuccessAt       *time.Time              `json:"lastSuccessAt,omitempty"`
-	LastAttemptAt       *time.Time              `json:"lastAttemptAt,omitempty"`
-	LastFailureAt       *time.Time              `json:"lastFailureAt,omitempty"`
-	FailureKind         string                  `json:"failureKind,omitempty"`
-	LastErrorCode       string                  `json:"lastErrorCode,omitempty"`
-	ConsecutiveFailures int                     `json:"consecutiveFailures"`
-	NextPollEstimateAt  *time.Time              `json:"nextPollEstimateAt,omitempty"`
-	IsStale             bool                    `json:"isStale"`
-}
-
-func profileHealthPayload(health servercore.Health) profilesHealthOutput {
-	payload := profilesHealthOutput{SchemaVersion: "scriba.profiles.v1", Profiles: make([]profileHealthOutput, 0, len(health.Profiles))}
-	for _, profile := range health.Profiles {
-		if profile.IsDefault {
-			payload.DefaultProfileID = profile.Profile.Ref
-		}
-		payload.Profiles = append(payload.Profiles, profileHealthOutput{
-			ProfileID: profile.Profile.Ref, Label: profile.Profile.Label, IsDefault: profile.IsDefault, Status: profile.Status,
-			LastSuccessAt: profile.LastSuccessAt, LastAttemptAt: profile.LastAttemptAt, LastFailureAt: profile.LastFailureAt,
-			FailureKind: profile.FailureKind, LastErrorCode: profile.LastErrorCode, ConsecutiveFailures: profile.ConsecutiveFailures,
-			NextPollEstimateAt: profile.NextPollEstimateAt, IsStale: profile.IsStale,
-		})
-	}
-	return payload
 }
 
 func renderServerStats(stats servercore.Stats, environment string, telegramEnabled bool) string {
@@ -603,7 +524,8 @@ func renderServerStats(stats servercore.Stats, environment string, telegramEnabl
 	})
 	b.WriteString("\nHealth\n")
 	writeHealthRows(&b, stats.Health)
-	writeProfileHealthRows(&b, stats.Health.Profiles)
+	writeSourceHealthRows(&b, stats.Health.Sources)
+	writeAccountHealthRows(&b, stats.Health.Accounts)
 	b.WriteString("\nOutbox\n")
 	writeQueueRows(&b, stats.Store.Outbox)
 	b.WriteString("\nTelegram inbox\n")
@@ -677,23 +599,8 @@ func renderServerHealth(health servercore.Health) string {
 	var b strings.Builder
 	b.WriteString("Scriba health\n")
 	writeHealthRows(&b, health)
-	writeProfileHealthRows(&b, health.Profiles)
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func renderServerProfiles(payload profilesHealthOutput) string {
-	var b strings.Builder
-	b.WriteString("Scriba profiles\n")
-	profiles := make([]servercore.ProfileHealth, 0, len(payload.Profiles))
-	for _, profile := range payload.Profiles {
-		profiles = append(profiles, servercore.ProfileHealth{
-			Profile: servercore.ProfileIdentity{Ref: profile.ProfileID, Label: profile.Label}, IsDefault: profile.IsDefault,
-			Status: profile.Status, LastSuccessAt: profile.LastSuccessAt, LastAttemptAt: profile.LastAttemptAt,
-			LastFailureAt: profile.LastFailureAt, FailureKind: profile.FailureKind, LastErrorCode: profile.LastErrorCode,
-			ConsecutiveFailures: profile.ConsecutiveFailures, NextPollEstimateAt: profile.NextPollEstimateAt, IsStale: profile.IsStale,
-		})
-	}
-	writeProfileRows(&b, profiles)
+	writeSourceHealthRows(&b, health.Sources)
+	writeAccountHealthRows(&b, health.Accounts)
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -705,11 +612,15 @@ func renderServerRefresh(result servercore.PollResult) string {
 	if !obs.ObservedAt.IsZero() {
 		fmt.Fprintf(&b, "%s\n", cliMuted("observed "+formatCLIStatsTime(obs.ObservedAt)))
 	}
-	if result.Profile.Ref != "" {
+	if result.Account.ID != "" {
 		b.WriteString("\n")
-		b.WriteString(cliBold("Profile"))
+		b.WriteString(cliBold("Account"))
 		b.WriteString("\n")
-		fmt.Fprintf(&b, "%s · %s\n", result.Profile.Ref, result.Profile.Label)
+		name := result.Account.DisplayName
+		if name == "" {
+			name = result.Account.ID
+		}
+		fmt.Fprintf(&b, "%s · %s\n", name, result.Account.ID)
 	}
 	if obs.Account.Email != "" || obs.Account.Plan != "" || obs.Account.Label != "" {
 		b.WriteString("\n")
@@ -877,27 +788,35 @@ func writeHealthRows(b *strings.Builder, health servercore.Health) {
 	writeRows(b, rows)
 }
 
-func writeProfileHealthRows(b *strings.Builder, profiles []servercore.ProfileHealth) {
-	if len(profiles) == 0 {
+func writeSourceHealthRows(b *strings.Builder, sources []servercore.SourceHealth) {
+	if len(sources) == 0 {
 		return
 	}
-	b.WriteString("\nProfiles\n")
-	writeProfileRows(b, profiles)
-}
-
-func writeProfileRows(b *strings.Builder, profiles []servercore.ProfileHealth) {
-	for _, profile := range profiles {
-		name := profile.Profile.Ref
-		if profile.IsDefault {
-			name = truncateCLI(name, 11) + " *"
-		} else {
-			name = truncateCLI(name, 13)
+	b.WriteString("\nSources\n")
+	for _, source := range sources {
+		name := truncateCLI(source.Source.Ref, 13)
+		fmt.Fprintf(b, "%-13s %s · failures %d", name, source.Status, source.ConsecutiveFailures)
+		if source.Account != nil && source.Account.ID != "" {
+			fmt.Fprintf(b, " · %s", source.Account.ID)
 		}
-		fmt.Fprintf(b, "%-13s %s · %s · failures %d", name, profile.Profile.Label, profile.Status, profile.ConsecutiveFailures)
-		if profile.FailureKind != "" {
-			fmt.Fprintf(b, " · %s/%s", profile.FailureKind, profile.LastErrorCode)
+		if source.FailureKind != "" {
+			fmt.Fprintf(b, " · %s/%s", source.FailureKind, source.LastErrorCode)
 		}
 		b.WriteString("\n")
+	}
+}
+
+func writeAccountHealthRows(b *strings.Builder, accounts []servercore.AccountHealth) {
+	if len(accounts) == 0 {
+		return
+	}
+	b.WriteString("\nAccounts\n")
+	for _, account := range accounts {
+		name := account.Account.DisplayName()
+		if name == "" {
+			name = account.Account.ID
+		}
+		fmt.Fprintf(b, "%-13s %s · %s\n", truncateCLI(name, 13), account.Account.ID, account.Status)
 	}
 }
 

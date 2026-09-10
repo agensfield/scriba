@@ -14,6 +14,7 @@ import (
 	"github.com/agensfield/scriba/internal/model"
 	remotecodex "github.com/agensfield/scriba/internal/remote/codex"
 	"github.com/agensfield/scriba/internal/resetwatch"
+	servercore "github.com/agensfield/scriba/internal/server"
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
@@ -87,7 +88,7 @@ func openAccountRegistry(opts options) (*accountresolver.Resolver, *store.Store,
 	return accountresolver.New(st, accountresolver.Sources(cfg)), st, cfg, nil
 }
 
-func openWritableAccountRegistry(opts options) (*accountresolver.Resolver, *store.Store, config.Config, error) {
+func openAccountServer(opts options, writable bool) (*servercore.Server, *store.Store, config.Config, error) {
 	cfg, err := load(opts)
 	if err != nil {
 		return nil, nil, cfg, err
@@ -95,20 +96,30 @@ func openWritableAccountRegistry(opts options) (*accountresolver.Resolver, *stor
 	if opts.statePath != "" {
 		cfg.Server.StatePath = opts.statePath
 	}
-	st, err := store.Open(resolveServerStatePath(cfg.Server.StatePath))
+	var st *store.Store
+	if writable {
+		st, err = store.Open(resolveServerStatePath(cfg.Server.StatePath))
+	} else {
+		st, err = store.OpenReadOnly(resolveServerStatePath(cfg.Server.StatePath))
+	}
 	if err != nil {
 		return nil, nil, cfg, err
 	}
-	return accountresolver.New(st, accountresolver.Sources(cfg)), st, cfg, nil
+	srv := servercore.New(st, nil, nil, servercore.Config{
+		Sources:                  accountresolver.Sources(cfg),
+		JokeTone:                 cfg.Telegram.ResetJokeTone,
+		ObservationRetentionDays: cfg.Server.ObservationRetentionDays,
+	})
+	return srv, st, cfg, nil
 }
 
 func runAccountsList(opts options) error {
-	resolver, st, _, err := openAccountRegistry(opts)
+	srv, st, _, err := openAccountServer(opts, false)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	items, err := resolver.Accounts(context.Background())
+	items, err := srv.Accounts(context.Background())
 	if err != nil {
 		return err
 	}
@@ -120,23 +131,30 @@ func runAccountsList(opts options) error {
 }
 
 func runAccountsAlias(opts options, selector, alias string) error {
-	resolver, st, _, err := openWritableAccountRegistry(opts)
+	srv, st, _, err := openAccountServer(opts, true)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	account, err := resolver.Resolve(context.Background(), selector)
+	alias = strings.TrimSpace(alias)
+	if err := srv.SetAccountAlias(context.Background(), selector, alias); err != nil {
+		return err
+	}
+	items, err := srv.Accounts(context.Background())
 	if err != nil {
 		return err
 	}
-	if err := resolver.SetAlias(context.Background(), account.ID, strings.TrimSpace(alias)); err != nil {
-		return err
+	var selected store.Account
+	for _, account := range items {
+		if account.Alias == alias {
+			selected = account
+			break
+		}
 	}
-	account, err = resolver.Resolve(context.Background(), account.ID)
-	if err != nil {
-		return err
+	if selected.ID == "" {
+		return accountresolver.ErrAccountNotFound
 	}
-	payload := accountsPayload{SchemaVersion: accountsSchemaVersion, Accounts: accountListItems([]store.Account{account}, time.Now().UTC())}
+	payload := accountsPayload{SchemaVersion: accountsSchemaVersion, Accounts: accountListItems([]store.Account{selected}, time.Now().UTC())}
 	if opts.redact {
 		payload = redactAccounts(payload)
 	}
@@ -313,7 +331,18 @@ func fastAccountStatusSnapshot(cfg config.Config, opts options) (model.StatusSna
 	} else if !errors.Is(openErr, os.ErrNotExist) {
 		return model.StatusSnapshot{}, openErr
 	}
-	provider := model.ProviderSnapshot{ProviderID: "codex", DisplayName: "Codex", State: "ok", Lines: payload.Lines, Provenance: payload.Provenance}
+	provider := model.ProviderSnapshot{
+		ProviderID:       "codex",
+		DisplayName:      "Codex",
+		State:            "ok",
+		AccountID:        payload.AccountID,
+		AccountAlias:     payload.AccountAlias,
+		ObservedAt:       payload.ObservedAt,
+		ObservedAgeMs:    payload.ObservedAgeMs,
+		ObservationStale: payload.ObservationStale,
+		Lines:            payload.Lines,
+		Provenance:       payload.Provenance,
+	}
 	found := false
 	for i := range snapshot.Providers {
 		if snapshot.Providers[i].ProviderID == "codex" {

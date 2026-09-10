@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	accountresolver "github.com/agensfield/scriba/internal/accounts"
 	"github.com/agensfield/scriba/internal/agentcontext"
 	"github.com/agensfield/scriba/internal/bench"
 	"github.com/agensfield/scriba/internal/buildinfo"
@@ -189,7 +190,7 @@ func dispatch(args []string) error {
 		if args[0] == "codex" && (args[1] == "reset-grants" || args[1] == "grants") {
 			opts, _, err := parse(args[2:], flagSpec{
 				Use:   "scriba codex reset-grants [flags]",
-				Flags: []string{"json", "config", "cache-dir", "redact", "account"},
+				Flags: []string{"json", "config", "cache-dir", "fast", "redact", "account"},
 			})
 			if err != nil {
 				return err
@@ -684,12 +685,12 @@ func runCodexLimits(opts options) error {
 }
 
 func runCodexActivity(opts options) error {
-	fetchOpts, cleanup, err := resolveLiveCodexOptions(context.Background(), opts)
+	srv, st, _, err := openAccountServer(opts, false)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
-	profile, err := remotecodex.FetchProfileWithOptions(context.Background(), nil, fetchOpts)
+	defer func() { _ = st.Close() }()
+	profile, err := srv.CodexActivityForAccount(context.Background(), opts.account)
 	if err != nil {
 		return err
 	}
@@ -698,8 +699,22 @@ func runCodexActivity(opts options) error {
 }
 
 func runCodexResetGrants(opts options) error {
+	if opts.fast {
+		payload, err := fastCodexLimitsPayload(context.Background(), opts)
+		if err != nil {
+			return err
+		}
+		return output(opts, resetGrantsPayload(payload), renderResetGrants(payload))
+	}
 	payload, cleanup, err := liveCodexLimitsPayloadFor(context.Background(), opts)
 	if err != nil {
+		if opts.account != "" && errors.Is(err, accountresolver.ErrCredentialsUnavailable) {
+			payload, fallbackErr := fastCodexLimitsPayload(context.Background(), opts)
+			if fallbackErr != nil {
+				return fallbackErr
+			}
+			return output(opts, resetGrantsPayload(payload), renderResetGrants(payload))
+		}
 		return err
 	}
 	defer cleanup()
@@ -1141,7 +1156,7 @@ func filterCodexLimitLines(lines []model.MetricLine) []model.MetricLine {
 }
 
 func resetGrantsPayload(payload codexLimitsPayload) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"schemaVersion": payload.SchemaVersion,
 		"providerId":    payload.ProviderID,
 		"source":        payload.Source,
@@ -1150,6 +1165,22 @@ func resetGrantsPayload(payload codexLimitsPayload) map[string]any {
 		"resetCredits":  payload.ResetCredits,
 		"summary":       resetGrantSummary(payload),
 	}
+	if payload.AccountID != "" {
+		result["accountId"] = payload.AccountID
+	}
+	if payload.AccountAlias != "" {
+		result["accountAlias"] = payload.AccountAlias
+	}
+	if payload.ObservedAt != "" {
+		result["observedAt"] = payload.ObservedAt
+	}
+	if payload.ObservedAgeMs != nil {
+		result["observedAgeMs"] = payload.ObservedAgeMs
+	}
+	if payload.ObservationStale {
+		result["observationStale"] = true
+	}
+	return result
 }
 
 func resetGrantSummary(payload codexLimitsPayload) map[string]any {
@@ -1798,7 +1829,7 @@ Live commands:
   limits           fetch current Codex windows from ChatGPT/Codex auth
   reset-grants     show available reset grants and their expirations
   reset            redeem the available reset grant expiring soonest
-  activity         show ChatGPT/Codex profile token activity
+  activity         show ChatGPT/Codex account token activity
   budget           derive quota pacing and exhaustion risk from live limits
 
 Common flags:
@@ -1872,7 +1903,7 @@ Commands:
   scriba server run
   scriba server status
   scriba server health
-  scriba server profiles
+  scriba server accounts
   scriba server stats
   scriba server refresh
   scriba server radar
@@ -1882,7 +1913,7 @@ Commands:
 Examples:
   scriba server run --env prod
   scriba server health --env prod
-  scriba server profiles --env prod --json
+  scriba server accounts --env prod --json
   scriba server refresh --env prod --json
   scriba server backup --env prod --retention 14 --json`
 	case "mcp":

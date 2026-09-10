@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -21,7 +20,6 @@ import (
 	"github.com/agensfield/scriba/internal/resetwatch"
 	servercore "github.com/agensfield/scriba/internal/server"
 	"github.com/agensfield/scriba/internal/server/store"
-	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestCodexLimitsFromSnapshotFiltersRemoteLimitLines(t *testing.T) {
@@ -80,58 +78,36 @@ func TestServerStatsRendersQueueObservability(t *testing.T) {
 	}
 }
 
-func TestServerHealthProfilesAreOrderedSafeAndRendered(t *testing.T) {
+func TestServerHealthAccountsAndSourcesAreSafeAndRendered(t *testing.T) {
 	now := time.Date(2026, 7, 13, 1, 0, 0, 0, time.UTC)
-	health := servercore.Health{Status: servercore.HealthDegraded, Profiles: []servercore.ProfileHealth{
-		{Profile: servercore.ProfileIdentity{Ref: "personal", Label: "Personal"}, IsDefault: true, Status: servercore.HealthOK, LastAttemptAt: &now, LastSuccessAt: &now},
-		{Profile: servercore.ProfileIdentity{Ref: "work", Label: "Work"}, Status: servercore.HealthDegraded, LastAttemptAt: &now, LastFailureAt: &now, FailureKind: "network", LastErrorCode: "timeout", ConsecutiveFailures: 2},
-	}}
-	payload := healthPayload(health)
-	profiles, ok := payload["profiles"].(profilesHealthOutput)
-	if !ok || profiles.SchemaVersion != "scriba.profiles.v1" || profiles.DefaultProfileID != "personal" || len(profiles.Profiles) != 2 || profiles.Profiles[0].ProfileID != "personal" || profiles.Profiles[1].LastErrorCode != "timeout" {
-		t.Fatalf("profiles=%#v", payload["profiles"])
+	health := servercore.Health{Status: servercore.HealthDegraded,
+		Sources: []servercore.SourceHealth{
+			{Source: servercore.SourceIdentity{Ref: "src-0123456789abcdef0123"}, Account: &servercore.AccountIdentity{ID: "acct-0123456789abcdef0123", DisplayName: "Personal"}, Status: servercore.HealthOK, LastAttemptAt: &now, LastSuccessAt: &now},
+			{Source: servercore.SourceIdentity{Ref: "src-fedcba9876543210fedc"}, Status: servercore.HealthDegraded, LastAttemptAt: &now, LastFailureAt: &now, FailureKind: "network", LastErrorCode: "timeout", ConsecutiveFailures: 2},
+		},
+		Accounts: []servercore.AccountHealth{
+			{Account: store.Account{ID: "acct-0123456789abcdef0123", Alias: "personal", Email: "personal@example.test"}, Status: servercore.HealthOK},
+		},
 	}
-	raw, err := json.Marshal(payload["profiles"])
+	payload := healthPayload(health)
+	sources, ok := payload["sources"].([]servercore.SourceHealth)
+	if !ok || len(sources) != 2 || sources[0].Source.Ref != "src-0123456789abcdef0123" || sources[1].LastErrorCode != "timeout" {
+		t.Fatalf("sources=%#v", payload["sources"])
+	}
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"accountRef", "auth", "token", "source", "/secret/"} {
+	for _, forbidden := range []string{"accountRef", "auth", "token", "/secret/"} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Fatalf("forbidden %q in %s", forbidden, raw)
 		}
 	}
-	var document, instance any
-	schemaRaw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "profiles.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(schemaRaw, &document); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(raw, &instance); err != nil {
-		t.Fatal(err)
-	}
-	compiler := jsonschema.NewCompiler()
-	const schemaURL = "https://agensfield.dev/scriba/schemas/profiles.schema.json"
-	if err := compiler.AddResource(schemaURL, document); err != nil {
-		t.Fatal(err)
-	}
-	schema, err := compiler.Compile(schemaURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := schema.Validate(instance); err != nil {
-		t.Fatalf("generated profile payload does not match public schema: %v\n%s", err, raw)
-	}
 	text := renderServerHealth(health)
-	for _, want := range []string{"Profiles", "personal *", "Personal · ok", "work", "network/timeout"} {
+	for _, want := range []string{"Sources", "src-012345", "network/timeout", "Accounts", "personal", "acct-0123456789abcdef0123"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q:\n%s", want, text)
 		}
-	}
-	longDefault := renderServerProfiles(profilesHealthOutput{Profiles: []profileHealthOutput{{ProfileID: "long-default-profile", Label: "Long", IsDefault: true}}})
-	if !strings.Contains(longDefault, "*") {
-		t.Fatalf("long default marker was truncated:\n%s", longDefault)
 	}
 }
 
@@ -224,6 +200,24 @@ func TestRenderResetGrantsShowsEachCreditExpiry(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("renderResetGrants() missing %q in:\n%s", want, text)
 		}
+	}
+}
+
+func TestResetGrantsPayloadCarriesAccountObservationMetadata(t *testing.T) {
+	age := int64(4200)
+	payload := resetGrantsPayload(codexLimitsPayload{
+		SchemaVersion:    model.SchemaVersion,
+		ProviderID:       "codex",
+		Source:           "status-cache",
+		Mode:             "fast",
+		AccountID:        "acct-0123456789abcdef0123",
+		AccountAlias:     "personal",
+		ObservedAt:       "2026-09-10T19:00:00Z",
+		ObservedAgeMs:    &age,
+		ObservationStale: true,
+	})
+	if payload["accountId"] != "acct-0123456789abcdef0123" || payload["accountAlias"] != "personal" || payload["observedAt"] != "2026-09-10T19:00:00Z" || payload["observedAgeMs"] != &age || payload["observationStale"] != true {
+		t.Fatalf("account metadata missing: %#v", payload)
 	}
 }
 
@@ -459,7 +453,7 @@ func TestRenderServerRefreshAvoidsTelegramMarkup(t *testing.T) {
 	expires := time.Date(2026, 7, 12, 1, 20, 0, 0, time.UTC)
 	count := 1
 	text := stripANSI(renderServerRefresh(servercore.PollResult{
-		Profile: servercore.ProfileIdentity{Ref: "work", Label: "Work"},
+		Account: servercore.AccountIdentity{ID: "acct-0123456789abcdef0123", DisplayName: "Work"},
 		Observation: resetwatch.Observation{
 			Account:    resetwatch.Account{Email: "arda@example.com", Plan: "pro"},
 			ObservedAt: time.Date(2026, 6, 29, 1, 20, 0, 0, time.UTC),
@@ -476,7 +470,7 @@ func TestRenderServerRefreshAvoidsTelegramMarkup(t *testing.T) {
 	}))
 	localExpiry := expires.Local().Format("2006-01-02 15:04 MST")
 
-	for _, want := range []string{"Codex limits", "Profile", "work · Work", "Weekly", "15% used", "Reset grants", localExpiry} {
+	for _, want := range []string{"Codex limits", "Account", "Work · acct-0123456789abcdef0123", "Weekly", "15% used", "Reset grants", localExpiry} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("server refresh missing %q:\n%s", want, text)
 		}
