@@ -49,7 +49,7 @@ func (r *aliasRaceRegistry) ListAccounts(ctx context.Context) ([]store.Account, 
 
 func (r *aliasRaceRegistry) RegisterAuthSourceAccountAlias(ctx context.Context, spec store.SourceSpec, account resetwatch.Account, alias string, checkedAt time.Time) error {
 	r.registeredAt = checkedAt
-	if err := r.Store.ObserveAuthSource(ctx, r.source.Ref, resetwatch.Account{Ref: "private-b"}, r.newerIdentity); err != nil {
+	if err := r.ObserveAuthSource(ctx, r.source.Ref, resetwatch.Account{Ref: "private-b"}, r.newerIdentity); err != nil {
 		return err
 	}
 	return r.Store.RegisterAuthSourceAccountAlias(ctx, spec, account, alias, checkedAt)
