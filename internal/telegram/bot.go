@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agensfield/scriba/internal/accounts"
 	"github.com/agensfield/scriba/internal/budget"
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -36,9 +37,10 @@ type Controller interface {
 	PollInterval(context.Context) (time.Duration, error)
 	SetPollInterval(context.Context, time.Duration) error
 	LastResetEvent(context.Context) (resetwatch.Event, bool, error)
-	LatestObservationForProfile(context.Context, string) (resetwatch.Observation, bool, error)
-	CodexProfileForProfile(context.Context, string) (remotecodex.ProfileResult, error)
-	PlanCodexReset(context.Context, string) (remotecodex.RateLimitResetPlan, error)
+	Accounts(context.Context) ([]store.Account, error)
+	LatestObservationForAccount(context.Context, string) (resetwatch.Observation, bool, error)
+	CodexActivityForAccount(context.Context, string) (remotecodex.ProfileResult, error)
+	PlanCodexReset(context.Context, string) (server.CodexResetPlan, error)
 	ConsumeCodexReset(context.Context, string, remotecodex.ResetAccountPin, remote.ResetCredit, string) (remotecodex.RateLimitResetResult, error)
 	Stats(context.Context) (server.Stats, error)
 	Health(context.Context) (server.Health, error)
@@ -85,7 +87,7 @@ type Service struct {
 }
 
 type pendingCodexReset struct {
-	ProfileID string
+	Account   server.AccountIdentity
 	Plan      remotecodex.RateLimitResetPlan
 	RequestID string
 	ChatID    int64
@@ -181,8 +183,8 @@ func (s *Service) RegisterCommands(ctx context.Context) error {
 		{Command: "limits", Description: "show current Codex limits"},
 		{Command: "grants", Description: "show detailed Codex reset grants"},
 		{Command: "reset", Description: "preview and confirm a Codex limit reset"},
-		{Command: "profile", Description: "show Codex profile stats"},
-		{Command: "profiles", Description: "list configured Codex profiles"},
+		{Command: "activity", Description: "show Codex account activity"},
+		{Command: "accounts", Description: "list known Codex accounts"},
 		{Command: "refresh", Description: "force a live Codex poll"},
 		{Command: "lastreset", Description: "show the latest reset event"},
 		{Command: "settings", Description: "change runtime settings"},
@@ -313,66 +315,68 @@ func (s *Service) handleCommandFor(ctx context.Context, text string, chatID, use
 		interval, _ := s.controller.PollInterval(ctx)
 		return settingsText(interval), settingsKeyboard(interval)
 	case "/limits":
-		profile, err := commandProfile(command)
+		selector, err := commandAccount(command)
 		if err != nil {
-			return "usage: /limits [profile]", nil
+			return "usage: /limits [account]", nil
 		}
-		obs, ok, err := s.controller.LatestObservationForProfile(ctx, profile)
+		obs, account, stale, ok, err := s.cachedAccountObservation(ctx, selector)
 		if err != nil {
-			if errors.Is(err, server.ErrProfileUnavailable) {
-				return "unknown or disabled profile.", nil
-			}
-			return "limits failed.", nil
+			return accountCommandError("limits", err), nil
 		}
 		if !ok {
 			return "no cached limits yet. use /refresh to fetch live Codex limits.", nil
 		}
-		return renderSelectedProfile(profile, RenderLimits(obs)), selectedProfileKeyboard(profile)
+		return renderSelectedAccount(account, stale, RenderLimits(obs)), accountKeyboard(account.ID)
 	case "/grants":
-		profile, err := commandProfile(command)
+		selector, err := commandAccount(command)
 		if err != nil {
-			return "usage: /grants [profile]", nil
+			return "usage: /grants [account]", nil
 		}
-		obs, ok, err := s.controller.LatestObservationForProfile(ctx, profile)
+		obs, account, stale, ok, err := s.cachedAccountObservation(ctx, selector)
 		if err != nil {
-			if errors.Is(err, server.ErrProfileUnavailable) {
-				return "unknown or disabled profile.", nil
-			}
-			return "reset grants failed.", nil
+			return accountCommandError("reset grants", err), nil
 		}
 		if !ok {
 			return "no cached reset grants yet. use /refresh to fetch live Codex limits.", nil
 		}
-		return renderSelectedProfile(profile, RenderResetGrantDetails(obs)), selectedProfileKeyboard(profile)
+		return renderSelectedAccount(account, stale, RenderResetGrantDetails(obs)), accountKeyboard(account.ID)
 	case "/reset":
-		profile, err := commandProfile(command)
+		selector, err := commandAccount(command)
 		if err != nil {
-			return "usage: /reset [profile]", nil
+			return "usage: /reset [account]", nil
 		}
-		return s.beginCodexReset(ctx, profile, chatID, userID)
-	case "/profile":
-		profileID, err := commandProfile(command)
+		return s.beginCodexReset(ctx, selector, chatID, userID)
+	case "/activity":
+		selector, err := commandAccount(command)
 		if err != nil {
-			return "usage: /profile [profile]", nil
+			return "usage: /activity [account]", nil
 		}
-		profile, err := s.controller.CodexProfileForProfile(ctx, profileID)
+		account, err := s.accountForSelector(ctx, selector)
 		if err != nil {
-			if errors.Is(err, server.ErrProfileUnavailable) {
-				return "unknown or disabled profile.", nil
-			}
-			return "profile failed.", nil
+			return accountCommandError("activity", err), nil
 		}
-		return renderSelectedProfile(profileID, RenderProfile(profile)), selectedProfileKeyboard(profileID)
-	case "/profiles":
+		liveSelector := selector
+		if account.ID != "" {
+			liveSelector = account.ID
+		}
+		activity, err := s.controller.CodexActivityForAccount(ctx, liveSelector)
+		if err != nil {
+			return accountCommandError("activity", err), nil
+		}
+		if account.ID == "" {
+			return RenderActivity(activity), mainKeyboard()
+		}
+		return renderSelectedAccount(account, false, RenderActivity(activity)), accountKeyboard(account.ID)
+	case "/accounts":
 		if len(command) != 1 {
-			return "usage: /profiles", nil
+			return "usage: /accounts", nil
 		}
-		health, err := s.controller.Health(ctx)
+		known, err := s.controller.Accounts(ctx)
 		if err != nil {
-			return "profiles failed.", nil
+			return "accounts failed.", nil
 		}
-		text, _ := RenderProfilesPage(health.Profiles, 0)
-		return text, profilesKeyboard(health.Profiles, 0)
+		text, _ := RenderAccountsPage(known, 0)
+		return text, accountsKeyboard(known, 0)
 	case "/refresh":
 		if retryAfter := s.manualRefreshRetryAfter(); retryAfter > 0 {
 			return "refresh rate-limited. try again in " + retryAfter.Round(time.Second).String(), nil
@@ -412,25 +416,25 @@ func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuer
 	if strings.HasPrefix(query.Data, "reset:v1:") {
 		return s.handleResetCallback(ctx, query)
 	}
-	if strings.HasPrefix(query.Data, "profiles:v1:") {
-		return s.handleProfileCallback(ctx, query)
+	if strings.HasPrefix(query.Data, "accounts:v1:") {
+		return s.handleAccountCallback(ctx, query)
 	}
 	switch query.Data {
 	case "quick:home":
 		_ = s.answerCallback(ctx, query.ID, "main menu")
 		return s.editCallbackMessage(ctx, query, helpText(), mainKeyboard())
-	case "quick:profiles":
-		_ = s.answerCallback(ctx, query.ID, "loading profiles")
-		reply, markup := s.handleCommand(ctx, "/profiles")
+	case "quick:accounts":
+		_ = s.answerCallback(ctx, query.ID, "loading accounts")
+		reply, markup := s.handleCommand(ctx, "/accounts")
 		return s.editCallbackMessage(ctx, query, reply, markup)
 	case "quick:limits":
 		_ = s.answerCallback(ctx, query.ID, "refreshing limits")
 		reply, _ := s.handleCommand(ctx, "/limits")
 		_, err := s.send(ctx, reply, mainKeyboard())
 		return err
-	case "quick:profile":
-		_ = s.answerCallback(ctx, query.ID, "loading profile")
-		reply, _ := s.handleCommand(ctx, "/profile")
+	case "quick:activity":
+		_ = s.answerCallback(ctx, query.ID, "loading activity")
+		reply, _ := s.handleCommand(ctx, "/activity")
 		_, err := s.send(ctx, reply, mainKeyboard())
 		return err
 	case "quick:grants":
@@ -483,69 +487,119 @@ func (s *Service) handleCallback(ctx context.Context, query *models.CallbackQuer
 	return s.editCallbackMessage(ctx, query, settingsText(interval), settingsKeyboard(interval))
 }
 
-func (s *Service) handleProfileCallback(ctx context.Context, query *models.CallbackQuery) error {
-	action, value, ok := parseProfileCallback(query.Data)
+func (s *Service) cachedAccountObservation(ctx context.Context, selector string) (resetwatch.Observation, store.Account, bool, bool, error) {
+	obs, ok, err := s.controller.LatestObservationForAccount(ctx, selector)
+	if err != nil || !ok {
+		return obs, store.Account{}, false, ok, err
+	}
+	known, err := s.controller.Accounts(ctx)
+	if err != nil {
+		return resetwatch.Observation{}, store.Account{}, false, false, err
+	}
+	accountID := store.AccountID(obs.ProviderID, obs.Account.Ref)
+	account, found := accountByID(known, accountID)
+	if !found {
+		return resetwatch.Observation{}, store.Account{}, false, false, accounts.ErrAccountNotFound
+	}
+	stale := false
+	if health, healthErr := s.controller.Health(ctx); healthErr == nil {
+		for _, item := range health.Accounts {
+			if item.Account.ID == account.ID {
+				stale = item.IsStale
+				return obs, account, stale, true, nil
+			}
+		}
+		stale = health.StaleAfter > 0 && time.Since(account.LastSeenAt) > health.StaleAfter
+	}
+	return obs, account, stale, true, nil
+}
+
+func (s *Service) accountForSelector(ctx context.Context, selector string) (store.Account, error) {
+	if selector == "" || selector == "current" {
+		return store.Account{}, nil
+	}
+	known, err := s.controller.Accounts(ctx)
+	if err != nil {
+		return store.Account{}, err
+	}
+	for _, account := range known {
+		if account.ID == selector || account.Alias == selector {
+			return account, nil
+		}
+	}
+	return store.Account{}, accounts.ErrAccountNotFound
+}
+
+func accountCommandError(action string, err error) string {
+	var bindingErr *remotecodex.AccountBindingError
+	switch {
+	case errors.Is(err, accounts.ErrAccountNotFound):
+		return "unknown account. use /accounts to list known accounts."
+	case errors.Is(err, accounts.ErrCredentialsUnavailable):
+		return action + " unavailable: this account has no usable credentials."
+	case errors.As(err, &bindingErr):
+		return action + " unavailable: account credentials changed. try again."
+	default:
+		return action + " failed."
+	}
+}
+
+func (s *Service) handleAccountCallback(ctx context.Context, query *models.CallbackQuery) error {
+	action, value, ok := parseAccountCallback(query.Data)
 	if !ok {
-		return s.answerCallback(ctx, query.ID, "expired or invalid profile control")
+		return s.answerCallback(ctx, query.ID, "expired or invalid control")
 	}
 	if action == "list" {
 		page, err := strconv.Atoi(value)
 		if err != nil {
-			return s.answerCallback(ctx, query.ID, "invalid profile page")
+			return s.answerCallback(ctx, query.ID, "invalid account page")
 		}
-		health, err := s.controller.Health(ctx)
+		known, err := s.controller.Accounts(ctx)
 		if err != nil {
-			return s.answerCallback(ctx, query.ID, "profiles unavailable")
+			return s.answerCallback(ctx, query.ID, "accounts unavailable")
 		}
-		text, pages := RenderProfilesPage(health.Profiles, page)
+		text, pages := RenderAccountsPage(known, page)
 		if text == "" || page >= pages {
-			return s.answerCallback(ctx, query.ID, "profile page expired")
+			return s.answerCallback(ctx, query.ID, "account page expired")
 		}
-		_ = s.answerCallback(ctx, query.ID, "profiles")
-		return s.editCallbackMessage(ctx, query, text, profilesKeyboard(health.Profiles, page))
+		_ = s.answerCallback(ctx, query.ID, "accounts")
+		return s.editCallbackMessage(ctx, query, text, accountsKeyboard(known, page))
 	}
 
-	profileID := value
-	if action == "open" {
-		health, err := s.controller.Health(ctx)
-		if err != nil {
-			return s.answerCallback(ctx, query.ID, "profile unavailable")
-		}
-		profile, found := profileHealthByID(health.Profiles, profileID)
-		if !found {
-			return s.answerCallback(ctx, query.ID, "unknown or disabled profile")
-		}
-		_ = s.answerCallback(ctx, query.ID, "profile "+profileID)
-		return s.editCallbackMessage(ctx, query, renderProfileLanding(profile), profileKeyboard(profileID))
-	}
-	health, err := s.controller.Health(ctx)
+	accountID := value
+	known, err := s.controller.Accounts(ctx)
 	if err != nil {
-		return s.answerCallback(ctx, query.ID, "profile unavailable")
+		return s.answerCallback(ctx, query.ID, "account unavailable")
 	}
-	if _, found := profileHealthByID(health.Profiles, profileID); !found {
-		_ = s.answerCallback(ctx, query.ID, "unknown or disabled profile")
-		return s.editCallbackMessage(ctx, query, "unknown or disabled profile.", profilesBackKeyboard())
+	account, found := accountByID(known, accountID)
+	if !found {
+		_ = s.answerCallback(ctx, query.ID, "expired or invalid control")
+		return s.editCallbackMessage(ctx, query, "account unavailable.", accountsBackKeyboard())
+	}
+	if action == "open" {
+		_ = s.answerCallback(ctx, query.ID, "account")
+		return s.editCallbackMessage(ctx, query, renderAccountLanding(account), accountKeyboard(accountID))
 	}
 
-	command := map[string]string{"limits": "/limits ", "grants": "/grants ", "reset": "/reset ", "stats": "/profile "}[action]
+	command := map[string]string{"limits": "/limits ", "grants": "/grants ", "reset": "/reset ", "activity": "/activity "}[action]
 	if command == "" {
-		return s.answerCallback(ctx, query.ID, "expired or invalid profile control")
+		return s.answerCallback(ctx, query.ID, "expired or invalid control")
 	}
 	_ = s.answerCallback(ctx, query.ID, "loading "+action)
 	chatID, _ := callbackChatID(query)
-	reply, markup := s.handleCommandFor(ctx, command+profileID, chatID, query.From.ID)
+	reply, markup := s.handleCommandFor(ctx, command+accountID, chatID, query.From.ID)
 	if markup == nil {
-		markup = profileKeyboard(profileID)
+		markup = accountKeyboard(accountID)
 	}
 	return s.editCallbackMessage(ctx, query, reply, markup)
 }
 
-func (s *Service) beginCodexReset(ctx context.Context, profileID string, chatID, userID int64) (string, models.ReplyMarkup) {
-	plan, err := s.controller.PlanCodexReset(ctx, profileID)
+func (s *Service) beginCodexReset(ctx context.Context, selector string, chatID, userID int64) (string, models.ReplyMarkup) {
+	resolved, err := s.controller.PlanCodexReset(ctx, selector)
 	if err != nil {
-		if errors.Is(err, server.ErrProfileUnavailable) {
-			return "unknown or disabled profile.", nil
-		}
+		return accountCommandError("reset preview", err), nil
+	}
+	if !telegramAccountIDPattern.MatchString(resolved.Account.ID) {
 		return "reset preview failed.", nil
 	}
 	requestID, err := remotecodex.NewRateLimitResetRequestID()
@@ -553,7 +607,8 @@ func (s *Service) beginCodexReset(ctx context.Context, profileID string, chatID,
 		return "reset preview failed.", nil
 	}
 	token := strings.ReplaceAll(requestID, "-", "")[:20]
-	pending := &pendingCodexReset{ProfileID: profileID, Plan: plan, RequestID: requestID, ChatID: chatID, UserID: userID, ExpiresAt: time.Now().Add(resetConfirmTTL)}
+	account := server.AccountIdentity{ID: resolved.Account.ID, DisplayName: resolved.Account.DisplayName()}
+	pending := &pendingCodexReset{Account: account, Plan: resolved.Plan, RequestID: requestID, ChatID: chatID, UserID: userID, ExpiresAt: time.Now().Add(resetConfirmTTL)}
 	s.mu.Lock()
 	if s.pendingResets == nil {
 		s.pendingResets = map[string]*pendingCodexReset{}
@@ -561,7 +616,7 @@ func (s *Service) beginCodexReset(ctx context.Context, profileID string, chatID,
 	s.prunePendingResetsLocked(time.Now())
 	s.pendingResets[token] = pending
 	s.mu.Unlock()
-	return RenderCodexResetConfirmation(profileID, plan), resetConfirmationKeyboard(token)
+	return RenderCodexResetConfirmation(account, resolved.Plan), resetConfirmationKeyboard(token)
 }
 
 func (s *Service) handleResetCallback(ctx context.Context, query *models.CallbackQuery) error {
@@ -582,7 +637,7 @@ func (s *Service) handleResetCallback(ctx context.Context, query *models.Callbac
 		return s.answerCallback(ctx, query.ID, "expired or invalid reset control")
 	}
 	if action == "cancel" {
-		profileID := pending.ProfileID
+		account := pending.Account
 		if pending.InFlight {
 			s.mu.Unlock()
 			return s.answerCallback(ctx, query.ID, "reset already in progress")
@@ -597,10 +652,10 @@ func (s *Service) handleResetCallback(ctx context.Context, query *models.Callbac
 		s.mu.Unlock()
 		if result != nil {
 			_ = s.answerCallback(ctx, query.ID, "reset already completed")
-			return s.editCallbackMessage(ctx, query, RenderCodexResetResult(profileID, *result), selectedProfileKeyboard(profileID))
+			return s.editCallbackMessage(ctx, query, RenderCodexResetResult(account, *result), accountKeyboard(account.ID))
 		}
 		_ = s.answerCallback(ctx, query.ID, "reset cancelled")
-		return s.editCallbackMessage(ctx, query, RenderCodexResetCancelled(profileID), selectedProfileKeyboard(profileID))
+		return s.editCallbackMessage(ctx, query, RenderCodexResetCancelled(account), accountKeyboard(account.ID))
 	}
 	if pending.Cancelled {
 		s.mu.Unlock()
@@ -608,20 +663,20 @@ func (s *Service) handleResetCallback(ctx context.Context, query *models.Callbac
 	}
 	if pending.Result != nil {
 		result := *pending.Result
-		profileID := pending.ProfileID
+		account := pending.Account
 		s.mu.Unlock()
 		_ = s.answerCallback(ctx, query.ID, "reset already completed")
-		return s.editCallbackMessage(ctx, query, RenderCodexResetResult(profileID, result), selectedProfileKeyboard(profileID))
+		return s.editCallbackMessage(ctx, query, RenderCodexResetResult(account, result), accountKeyboard(account.ID))
 	}
 	if pending.InFlight {
 		s.mu.Unlock()
 		return s.answerCallback(ctx, query.ID, "reset already in progress")
 	}
 	pending.InFlight = true
-	profileID, accountPin, credit, requestID := pending.ProfileID, pending.Plan.AccountPin, pending.Plan.Credit, pending.RequestID
+	account, accountPin, credit, requestID := pending.Account, pending.Plan.AccountPin, pending.Plan.Credit, pending.RequestID
 	s.mu.Unlock()
 
-	result, err := s.controller.ConsumeCodexReset(ctx, profileID, accountPin, credit, requestID)
+	result, err := s.controller.ConsumeCodexReset(ctx, account.ID, accountPin, credit, requestID)
 	s.mu.Lock()
 	pending.InFlight = false
 	var accountBindingErr *remotecodex.ResetAccountBindingError
@@ -634,14 +689,14 @@ func (s *Service) handleResetCallback(ctx context.Context, query *models.Callbac
 	s.mu.Unlock()
 	if accountChanged {
 		_ = s.answerCallback(ctx, query.ID, "account changed; preview reset again")
-		return s.editCallbackMessage(ctx, query, RenderCodexResetAccountChanged(profileID), selectedProfileKeyboard(profileID))
+		return s.editCallbackMessage(ctx, query, RenderCodexResetAccountChanged(account), accountKeyboard(account.ID))
 	}
 	if err != nil {
 		_ = s.answerCallback(ctx, query.ID, "reset failed; confirmation remains retryable")
-		return s.editCallbackMessage(ctx, query, RenderCodexResetRetry(profileID), resetConfirmationKeyboard(token))
+		return s.editCallbackMessage(ctx, query, RenderCodexResetRetry(account), resetConfirmationKeyboard(token))
 	}
 	_ = s.answerCallback(ctx, query.ID, resetCallbackAnswer(result.Outcome))
-	return s.editCallbackMessage(ctx, query, RenderCodexResetResult(profileID, result), selectedProfileKeyboard(profileID))
+	return s.editCallbackMessage(ctx, query, RenderCodexResetResult(account, result), accountKeyboard(account.ID))
 }
 
 func (s *Service) prunePendingResetsLocked(now time.Time) {
@@ -903,65 +958,20 @@ func commandName(text string) string {
 }
 
 func callbackKind(data string) string {
-	quick := map[string]bool{"quick:home": true, "quick:profiles": true, "quick:limits": true, "quick:profile": true, "quick:grants": true, "quick:reset": true, "quick:health": true, "quick:refresh": true, "quick:radar": true, "quick:stats": true, "quick:settings": true}
+	quick := map[string]bool{"quick:home": true, "quick:accounts": true, "quick:limits": true, "quick:activity": true, "quick:grants": true, "quick:reset": true, "quick:health": true, "quick:refresh": true, "quick:radar": true, "quick:stats": true, "quick:settings": true}
 	if quick[data] {
 		return data
 	}
 	if strings.HasPrefix(data, "settings:poll:") {
 		return "settings:poll"
 	}
-	if _, _, ok := parseProfileCallback(data); ok {
-		return "profiles:v1"
+	if _, _, ok := parseAccountCallback(data); ok {
+		return "accounts:v1"
 	}
 	if _, _, ok := parseResetCallback(data); ok {
 		return "reset:v1"
 	}
 	return "unknown"
-}
-
-var telegramProfileIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-
-func commandProfile(fields []string) (string, error) {
-	if len(fields) == 1 {
-		return "", nil
-	}
-	if len(fields) != 2 || len(fields[1]) > 32 || !telegramProfileIDPattern.MatchString(fields[1]) {
-		return "", server.ErrProfileUnavailable
-	}
-	return fields[1], nil
-}
-
-func renderSelectedProfile(profileID, body string) string {
-	if profileID == "" {
-		return body
-	}
-	return "<b>Configured profile</b> <code>" + html.EscapeString(profileID) + "</code>\n\n" + body
-}
-
-func parseProfileCallback(data string) (string, string, bool) {
-	parts := strings.Split(data, ":")
-	if len(parts) != 4 || parts[0] != "profiles" || parts[1] != "v1" {
-		return "", "", false
-	}
-	action, value := parts[2], parts[3]
-	if action == "list" {
-		if len(value) == 0 || len(value) > 4 {
-			return "", "", false
-		}
-		for _, char := range value {
-			if char < '0' || char > '9' {
-				return "", "", false
-			}
-		}
-		return action, value, true
-	}
-	if action != "open" && action != "limits" && action != "grants" && action != "reset" && action != "stats" {
-		return "", "", false
-	}
-	if len(value) > 32 || !telegramProfileIDPattern.MatchString(value) {
-		return "", "", false
-	}
-	return action, value, true
 }
 
 var resetCallbackTokenPattern = regexp.MustCompile(`^[0-9a-f]{20}$`)
@@ -1008,98 +1018,11 @@ func resetCallbackAnswer(outcome string) string {
 	}
 }
 
-func profileHealthByID(profiles []server.ProfileHealth, id string) (server.ProfileHealth, bool) {
-	for _, profile := range profiles {
-		if profile.Profile.Ref == id {
-			return profile, true
-		}
-	}
-	return server.ProfileHealth{}, false
-}
-
-func renderProfileLanding(profile server.ProfileHealth) string {
-	marker := ""
-	if profile.IsDefault {
-		marker = " · default"
-	}
-	return "<b>Configured profile</b>\n\n<code>" + html.EscapeString(profile.Profile.Ref) + "</code> · " + html.EscapeString(truncateProfileLabel(profile.Profile.Label)) + " · " + html.EscapeString(string(profile.Status)) + marker + "\n\nChoose a view."
-}
-
-func profilesKeyboard(profiles []server.ProfileHealth, page int) models.InlineKeyboardMarkup {
-	pages := max(1, (len(profiles)+profilesPageSize-1)/profilesPageSize)
-	start := min(max(page, 0)*profilesPageSize, len(profiles))
-	end := min(start+profilesPageSize, len(profiles))
-	rows := make([][]models.InlineKeyboardButton, 0, profilesPageSize+2)
-	for _, profile := range profiles[start:end] {
-		label := profileButtonLabel(profile)
-		rows = append(rows, []models.InlineKeyboardButton{{Text: label, CallbackData: "profiles:v1:open:" + profile.Profile.Ref}})
-	}
-	if pages > 1 {
-		var nav []models.InlineKeyboardButton
-		if page > 0 {
-			nav = append(nav, models.InlineKeyboardButton{Text: "‹ Prev", CallbackData: "profiles:v1:list:" + strconv.Itoa(page-1)})
-		}
-		if page+1 < pages {
-			nav = append(nav, models.InlineKeyboardButton{Text: "Next ›", CallbackData: "profiles:v1:list:" + strconv.Itoa(page+1)})
-		}
-		rows = append(rows, nav)
-	}
-	rows = append(rows, []models.InlineKeyboardButton{{Text: "Main menu", CallbackData: "quick:home"}})
-	return models.InlineKeyboardMarkup{InlineKeyboard: rows}
-}
-
-func profileKeyboard(profileID string) models.InlineKeyboardMarkup {
-	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-		{{Text: "Limits", CallbackData: "profiles:v1:limits:" + profileID}, {Text: "Grants", CallbackData: "profiles:v1:grants:" + profileID}},
-		{{Text: "Reset limits", CallbackData: "profiles:v1:reset:" + profileID}, {Text: "Profile stats", CallbackData: "profiles:v1:stats:" + profileID}},
-		{{Text: "‹ All profiles", CallbackData: "profiles:v1:list:0"}},
-	}}
-}
-
-func profilesBackKeyboard() models.InlineKeyboardMarkup {
-	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{{Text: "‹ All profiles", CallbackData: "profiles:v1:list:0"}}}}
-}
-
 func resetConfirmationKeyboard(token string) models.InlineKeyboardMarkup {
 	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
 		{{Text: "Confirm reset", CallbackData: "reset:v1:confirm:" + token}},
 		{{Text: "Cancel", CallbackData: "reset:v1:cancel:" + token}},
 	}}
-}
-
-func selectedProfileKeyboard(profileID string) models.ReplyMarkup {
-	if profileID == "" {
-		return mainKeyboard()
-	}
-	return profileKeyboard(profileID)
-}
-
-func truncateButtonLabel(label string) string {
-	runes := []rune(label)
-	if len(runes) <= 64 {
-		return label
-	}
-	return string(runes[:63]) + "…"
-}
-
-func profileButtonLabel(profile server.ProfileHealth) string {
-	suffix := " · " + profile.Profile.Ref
-	if profile.IsDefault {
-		suffix += " · default"
-	}
-	budget := 64 - len([]rune(suffix))
-	label := []rune(profile.Profile.Label)
-	if budget < 1 {
-		return truncateButtonLabel(strings.TrimSpace(suffix))
-	}
-	if len(label) > budget {
-		if budget == 1 {
-			label = []rune("…")
-		} else {
-			label = append(label[:budget-1], '…')
-		}
-	}
-	return string(label) + suffix
 }
 
 func settingsKeyboard(current time.Duration) models.InlineKeyboardMarkup {
@@ -1133,7 +1056,7 @@ func mainKeyboard() models.InlineKeyboardMarkup {
 			{Text: "Reset limits", CallbackData: "quick:reset"},
 			{Text: "Refresh", CallbackData: "quick:refresh"},
 		},
-		{{Text: "Profile", CallbackData: "quick:profile"}},
+		{{Text: "Activity", CallbackData: "quick:activity"}},
 		{
 			{Text: "Radar", CallbackData: "quick:radar"},
 			{Text: "Health", CallbackData: "quick:health"},
@@ -1142,7 +1065,7 @@ func mainKeyboard() models.InlineKeyboardMarkup {
 			{Text: "Stats", CallbackData: "quick:stats"},
 			{Text: "Settings", CallbackData: "quick:settings"},
 		},
-		{{Text: "Profiles", CallbackData: "quick:profiles"}},
+		{{Text: "Accounts", CallbackData: "quick:accounts"}},
 	}}
 }
 
@@ -1156,11 +1079,11 @@ func helpText() string {
 		"<code>/status</code> server health and polling state",
 		"<code>/health</code> poll/auth health check",
 		"<code>/stats</code> storage and delivery stats",
-		"<code>/profiles</code> configured Codex profiles",
-		"<code>/limits [profile]</code> current Codex limits",
-		"<code>/grants [profile]</code> detailed Codex reset grants",
-		"<code>/reset [profile]</code> preview and confirm a Codex limit reset",
-		"<code>/profile [profile]</code> Codex profile stats",
+		"<code>/accounts</code> known Codex accounts",
+		"<code>/limits [account]</code> stored Codex limits",
+		"<code>/grants [account]</code> detailed Codex reset grants",
+		"<code>/reset [account]</code> preview and confirm a Codex limit reset",
+		"<code>/activity [account]</code> live Codex activity",
 		"<code>/refresh</code> force a live poll",
 		"<code>/lastreset</code> latest reset event",
 		"<code>/settings</code> polling settings",

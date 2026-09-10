@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agensfield/scriba/internal/accounts"
 	"github.com/agensfield/scriba/internal/budget"
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -94,10 +95,10 @@ func TestRenderLimitsUsesHTMLSectionsAndFreshness(t *testing.T) {
 	}
 }
 
-func TestRenderProfileShowsCodexProfileStats(t *testing.T) {
+func TestRenderActivityShowsCodexStats(t *testing.T) {
 	rank := int64(2)
 	total := int64(7)
-	text := RenderProfile(remotecodex.ProfileResult{
+	text := RenderActivity(remotecodex.ProfileResult{
 		Profile:  remotecodex.Profile{Username: "ardasevinc", DisplayName: "Arda & Co"},
 		Metadata: remotecodex.ProfileMetadata{StatsAsOf: "2026-06-28", GeneratedAt: "2026-06-29T00:01:45Z"},
 		AuthState: remote.AuthState{
@@ -125,7 +126,7 @@ func TestRenderProfileShowsCodexProfileStats(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"<b>Codex profile</b>",
+		"<b>Codex activity</b>",
 		"<b>Arda &amp; Co</b> <code>@ardasevinc</code>",
 		"stats as of 2026-06-28",
 		"<b>Overview</b>",
@@ -295,6 +296,24 @@ func TestRenderStatsShowsStorageFreshnessAndDeliveries(t *testing.T) {
 	}
 }
 
+func TestRenderHealthSeparatesSourceAndHistoricalAccountState(t *testing.T) {
+	active := testAccount("active-ref", "active", true)
+	historical := testAccount("historical-ref", "historical", false)
+	historical.LastSeenAt = time.Time{}
+	health := healthFixture()
+	health.Sources = []server.SourceHealth{{Source: server.SourceIdentity{Ref: "src-private-hash"}, Status: server.HealthOK}, {Source: server.SourceIdentity{Ref: "src-other-private-hash"}, Status: server.HealthDegraded}}
+	health.Accounts = []server.AccountHealth{{Account: active, Status: server.HealthOK}, {Account: historical, Status: server.HealthUnknown}}
+	text := RenderHealth(health)
+	for _, want := range []string{"Auth sources", "configured", "degraded", "Accounts", "active · ready", "historical · offline", "never observed"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("health missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "src-private-hash") || strings.Contains(text, "src-other-private-hash") {
+		t.Fatalf("health exposed internal source ref:\n%s", text)
+	}
+}
+
 func TestAuthorizationRequiresChatAndAllowedUser(t *testing.T) {
 	svc := &Service{cfg: BotConfig{ChatID: 123, AllowedUserIDs: []int64{7}}}
 	if !svc.authorized(&models.Update{Message: &models.Message{Chat: models.Chat{ID: 123}, From: &models.User{ID: 7}}}) {
@@ -328,21 +347,21 @@ func TestEmptyAllowlistIsPrivateChatOnlyAndGroupsRequireUserAllowlist(t *testing
 	}
 }
 
-func TestVersionedProfileCallbacksSelectExactProfile(t *testing.T) {
-	controller := &fakeController{latest: resetwatch.Observation{Account: resetwatch.Account{Label: "Work"}, ObservedAt: time.Now()}, latestOK: true, health: healthFixture()}
-	controller.health.Profiles = []server.ProfileHealth{{Profile: server.ProfileIdentity{Ref: "work", Label: "Work"}, Status: server.HealthOK}}
+func TestVersionedAccountCallbacksSelectExactAccount(t *testing.T) {
+	account := testAccount("work", "work", true)
+	controller := &fakeController{accounts: []store.Account{account}, latest: resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: "work", Label: "Work"}, ObservedAt: time.Now()}, latestOK: true, health: healthFixture()}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	if err := svc.handleCallback(t.Context(), &models.CallbackQuery{Data: "profiles:v1:limits:work"}); err != nil {
+	if err := svc.handleCallback(t.Context(), &models.CallbackQuery{Data: "accounts:v1:limits:" + account.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if controller.latestProfile != "work" {
-		t.Fatalf("selected profile=%q", controller.latestProfile)
+	if controller.latestSelector != account.ID {
+		t.Fatalf("selected account=%q", controller.latestSelector)
 	}
-	if _, _, ok := parseProfileCallback("profiles:v2:limits:work"); ok {
+	if _, _, ok := parseAccountCallback("accounts:v2:limits:" + account.ID); ok {
 		t.Fatal("future callback version accepted")
 	}
-	for _, malformed := range []string{"profiles:v1:limits:", "profiles:v1:limits:INVALID", "profiles:v1:list:-1", "profiles:v1:list:10000", "profiles:v1:unknown:work", "profiles:v1:limits:work:extra"} {
-		if _, _, ok := parseProfileCallback(malformed); ok {
+	for _, malformed := range []string{"accounts:v1:limits:", "accounts:v1:limits:personal", "accounts:v1:list:-1", "accounts:v1:list:10000", "accounts:v1:unknown:" + account.ID, "accounts:v1:limits:" + account.ID + ":extra"} {
+		if _, _, ok := parseAccountCallback(malformed); ok {
 			t.Fatalf("malformed callback accepted: %q", malformed)
 		}
 	}
@@ -360,15 +379,25 @@ func TestInaccessibleMessageCallbackRetainsChatAuthorization(t *testing.T) {
 	}
 }
 
-func TestStaleProfileCallbackRemovesProfileActionsWithoutFallback(t *testing.T) {
-	controller := &fakeController{health: healthFixture(), latest: resetwatch.Observation{Account: resetwatch.Account{Label: "Default"}}, latestOK: true}
-	controller.health.Profiles = []server.ProfileHealth{{Profile: server.ProfileIdentity{Ref: "default", Label: "Default"}, IsDefault: true, Status: server.HealthOK}}
+func TestStaleAccountCallbackRemovesActionsWithoutFallback(t *testing.T) {
+	controller := &fakeController{accounts: []store.Account{testAccount("default", "default", true)}, health: healthFixture(), latest: resetwatch.Observation{Account: resetwatch.Account{Label: "Default"}}, latestOK: true}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	if err := svc.handleCallback(t.Context(), &models.CallbackQuery{Data: "profiles:v1:limits:removed"}); err != nil {
+	if err := svc.handleCallback(t.Context(), &models.CallbackQuery{Data: "accounts:v1:limits:" + store.AccountID("codex", "removed")}); err != nil {
 		t.Fatal(err)
 	}
-	if controller.latestProfile != "" {
-		t.Fatalf("stale callback reached account lookup: %q", controller.latestProfile)
+	if controller.latestSelector != "" {
+		t.Fatalf("stale callback reached account lookup: %q", controller.latestSelector)
+	}
+}
+
+func TestLegacyInlineControlUsesGenericUnknownHandling(t *testing.T) {
+	controller := &fakeController{accounts: []store.Account{testAccount("work", "work", true)}}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	if err := svc.handleCallback(t.Context(), &models.CallbackQuery{Data: "profiles:v1:limits:work"}); err != nil {
+		t.Fatal(err)
+	}
+	if controller.latestSelector != "" {
+		t.Fatalf("legacy control reached account lookup: %q", controller.latestSelector)
 	}
 }
 
@@ -376,19 +405,19 @@ func TestCallbackKindUsesClosedLogVocabulary(t *testing.T) {
 	if got := callbackKind("PRIVATE:SECRET:VALUE"); got != "unknown" {
 		t.Fatalf("unknown callback log kind=%q", got)
 	}
-	if got := callbackKind("profiles:v1:limits:work"); got != "profiles:v1" {
-		t.Fatalf("profile callback log kind=%q", got)
+	if got := callbackKind("accounts:v1:limits:" + store.AccountID("codex", "work")); got != "accounts:v1" {
+		t.Fatalf("account callback log kind=%q", got)
 	}
 }
 
-func TestProfileKeyboardPaginationIsBoundedAndCallbackSafe(t *testing.T) {
-	profiles := make([]server.ProfileHealth, 14)
-	for i := range profiles {
-		profiles[i] = server.ProfileHealth{Profile: server.ProfileIdentity{Ref: fmt.Sprintf("profile-%d", i), Label: strings.Repeat("🔥", 80)}, IsDefault: i == 0, Status: server.HealthOK}
+func TestAccountKeyboardPaginationIsBoundedAndCallbackSafe(t *testing.T) {
+	accounts := make([]store.Account, 14)
+	for i := range accounts {
+		accounts[i] = testAccount(fmt.Sprintf("account-%d", i), strings.Repeat("🔥", 80), i%2 == 0)
 	}
-	text, pages := RenderProfilesPage(profiles, 1)
-	keyboard := profilesKeyboard(profiles, 1)
-	if pages != 3 || len(text) > 4096 || len(keyboard.InlineKeyboard) > profilesPageSize+2 {
+	text, pages := RenderAccountsPage(accounts, 1)
+	keyboard := accountsKeyboard(accounts, 1)
+	if pages != 3 || len(text) > 4096 || len(keyboard.InlineKeyboard) > accountsPageSize+2 {
 		t.Fatalf("pages=%d text=%d rows=%d", pages, len(text), len(keyboard.InlineKeyboard))
 	}
 	for _, row := range keyboard.InlineKeyboard {
@@ -396,17 +425,20 @@ func TestProfileKeyboardPaginationIsBoundedAndCallbackSafe(t *testing.T) {
 			if len([]byte(button.CallbackData)) > 64 || len([]rune(button.Text)) > 64 {
 				t.Fatalf("unsafe button=%+v", button)
 			}
+			if strings.Contains(button.CallbackData, "account-") || strings.Contains(button.CallbackData, "example.com") {
+				t.Fatalf("callback exposed private account data: %+v", button)
+			}
 		}
 	}
-	if !strings.Contains(keyboard.InlineKeyboard[0][0].Text, "profile-6") {
-		t.Fatalf("profile id missing from button: %q", keyboard.InlineKeyboard[0][0].Text)
+	if !strings.Contains(keyboard.InlineKeyboard[0][0].Text, "🔥") {
+		t.Fatalf("account display missing from button: %q", keyboard.InlineKeyboard[0][0].Text)
 	}
-	if text, _ := RenderProfilesPage(profiles, 3); text != "" {
+	if text, _ := RenderAccountsPage(accounts, 3); text != "" {
 		t.Fatalf("out-of-range page rendered: %q", text)
 	}
 }
 
-func TestProfileCallbackAnswersAndEditsExistingMessage(t *testing.T) {
+func TestAccountCallbackAnswersAndEditsExistingMessage(t *testing.T) {
 	var mu sync.Mutex
 	methods := map[string]int{}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -425,10 +457,9 @@ func TestProfileCallbackAnswersAndEditsExistingMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller := &fakeController{health: healthFixture()}
-	controller.health.Profiles = []server.ProfileHealth{{Profile: server.ProfileIdentity{Ref: "work", Label: "Work"}, Status: server.HealthOK}}
+	controller := &fakeController{accounts: []store.Account{testAccount("work", "work", true)}, health: healthFixture()}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller, bot: bot, apiTimeout: time.Second}
-	query := &models.CallbackQuery{ID: "callback-1", Data: "profiles:v1:list:0", From: models.User{ID: 7}, Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: 5, Date: 1, Chat: models.Chat{ID: 123, Type: models.ChatTypePrivate}}}}
+	query := &models.CallbackQuery{ID: "callback-1", Data: "accounts:v1:list:0", From: models.User{ID: 7}, Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: 5, Date: 1, Chat: models.Chat{ID: 123, Type: models.ChatTypePrivate}}}}
 	if err := svc.handleCallback(t.Context(), query); err != nil {
 		t.Fatal(err)
 	}
@@ -451,9 +482,12 @@ func TestHandleSettingsCallbackUpdatesPollInterval(t *testing.T) {
 }
 
 func TestLimitsCommandUsesCachedObservation(t *testing.T) {
+	account := testAccount("work-ref", "work", true)
 	controller := &fakeController{
+		accounts: []store.Account{account},
 		latest: resetwatch.Observation{
-			Account:    resetwatch.Account{Label: "personal"},
+			ProviderID: "codex",
+			Account:    resetwatch.Account{Ref: "work-ref", Label: "personal"},
 			ObservedAt: parseTime("2026-06-01T00:00:00Z"),
 			ResetGrants: resetwatch.ResetGrants{
 				AvailableCount: ptrInt(1),
@@ -476,19 +510,22 @@ func TestLimitsCommandUsesCachedObservation(t *testing.T) {
 	if controller.refreshes != 0 {
 		t.Fatalf("/limits should not force refresh, got %d refreshes", controller.refreshes)
 	}
-	if controller.latestProfile != "work" || !strings.Contains(reply, "Configured profile</b> <code>work</code>") {
-		t.Fatalf("profile=%q reply=%s", controller.latestProfile, reply)
+	if controller.latestSelector != "work" || !strings.Contains(reply, account.ID) {
+		t.Fatalf("selector=%q reply=%s", controller.latestSelector, reply)
 	}
 	keyboard, ok := markup.(models.InlineKeyboardMarkup)
-	if !ok || keyboard.InlineKeyboard[0][0].CallbackData != "profiles:v1:limits:work" {
-		t.Fatalf("profile keyboard=%+v", markup)
+	if !ok || keyboard.InlineKeyboard[0][0].CallbackData != "accounts:v1:limits:"+account.ID {
+		t.Fatalf("account keyboard=%+v", markup)
 	}
 }
 
 func TestGrantsCommandShowsDetailedCachedCredits(t *testing.T) {
+	account := testAccount("personal-ref", "personal", false)
 	controller := &fakeController{
+		accounts: []store.Account{account},
 		latest: resetwatch.Observation{
-			Account:    resetwatch.Account{Label: "personal", Plan: "pro"},
+			ProviderID: "codex",
+			Account:    resetwatch.Account{Ref: "personal-ref", Label: "personal", Plan: "pro"},
 			ObservedAt: parseTime("2026-07-10T20:00:00Z"),
 			ResetGrants: resetwatch.ResetGrants{
 				AvailableCount: ptrInt(1),
@@ -515,6 +552,8 @@ func TestGrantsCommandShowsDetailedCachedCredits(t *testing.T) {
 		"2026-07-01 10:00 UTC",
 		"2026-08-01 10:00 UTC",
 		"RateLimitResetCredit_1234567890",
+		"credentials unavailable; showing stored data",
+		"stored observation is stale",
 	} {
 		if !strings.Contains(reply, want) {
 			t.Fatalf("grants reply missing %q:\n%s", want, reply)
@@ -526,8 +565,31 @@ func TestGrantsCommandShowsDetailedCachedCredits(t *testing.T) {
 	if controller.refreshes != 0 {
 		t.Fatalf("/grants should use the latest observation, got %d refreshes", controller.refreshes)
 	}
-	if controller.latestProfile != "personal" {
-		t.Fatalf("profile=%q", controller.latestProfile)
+	if controller.latestSelector != "personal" {
+		t.Fatalf("selector=%q", controller.latestSelector)
+	}
+}
+
+func TestSelectedAccountViewsNeverBorrowAnotherAccountsObservation(t *testing.T) {
+	personal := testAccount("personal-ref", "personal", true)
+	work := testAccount("work-ref", "work", false)
+	personalObservation := resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: personal.Ref, Label: "Personal"}, ObservedAt: personal.LastSeenAt, Windows: []resetwatch.Window{{Label: resetwatch.LabelWeeklyLimit, UsedPercent: ptrFloat(11), ResetAt: personal.LastSeenAt.Add(24 * time.Hour)}}}
+	workObservation := resetwatch.Observation{ProviderID: "codex", Account: resetwatch.Account{Ref: work.Ref, Label: "Work"}, ObservedAt: work.LastSeenAt, Windows: []resetwatch.Window{{Label: resetwatch.LabelWeeklyLimit, UsedPercent: ptrFloat(88), ResetAt: work.LastSeenAt.Add(24 * time.Hour)}}}
+	controller := &fakeController{
+		accounts: []store.Account{personal, work},
+		latestBySelector: map[string]resetwatch.Observation{
+			personal.ID: personalObservation,
+			work.ID:     workObservation,
+		},
+	}
+	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
+	personalReply, _ := svc.handleCommand(t.Context(), "/limits "+personal.ID)
+	workReply, _ := svc.handleCommand(t.Context(), "/limits "+work.ID)
+	if !strings.Contains(personalReply, "11% used") || strings.Contains(personalReply, "88% used") {
+		t.Fatalf("personal limits crossed accounts:\n%s", personalReply)
+	}
+	if !strings.Contains(workReply, "88% used") || strings.Contains(workReply, "11% used") || !strings.Contains(workReply, "credentials unavailable") {
+		t.Fatalf("work limits crossed accounts:\n%s", workReply)
 	}
 }
 
@@ -535,13 +597,13 @@ func TestResetCommandRequiresBoundConfirmationAndReusesCompletedResult(t *testin
 	used := 99.0
 	credit := remote.ResetCredit{ID: "RateLimitResetCredit_oldest", Status: "available", Title: "Full reset", ExpiresAt: "2026-07-18T00:29:25Z"}
 	controller := &fakeController{
-		resetPlan:   remotecodex.RateLimitResetPlan{ProviderID: "codex", AvailableCount: 2, Credit: credit, WeeklyUsed: &used},
+		resetPlan:   server.CodexResetPlan{Account: testAccount("work-ref", "work", true), Plan: remotecodex.RateLimitResetPlan{ProviderID: "codex", AvailableCount: 2, Credit: credit, WeeklyUsed: &used}},
 		resetResult: remotecodex.RateLimitResetResult{ProviderID: "codex", Outcome: remotecodex.ResetOutcomeReset, WindowsReset: 2, Credit: credit},
 	}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
 	reply, markup := svc.handleCommandFor(t.Context(), "/reset work", 123, 7)
-	if controller.resetConsumes != 0 || controller.resetProfile != "work" {
-		t.Fatalf("preview mutated or selected wrong profile: consumes=%d profile=%q", controller.resetConsumes, controller.resetProfile)
+	if controller.resetConsumes != 0 || controller.resetSelector != "work" {
+		t.Fatalf("preview mutated or selected wrong account: consumes=%d selector=%q", controller.resetConsumes, controller.resetSelector)
 	}
 	for _, want := range []string{"Confirm Codex limit reset?", "99% used", "RateLimitResetCredit_oldest", "spends one reset grant"} {
 		if !strings.Contains(reply, want) {
@@ -557,12 +619,16 @@ func TestResetCommandRequiresBoundConfirmationAndReusesCompletedResult(t *testin
 	if len([]byte(confirm)) > 64 || len([]byte(cancel)) > 64 {
 		t.Fatalf("callbacks exceed Telegram limit: %q %q", confirm, cancel)
 	}
+	// The alias/current selector may resolve elsewhere after preview. Confirmation
+	// remains pinned to the stable account returned with the original plan.
+	controller.resetPlan.Account = testAccount("other-ref", "work", true)
 	query := resetTestQuery(confirm, 123, 7)
 	if err := svc.handleResetCallback(t.Context(), query); err != nil {
 		t.Fatal(err)
 	}
-	if controller.resetConsumes != 1 || controller.resetCredit.ID != credit.ID || controller.resetProfile != "work" || !regexp.MustCompile(`^[0-9a-f-]{36}$`).MatchString(controller.resetRequestID) {
-		t.Fatalf("consume=%d profile=%q credit=%+v request=%q", controller.resetConsumes, controller.resetProfile, controller.resetCredit, controller.resetRequestID)
+	wantAccountID := store.AccountID("codex", "work-ref")
+	if controller.resetConsumes != 1 || controller.resetCredit.ID != credit.ID || controller.resetSelector != wantAccountID || !regexp.MustCompile(`^[0-9a-f-]{36}$`).MatchString(controller.resetRequestID) {
+		t.Fatalf("consume=%d selector=%q credit=%+v request=%q", controller.resetConsumes, controller.resetSelector, controller.resetCredit, controller.resetRequestID)
 	}
 	if err := svc.handleResetCallback(t.Context(), query); err != nil {
 		t.Fatal(err)
@@ -574,7 +640,7 @@ func TestResetCommandRequiresBoundConfirmationAndReusesCompletedResult(t *testin
 
 func TestResetConfirmationIsOwnerBoundCancellableAndExpires(t *testing.T) {
 	credit := remote.ResetCredit{ID: "credit", Status: "available"}
-	controller := &fakeController{resetPlan: remotecodex.RateLimitResetPlan{Credit: credit}, resetResult: remotecodex.RateLimitResetResult{Outcome: remotecodex.ResetOutcomeReset, Credit: credit}}
+	controller := &fakeController{resetPlan: server.CodexResetPlan{Account: testAccount("one", "one", true), Plan: remotecodex.RateLimitResetPlan{Credit: credit}}, resetResult: remotecodex.RateLimitResetResult{Outcome: remotecodex.ResetOutcomeReset, Credit: credit}}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
 	_, markup := svc.handleCommandFor(t.Context(), "/reset", 123, 7)
 	keyboard := markup.(models.InlineKeyboardMarkup)
@@ -613,7 +679,7 @@ func TestResetConfirmationIsOwnerBoundCancellableAndExpires(t *testing.T) {
 
 func TestResetConfirmationRetryKeepsOriginalIdempotencyKey(t *testing.T) {
 	credit := remote.ResetCredit{ID: "credit", Status: "available"}
-	controller := &fakeController{resetPlan: remotecodex.RateLimitResetPlan{Credit: credit}, resetConsumeErr: errors.New("temporary")}
+	controller := &fakeController{resetPlan: server.CodexResetPlan{Account: testAccount("one", "one", true), Plan: remotecodex.RateLimitResetPlan{Credit: credit}}, resetConsumeErr: errors.New("temporary")}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
 	_, markup := svc.handleCommandFor(t.Context(), "/reset", 123, 7)
 	confirm := markup.(models.InlineKeyboardMarkup).InlineKeyboard[0][0].CallbackData
@@ -635,7 +701,7 @@ func TestResetConfirmationRetryKeepsOriginalIdempotencyKey(t *testing.T) {
 func TestResetConfirmationRetiresAccountChangedPreview(t *testing.T) {
 	credit := remote.ResetCredit{ID: "credit", Status: "available"}
 	controller := &fakeController{
-		resetPlan:       remotecodex.RateLimitResetPlan{Credit: credit},
+		resetPlan:       server.CodexResetPlan{Account: testAccount("one", "one", true), Plan: remotecodex.RateLimitResetPlan{Credit: credit}},
 		resetConsumeErr: &remotecodex.ResetAccountBindingError{Changed: true},
 	}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
@@ -655,7 +721,7 @@ func TestResetConfirmationRetiresAccountChangedPreview(t *testing.T) {
 	if controller.resetConsumes != 1 {
 		t.Fatalf("retired confirmation consumed again: %d", controller.resetConsumes)
 	}
-	if text := RenderCodexResetAccountChanged("default"); !strings.Contains(text, "account changed") || !strings.Contains(text, "Preview the reset again") {
+	if text := RenderCodexResetAccountChanged(server.AccountIdentity{ID: store.AccountID("codex", "one"), DisplayName: "one"}); !strings.Contains(text, "account changed") || !strings.Contains(text, "Preview the reset again") {
 		t.Fatalf("account-changed message=%q", text)
 	}
 }
@@ -673,13 +739,14 @@ func TestResetCallbacksUseClosedVersionedShape(t *testing.T) {
 }
 
 func TestResetCommandIsDiscoverableFromHelpAndKeyboards(t *testing.T) {
-	if !strings.Contains(helpText(), "/reset [profile]") {
+	if !strings.Contains(helpText(), "/reset [account]") {
 		t.Fatalf("help missing reset command:\n%s", helpText())
 	}
 	main := mainKeyboard()
-	profile := profileKeyboard("work")
-	if !keyboardHasCallback(main, "quick:reset") || !keyboardHasCallback(profile, "profiles:v1:reset:work") {
-		t.Fatalf("reset callbacks missing: main=%+v profile=%+v", main, profile)
+	accountID := store.AccountID("codex", "work")
+	account := accountKeyboard(accountID)
+	if !keyboardHasCallback(main, "quick:reset") || !keyboardHasCallback(account, "accounts:v1:reset:"+accountID) {
+		t.Fatalf("reset callbacks missing: main=%+v account=%+v", main, account)
 	}
 }
 
@@ -700,8 +767,10 @@ func TestRegisterCommandsIncludesReset(t *testing.T) {
 	if err := svc.RegisterCommands(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(requestBody, `"command":"reset"`) || !strings.Contains(requestBody, "preview and confirm") {
-		t.Fatalf("setMyCommands missing reset: %s", requestBody)
+	for _, want := range []string{`"command":"reset"`, `"command":"accounts"`, `"command":"activity"`, "preview and confirm"} {
+		if !strings.Contains(requestBody, want) {
+			t.Fatalf("setMyCommands missing %q: %s", want, requestBody)
+		}
 	}
 }
 
@@ -720,8 +789,10 @@ func resetTestQuery(data string, chatID, userID int64) *models.CallbackQuery {
 	return &models.CallbackQuery{ID: "callback", Data: data, From: models.User{ID: userID}, Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: 5, Chat: models.Chat{ID: chatID, Type: models.ChatTypePrivate}}}}
 }
 
-func TestProfileCommandUsesControllerProfile(t *testing.T) {
+func TestActivityCommandUsesControllerActivity(t *testing.T) {
+	account := testAccount("work-ref", "work", true)
 	controller := &fakeController{
+		accounts: []store.Account{account},
 		profile: remotecodex.ProfileResult{
 			Profile:   remotecodex.Profile{Username: "ardasevinc", DisplayName: "Arda Sevinc"},
 			AuthState: remote.AuthState{OK: true},
@@ -733,32 +804,31 @@ func TestProfileCommandUsesControllerProfile(t *testing.T) {
 		},
 	}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	reply, markup := svc.handleCommand(context.Background(), "/profile work")
-	if !strings.Contains(reply, "<b>Codex profile</b>") || !strings.Contains(reply, "8.3B lifetime") {
+	reply, markup := svc.handleCommand(context.Background(), "/activity work")
+	if !strings.Contains(reply, "<b>Codex activity</b>") || !strings.Contains(reply, "8.3B lifetime") {
 		t.Fatalf("unexpected profile reply: %s", reply)
 	}
 	if controller.profileCalls != 1 {
 		t.Fatalf("expected one profile call, got %d", controller.profileCalls)
 	}
-	if controller.codexProfileID != "work" {
-		t.Fatalf("profile=%q", controller.codexProfileID)
+	if controller.activitySelector != account.ID {
+		t.Fatalf("selector=%q", controller.activitySelector)
 	}
 	if markup == nil {
 		t.Fatal("expected main keyboard")
 	}
 }
 
-func TestProfilesCommandListsSafeBoundedHealthAndProfileUsage(t *testing.T) {
-	controller := &fakeController{}
+func TestAccountsCommandListsActiveAndHistoricalAccounts(t *testing.T) {
+	historical := testAccount("work-ref", "work", false)
+	historical.LastSeenAt = time.Time{}
+	controller := &fakeController{accounts: []store.Account{
+		testAccount("personal-ref", "personal", true),
+		historical,
+	}}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	health := healthFixture()
-	health.Profiles = []server.ProfileHealth{
-		{Profile: server.ProfileIdentity{Ref: "personal", Label: "Personal"}, IsDefault: true, Status: server.HealthOK},
-		{Profile: server.ProfileIdentity{Ref: "work", Label: "Work"}, Status: server.HealthDegraded},
-	}
-	controller.health = health
-	reply, markup := svc.handleCommand(context.Background(), "/profiles")
-	for _, want := range []string{"Configured profiles", "personal", "default", "work", "degraded", "Choose a profile"} {
+	reply, markup := svc.handleCommand(context.Background(), "/accounts")
+	for _, want := range []string{"Codex accounts", "personal", "credentials available", "work", "credentials unavailable", "never observed", "Choose an account"} {
 		if !strings.Contains(reply, want) {
 			t.Fatalf("missing %q:\n%s", want, reply)
 		}
@@ -766,7 +836,7 @@ func TestProfilesCommandListsSafeBoundedHealthAndProfileUsage(t *testing.T) {
 	if markup == nil {
 		t.Fatal("expected main keyboard")
 	}
-	for _, command := range []string{"/limits INVALID", "/grants one two", "/reset one two", "/profile " + strings.Repeat("a", 33), "/profiles extra"} {
+	for _, command := range []string{"/limits INVALID", "/grants one two", "/reset one two", "/activity " + strings.Repeat("a", 33), "/accounts extra"} {
 		reply, _ := svc.handleCommand(context.Background(), command)
 		if !strings.HasPrefix(reply, "usage:") {
 			t.Fatalf("%q reply=%q", command, reply)
@@ -774,45 +844,43 @@ func TestProfilesCommandListsSafeBoundedHealthAndProfileUsage(t *testing.T) {
 	}
 }
 
-func TestRenderProfilesEscapesAndBoundsOutput(t *testing.T) {
-	profiles := make([]server.ProfileHealth, 0, maxRenderedProfiles+1)
-	for i := 0; i < maxRenderedProfiles+1; i++ {
-		profiles = append(profiles, server.ProfileHealth{Profile: server.ProfileIdentity{Ref: fmt.Sprintf("p%d", i), Label: "<private>"}, IsDefault: i == 0, Status: server.HealthOK})
+func TestRenderAccountsEscapesAndBoundsPage(t *testing.T) {
+	known := make([]store.Account, accountsPageSize+1)
+	for i := range known {
+		known[i] = testAccount(fmt.Sprintf("account-%d", i), strings.Repeat("<&", 80), i%2 == 0)
 	}
-	text := RenderProfiles(profiles)
-	if strings.Contains(text, "<private>") || !strings.Contains(text, "&lt;private&gt;") || !strings.Contains(text, fmt.Sprintf("%d more profiles omitted", len(profiles)-maxRenderedProfiles)) || strings.Contains(text, fmt.Sprintf("p%d", maxRenderedProfiles)) {
-		t.Fatalf("unexpected bounded profile output:\n%s", text)
-	}
-	worst := make([]server.ProfileHealth, maxRenderedProfiles+1)
-	for i := range worst {
-		worst[i] = server.ProfileHealth{Profile: server.ProfileIdentity{Ref: strings.Repeat("a", 31) + fmt.Sprint(i%10), Label: strings.Repeat("&", 128)}, Status: server.HealthDegraded}
-	}
-	if text := RenderProfiles(worst); len(text) > 4096 {
-		t.Fatalf("profile output exceeds Telegram limit: %d", len(text))
+	text, pages := RenderAccountsPage(known, 0)
+	if pages != 2 || strings.Contains(text, "<&") || !strings.Contains(text, "&lt;&amp;") || len(text) > 4096 {
+		t.Fatalf("unexpected bounded account output:\n%s", text)
 	}
 }
 
-func TestProfileCommandsBoundPrivateControllerErrorsAndDefaultSelection(t *testing.T) {
+func TestAccountCommandsBoundPrivateControllerErrorsAndDefaultSelection(t *testing.T) {
 	privateErr := errors.New("open /secret/auth.json: bearer PRIVATE_ACCOUNT")
 	controller := &fakeController{latestErr: privateErr, profileErr: privateErr, healthErr: privateErr, resetPlanErr: privateErr}
 	svc := &Service{cfg: BotConfig{ChatID: 123}, controller: controller}
-	for _, command := range []string{"/limits", "/grants", "/reset", "/profile", "/profiles"} {
+	for _, command := range []string{"/limits", "/grants", "/reset", "/activity", "/accounts"} {
 		reply, _ := svc.handleCommand(context.Background(), command)
 		if strings.Contains(reply, "/secret/") || strings.Contains(reply, "PRIVATE_ACCOUNT") || !strings.Contains(reply, "failed") {
 			t.Fatalf("%q leaked private error: %q", command, reply)
 		}
 	}
-	if controller.latestProfile != "" || controller.codexProfileID != "" {
-		t.Fatalf("default selectors latest=%q profile=%q", controller.latestProfile, controller.codexProfileID)
+	if controller.latestSelector != "" || controller.activitySelector != "" {
+		t.Fatalf("default selectors latest=%q activity=%q", controller.latestSelector, controller.activitySelector)
 	}
 
-	controller = &fakeController{latestErr: server.ErrProfileUnavailable, profileErr: server.ErrProfileUnavailable, resetPlanErr: server.ErrProfileUnavailable}
+	controller = &fakeController{latestErr: accounts.ErrAccountNotFound, profileErr: accounts.ErrCredentialsUnavailable, resetPlanErr: accounts.ErrAccountNotFound}
 	svc.controller = controller
-	for _, command := range []string{"/limits missing", "/grants missing", "/reset missing", "/profile missing"} {
+	for _, command := range []string{"/limits missing", "/grants missing", "/reset missing"} {
 		reply, _ := svc.handleCommand(context.Background(), command)
-		if reply != "unknown or disabled profile." {
+		if !strings.HasPrefix(reply, "unknown account.") {
 			t.Fatalf("%q reply=%q", command, reply)
 		}
+	}
+	controller.accounts = []store.Account{testAccount("missing-ref", "missing", false)}
+	reply, _ := svc.handleCommand(context.Background(), "/activity missing")
+	if !strings.Contains(reply, "no usable credentials") {
+		t.Fatalf("activity reply=%q", reply)
 	}
 }
 
@@ -934,26 +1002,28 @@ func TestCommandNameNormalizesBotSuffix(t *testing.T) {
 }
 
 type fakeController struct {
-	interval        time.Duration
-	latest          resetwatch.Observation
-	latestOK        bool
-	refreshes       int
-	profile         remotecodex.ProfileResult
-	profileCalls    int
-	latestProfile   string
-	codexProfileID  string
-	health          server.Health
-	latestErr       error
-	profileErr      error
-	healthErr       error
-	resetPlan       remotecodex.RateLimitResetPlan
-	resetResult     remotecodex.RateLimitResetResult
-	resetPlanErr    error
-	resetConsumeErr error
-	resetProfile    string
-	resetCredit     remote.ResetCredit
-	resetRequestID  string
-	resetConsumes   int
+	interval         time.Duration
+	accounts         []store.Account
+	latest           resetwatch.Observation
+	latestBySelector map[string]resetwatch.Observation
+	latestOK         bool
+	refreshes        int
+	profile          remotecodex.ProfileResult
+	profileCalls     int
+	latestSelector   string
+	activitySelector string
+	health           server.Health
+	latestErr        error
+	profileErr       error
+	healthErr        error
+	resetPlan        server.CodexResetPlan
+	resetResult      remotecodex.RateLimitResetResult
+	resetPlanErr     error
+	resetConsumeErr  error
+	resetSelector    string
+	resetCredit      remote.ResetCredit
+	resetRequestID   string
+	resetConsumes    int
 }
 
 func (f *fakeController) RefreshNow(context.Context) (server.PollResult, error) {
@@ -978,8 +1048,15 @@ func (f *fakeController) LatestObservation(context.Context) (resetwatch.Observat
 	return f.latest, f.latestOK, nil
 }
 
-func (f *fakeController) LatestObservationForProfile(_ context.Context, profile string) (resetwatch.Observation, bool, error) {
-	f.latestProfile = profile
+func (f *fakeController) Accounts(context.Context) ([]store.Account, error) {
+	return append([]store.Account(nil), f.accounts...), f.healthErr
+}
+
+func (f *fakeController) LatestObservationForAccount(_ context.Context, selector string) (resetwatch.Observation, bool, error) {
+	f.latestSelector = selector
+	if observation, ok := f.latestBySelector[selector]; ok {
+		return observation, true, f.latestErr
+	}
 	return f.latest, f.latestOK, f.latestErr
 }
 
@@ -988,20 +1065,20 @@ func (f *fakeController) CodexProfile(context.Context) (remotecodex.ProfileResul
 	return f.profile, nil
 }
 
-func (f *fakeController) CodexProfileForProfile(_ context.Context, profile string) (remotecodex.ProfileResult, error) {
+func (f *fakeController) CodexActivityForAccount(_ context.Context, selector string) (remotecodex.ProfileResult, error) {
 	f.profileCalls++
-	f.codexProfileID = profile
+	f.activitySelector = selector
 	return f.profile, f.profileErr
 }
 
-func (f *fakeController) PlanCodexReset(_ context.Context, profile string) (remotecodex.RateLimitResetPlan, error) {
-	f.resetProfile = profile
+func (f *fakeController) PlanCodexReset(_ context.Context, selector string) (server.CodexResetPlan, error) {
+	f.resetSelector = selector
 	return f.resetPlan, f.resetPlanErr
 }
 
-func (f *fakeController) ConsumeCodexReset(_ context.Context, profile string, _ remotecodex.ResetAccountPin, credit remote.ResetCredit, requestID string) (remotecodex.RateLimitResetResult, error) {
+func (f *fakeController) ConsumeCodexReset(_ context.Context, selector string, _ remotecodex.ResetAccountPin, credit remote.ResetCredit, requestID string) (remotecodex.RateLimitResetResult, error) {
 	f.resetConsumes++
-	f.resetProfile = profile
+	f.resetSelector = selector
 	f.resetCredit = credit
 	f.resetRequestID = requestID
 	return f.resetResult, f.resetConsumeErr
@@ -1015,7 +1092,7 @@ func (f *fakeController) Health(context.Context) (server.Health, error) {
 	if f.healthErr != nil {
 		return server.Health{}, f.healthErr
 	}
-	if f.health.Version != "" || len(f.health.Profiles) > 0 {
+	if f.health.Version != "" || len(f.health.Accounts) > 0 {
 		return f.health, nil
 	}
 	return healthFixture(), nil
@@ -1118,4 +1195,18 @@ func ptrFloat(value float64) *float64 {
 
 func ptrInt(value int) *int {
 	return &value
+}
+
+func testAccount(ref, alias string, credentials bool) store.Account {
+	seen := parseTime("2026-09-10T12:00:00Z")
+	return store.Account{
+		ID:                   store.AccountID("codex", ref),
+		Ref:                  ref,
+		ProviderID:           "codex",
+		Alias:                alias,
+		Email:                alias + "@example.com",
+		FirstSeenAt:          seen.Add(-time.Hour),
+		LastSeenAt:           seen,
+		CredentialsAvailable: credentials,
+	}
 }

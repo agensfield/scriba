@@ -32,34 +32,37 @@ In Telegram:
 
 ```text
 /health
-/profiles
+/accounts
 /limits
-/limits work
+/limits personal
 /grants
-/grants work
+/grants personal
 /reset
-/reset work
-/profile
-/profile work
+/reset personal
+/activity
+/activity personal
 /refresh
 /stats
 /lastreset
 ```
 
-`/profiles` lists enabled stable config IDs with labels, health, and
-the default marker. `/limits [profile]`, `/grants [profile]`,
-`/reset [profile]`, and `/profile [profile]` resolve only that configured profile;
-omission selects the configured default. Unknown, disabled, malformed, or
-extra arguments fail without falling back to another account.
+`/accounts` lists every discovered account, including historical accounts whose
+credentials are no longer available. Each row separates credential availability
+from the last successful limits observation. Accounts that have never completed
+a poll say so explicitly. `/limits [account]`, `/grants [account]`,
+`/reset [account]`, and `/activity [account]` accept a stable account ID or alias;
+omission follows the currently bound credentials. Unknown, malformed, or extra
+arguments fail without falling back to another account.
 
-The main keyboard and `/profiles` expose versioned inline profile navigation.
-Profile lists use bounded six-row pages; choosing a profile opens exact
-profile-scoped Limits, Grants, Reset limits, and Profile stats controls.
-Callback data stays
-under Telegram's 64-byte limit and rendered HTML stays under 4096 bytes. Stale
-or removed profile controls retire themselves rather than falling back to the
-default account. Callback API/edit failures remain visible to the durable inbox
-instead of silently advancing the update.
+The main keyboard and `/accounts` expose versioned inline account navigation.
+Account lists use bounded six-row pages; choosing an account opens exact
+account-scoped Limits, Grants, Reset limits, and Activity controls. Callback
+selectors contain only stable public `acct-…` IDs, never aliases, emails, auth
+paths, or provider account references. Callback data stays under Telegram's
+64-byte limit and rendered HTML stays under 4096 bytes. Stale or removed account
+controls retire themselves rather than falling back to another account.
+Callback API/edit failures remain visible to the durable inbox instead of
+silently advancing the update.
 
 An empty `telegram.allowedUserIds` retains compatibility only for the configured
 private chat. Group and supergroup use requires an explicit user allowlist;
@@ -67,9 +70,10 @@ every message and callback must match both `telegram.chatId` and an allowed
 Telegram user ID. Chat-backed inaccessible callback messages preserve this
 authorization, while identity-free inline callbacks remain denied.
 
-`/profile` fetches the ChatGPT/Codex profile stats backend on demand and
+`/activity` fetches the ChatGPT/Codex activity backend on demand and
 renders token activity, streaks, reasoning mix, and top skills/plugins in a
-compact Telegram card.
+compact Telegram card. It is live-only and reports credential unavailability
+clearly for a historical account.
 
 `/grants` renders the full reset-grant inventory from the resident server's
 latest durable observation: title, reset type, status, granted time, expiry,
@@ -77,7 +81,7 @@ remaining lifetime, and full credit id for every available grant. It is also
 available as a dedicated Grants button in the main inline keyboard. Run
 `/refresh` first when a newly fetched provider observation is required.
 
-`/reset [profile]` and the Reset limits buttons fetch a fresh provider preview
+`/reset [account]` and the Reset limits buttons fetch a fresh provider preview
 and select the available credit expiring soonest. The preview shows weekly
 usage, available grant count, the exact credit id, and expiry. Redemption only
 happens after Confirm reset is pressed by the same allowed user in the same
@@ -85,7 +89,10 @@ chat. Cancel spends nothing. Confirmation tokens contain no credit or auth
 data, remain below Telegram's callback limit, and expire after ten minutes.
 Transient retries reuse the original UUID idempotency key; duplicate callbacks
 return the stored result instead of consuming again. Restarting the resident
-service intentionally expires outstanding confirmations.
+service intentionally expires outstanding confirmations. The pending preview
+stores the resolved stable account ID, a private account pin, the exact credit,
+and the idempotency key. Alias changes or an auth switch cannot retarget it;
+an account-binding error retires the confirmation and requires a new preview.
 
 ## systemd User Service
 
@@ -210,10 +217,10 @@ window, and it does not send a separate critical-risk warning; the existing
 20/10/5/0-percent remaining alerts take over from there. Delivery uses the same
 durable canonical outbox and retry rules as every other notification.
 
-Wave 3.3 live evidence is stored on the devbox at
+Historical Wave 3.3 live evidence is stored on the devbox at
 `/home/arda/.local/state/scriba/deployments/wave33-ce03c7a`. The deployed
 `ce03c7a` binary passed health, schema-11 integrity, empty-queue, command
-registration, and journal smokes. The human Profiles to `default` to Limits
+registration, and journal smokes. The then-current Profiles to `default` to Limits
 path passed on 2026-07-13 as durable processed updates `133548448` through
 `133548450`; the subsequent Grants action `133548451` also passed.
 

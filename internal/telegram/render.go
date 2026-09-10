@@ -19,69 +19,42 @@ import (
 	"github.com/agensfield/scriba/internal/server/store"
 )
 
-const maxRenderedProfiles = 8
-const profilesPageSize = 6
+const accountsPageSize = 6
 
-func RenderProfiles(profiles []server.ProfileHealth) string {
-	var b strings.Builder
-	b.WriteString("<b>Configured profiles</b>\n")
-	limit := len(profiles)
-	if limit > maxRenderedProfiles {
-		limit = maxRenderedProfiles
-	}
-	for _, profile := range profiles[:limit] {
-		marker := ""
-		if profile.IsDefault {
-			marker = " · default"
-		}
-		fmt.Fprintf(&b, "\n<code>%s</code> · %s · %s%s", html.EscapeString(profile.Profile.Ref), html.EscapeString(truncateProfileLabel(profile.Profile.Label)), html.EscapeString(string(profile.Status)), marker)
-	}
-	if len(profiles) > limit {
-		fmt.Fprintf(&b, "\n\n%d more profiles omitted", len(profiles)-limit)
-	}
-	if len(profiles) == 0 {
-		b.WriteString("\nno enabled profiles available")
-	} else {
-		b.WriteString("\n\nUse <code>/limits id</code>, <code>/grants id</code>, <code>/reset id</code>, or <code>/profile id</code>.")
-	}
-	return b.String()
-}
-
-func RenderProfilesPage(profiles []server.ProfileHealth, page int) (string, int) {
-	pages := max(1, (len(profiles)+profilesPageSize-1)/profilesPageSize)
+func RenderAccountsPage(accounts []store.Account, page int) (string, int) {
+	pages := max(1, (len(accounts)+accountsPageSize-1)/accountsPageSize)
 	if page < 0 || page >= pages {
 		return "", pages
 	}
-	start := page * profilesPageSize
-	end := min(start+profilesPageSize, len(profiles))
+	start := page * accountsPageSize
+	end := min(start+accountsPageSize, len(accounts))
 	var b strings.Builder
-	fmt.Fprintf(&b, "<b>Configured profiles</b> · %d/%d\n", page+1, pages)
-	for _, profile := range profiles[start:end] {
-		marker := ""
-		if profile.IsDefault {
-			marker = " · default"
+	fmt.Fprintf(&b, "<b>Codex accounts</b> · %d/%d\n", page+1, pages)
+	for _, account := range accounts[start:end] {
+		state := "credentials unavailable"
+		if account.CredentialsAvailable {
+			state = "credentials available"
 		}
-		fmt.Fprintf(&b, "\n<code>%s</code> · %s · %s%s", html.EscapeString(profile.Profile.Ref), html.EscapeString(truncateProfileLabel(profile.Profile.Label)), html.EscapeString(string(profile.Status)), marker)
+		fmt.Fprintf(&b, "\n<b>%s</b>\n<code>%s</code> · %s\n%s", html.EscapeString(truncateButtonLabel(account.DisplayName())), html.EscapeString(account.ID), state, renderAccountFreshness(account))
 	}
-	if len(profiles) == 0 {
-		b.WriteString("\nno enabled profiles available")
+	if len(accounts) == 0 {
+		b.WriteString("\nno accounts discovered yet")
 	} else {
-		b.WriteString("\n\nChoose a profile below.")
+		b.WriteString("\n\nChoose an account below.")
 	}
 	return b.String(), pages
 }
 
-func truncateProfileLabel(label string) string {
-	runes := []rune(label)
-	if len(runes) <= 64 {
-		return label
+func renderAccountFreshness(account store.Account) string {
+	if account.LastSeenAt.IsZero() {
+		return "never observed"
 	}
-	return string(runes[:63]) + "…"
+	return "last observed " + formatFreshTime(account.LastSeenAt)
 }
 
 func RenderBaseline(notice server.BaselineNotice) string {
 	grants := resetwatch.ResetGrantsFromSnapshotJSON(notice.SnapshotJSON)
-	return "<b>Scriba is alive</b>\nstarted tracking Codex limits.\n" + renderFreshness(notice.ObservedAt) + "\n\n" + renderAccount(notice.Account) + "\n\n" + renderLimitDetails(notice.Windows, grants, "current")
+	return "<b>Scriba is alive</b>\nstarted tracking Codex limits.\n" + renderFreshness(notice.ObservedAt) + "\n\n<b>Account</b> " + html.EscapeString(notice.Account.DisplayName) + "\n\n" + renderLimitDetails(notice.Windows, grants, "current")
 }
 
 func RenderLimits(obs resetwatch.Observation) string {
@@ -134,7 +107,7 @@ func RenderResetGrantDetails(obs resetwatch.Observation) string {
 	return b.String()
 }
 
-func RenderCodexResetConfirmation(profileID string, plan remotecodex.RateLimitResetPlan) string {
+func RenderCodexResetConfirmation(account server.AccountIdentity, plan remotecodex.RateLimitResetPlan) string {
 	rows := []string{}
 	if plan.WeeklyUsed != nil {
 		rows = append(rows, fmt.Sprintf("%-9s %.0f%% used", "weekly", *plan.WeeklyUsed))
@@ -147,10 +120,10 @@ func RenderCodexResetConfirmation(profileID string, plan remotecodex.RateLimitRe
 		rows = append(rows, fmt.Sprintf("%-9s %s", "expires", formatGrantExpiry(expiresAt)))
 	}
 	rows = append(rows, fmt.Sprintf("%-9s %s", "id", plan.Credit.ID))
-	return renderSelectedProfile(profileID, "<b>Confirm Codex limit reset?</b>\n\n<pre>"+html.EscapeString(strings.Join(rows, "\n"))+"</pre>\n\nThis spends one reset grant. Confirmation expires in 10 minutes.")
+	return renderResetAccount(account, "<b>Confirm Codex limit reset?</b>\n\n<pre>"+html.EscapeString(strings.Join(rows, "\n"))+"</pre>\n\nThis spends one reset grant. Confirmation expires in 10 minutes.")
 }
 
-func RenderCodexResetResult(profileID string, result remotecodex.RateLimitResetResult) string {
+func RenderCodexResetResult(account server.AccountIdentity, result remotecodex.RateLimitResetResult) string {
 	status := result.Outcome
 	switch result.Outcome {
 	case remotecodex.ResetOutcomeReset:
@@ -166,24 +139,28 @@ func RenderCodexResetResult(profileID string, result remotecodex.RateLimitResetR
 	if result.Credit.ID != "" {
 		body += "\n<code>" + html.EscapeString(result.Credit.ID) + "</code>"
 	}
-	return renderSelectedProfile(profileID, body)
+	return renderResetAccount(account, body)
 }
 
-func RenderCodexResetCancelled(profileID string) string {
-	return renderSelectedProfile(profileID, "<b>Codex reset cancelled</b>\nNo reset grant was spent.")
+func RenderCodexResetCancelled(account server.AccountIdentity) string {
+	return renderResetAccount(account, "<b>Codex reset cancelled</b>\nNo reset grant was spent.")
 }
 
-func RenderCodexResetAccountChanged(profileID string) string {
-	return renderSelectedProfile(profileID, "<b>Codex account changed</b>\nNo reset grant was spent. Preview the reset again for the current account.")
+func RenderCodexResetAccountChanged(account server.AccountIdentity) string {
+	return renderResetAccount(account, "<b>Codex account changed</b>\nNo reset grant was spent. Preview the reset again for this account.")
 }
 
-func RenderCodexResetRetry(profileID string) string {
-	return renderSelectedProfile(profileID, "<b>Codex reset failed</b>\nThe same confirmation can be retried safely with its original idempotency key.")
+func RenderCodexResetRetry(account server.AccountIdentity) string {
+	return renderResetAccount(account, "<b>Codex reset failed</b>\nThe same confirmation can be retried safely with its original idempotency key.")
 }
 
-func RenderProfile(profile remotecodex.ProfileResult) string {
+func renderResetAccount(account server.AccountIdentity, body string) string {
+	return "<b>Account</b> " + html.EscapeString(account.DisplayName) + "\n<code>" + html.EscapeString(account.ID) + "</code>\n\n" + body
+}
+
+func RenderActivity(profile remotecodex.ProfileResult) string {
 	var b strings.Builder
-	b.WriteString("<b>Codex profile</b>\n")
+	b.WriteString("<b>Codex activity</b>\n")
 	if identity := profileIdentity(profile); identity != "" {
 		b.WriteString("<b>")
 		b.WriteString(html.EscapeString(identity))
@@ -525,7 +502,36 @@ func renderHealthStats(health server.Health) string {
 	if health.QueueReason != "" {
 		rows = append(rows, fmt.Sprintf("%-12s %s", "queue", health.QueueReason))
 	}
-	return "<b>Health</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+	text := "<b>Health</b>\n<pre>" + html.EscapeString(strings.Join(rows, "\n")) + "</pre>"
+	if len(health.Sources) > 0 {
+		counts := map[server.HealthStatus]int{}
+		for _, source := range health.Sources {
+			counts[source.Status]++
+		}
+		sourceRows := []string{fmt.Sprintf("%-12s %d", "configured", len(health.Sources))}
+		for _, status := range []server.HealthStatus{server.HealthOK, server.HealthStale, server.HealthDegraded, server.HealthUnknown} {
+			if counts[status] > 0 {
+				sourceRows = append(sourceRows, fmt.Sprintf("%-12s %d", status, counts[status]))
+			}
+		}
+		text += "\n\n<b>Auth sources</b>\n<pre>" + html.EscapeString(strings.Join(sourceRows, "\n")) + "</pre>"
+	}
+	if len(health.Accounts) > 0 {
+		var accountRows []string
+		for _, item := range health.Accounts {
+			credential := "offline"
+			if item.Account.CredentialsAvailable {
+				credential = "ready"
+			}
+			freshness := "never observed"
+			if !item.Account.LastSeenAt.IsZero() {
+				freshness = formatFreshTime(item.Account.LastSeenAt)
+			}
+			accountRows = append(accountRows, fmt.Sprintf("%s · %s · %s · %s", item.Account.DisplayName(), credential, item.Status, freshness))
+		}
+		text += "\n\n<b>Accounts</b>\n" + html.EscapeString(strings.Join(accountRows, "\n"))
+	}
+	return text
 }
 
 func renderQueueStats(title string, q store.QueueStats) string {
