@@ -739,14 +739,41 @@ func runCodexReset(opts options) error {
 	if opts.dryRun && opts.yes {
 		return errors.New("--dry-run and --yes cannot be used together")
 	}
-	fetchOpts, cleanup, err := resolveLiveCodexOptions(context.Background(), opts)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	plan, err := remotecodex.PlanRateLimitReset(context.Background(), nil, fetchOpts, opts.credit)
-	if err != nil {
-		return err
+	ctx := context.Background()
+	var (
+		plan    remotecodex.RateLimitResetPlan
+		consume func(string) (remotecodex.RateLimitResetResult, error)
+		cleanup func()
+	)
+	if opts.credit == "" {
+		srv, st, _, err := openAccountServer(opts, false)
+		if err != nil {
+			return err
+		}
+		cleanup = func() { _ = st.Close() }
+		defer cleanup()
+		planned, err := srv.PlanCodexReset(ctx, opts.account)
+		if err != nil {
+			return err
+		}
+		plan = planned.Plan
+		consume = func(requestID string) (remotecodex.RateLimitResetResult, error) {
+			return srv.ConsumeCodexReset(ctx, planned.Account.ID, plan.AccountPin, plan.Credit, requestID)
+		}
+	} else {
+		fetchOpts, closeStore, err := resolveLiveCodexOptions(ctx, opts)
+		if err != nil {
+			return err
+		}
+		cleanup = closeStore
+		defer cleanup()
+		plan, err = remotecodex.PlanRateLimitReset(ctx, nil, fetchOpts, opts.credit)
+		if err != nil {
+			return err
+		}
+		consume = func(requestID string) (remotecodex.RateLimitResetResult, error) {
+			return remotecodex.ConsumeRateLimitResetCredit(ctx, nil, fetchOpts, plan.AccountPin, plan.Credit, requestID)
+		}
 	}
 	payload := codexResetPayload{
 		SchemaVersion:    model.SchemaVersion,
@@ -781,7 +808,7 @@ func runCodexReset(opts options) error {
 	if err != nil {
 		return err
 	}
-	result, err := remotecodex.ConsumeRateLimitResetCredit(context.Background(), nil, fetchOpts, plan.AccountPin, plan.Credit, requestID)
+	result, err := consume(requestID)
 	if err != nil {
 		return err
 	}
