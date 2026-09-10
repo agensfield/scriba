@@ -122,7 +122,9 @@ func runAccountsList(opts options) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	if st != nil {
+		defer func() { _ = st.Close() }()
+	}
 	items, err := resolver.Accounts(context.Background())
 	if err != nil {
 		return err
@@ -265,7 +267,7 @@ func resolveLiveCodexOptions(ctx context.Context, opts options) (remotecodex.Fet
 }
 
 func fastCodexLimitsPayload(ctx context.Context, opts options) (codexLimitsPayload, error) {
-	resolver, st, cfg, err := openAccountRegistry(opts)
+	resolver, st, _, err := openAccountRegistry(opts)
 	if err != nil {
 		return codexLimitsPayload{}, err
 	}
