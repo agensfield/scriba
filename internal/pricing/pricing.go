@@ -2,7 +2,9 @@
 package pricing
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,6 +48,18 @@ type catalogFile struct {
 var catalogJSON []byte
 
 var models, aliases = mustLoadCatalog(catalogJSON)
+
+// CatalogFingerprint identifies the reviewed catalog content for derived
+// caches. It is based on canonical JSON so formatting-only edits do not force
+// reparsing cached usage events.
+func CatalogFingerprint() string {
+	canonical, err := CheckCatalog(catalogJSON)
+	if err != nil {
+		panic(err)
+	}
+	digest := sha256.Sum256(canonical)
+	return hex.EncodeToString(digest[:])
+}
 
 func Lookup(model string) (ModelPricing, bool) {
 	name := normalizeModel(model)

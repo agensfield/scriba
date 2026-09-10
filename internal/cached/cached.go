@@ -8,12 +8,14 @@ import (
 	"github.com/agensfield/scriba/internal/local/claude"
 	"github.com/agensfield/scriba/internal/local/codex"
 	"github.com/agensfield/scriba/internal/model"
+	"github.com/agensfield/scriba/internal/pricing"
 )
 
 const (
 	claudeParserCacheVersion = "claude-v2"
-	codexParserCacheVersion  = "codex-v4"
 )
+
+var codexParserCacheVersion = "codex-v4-" + pricing.CatalogFingerprint()
 
 func ScanClaude(c *cache.Cache, paths []string) ([]model.LocalUsageEvent, model.ScannerStats, error) {
 	stats := model.ScannerStats{}

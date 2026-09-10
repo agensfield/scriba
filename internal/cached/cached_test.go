@@ -10,10 +10,10 @@ import (
 	"github.com/agensfield/scriba/internal/model"
 )
 
-func TestScanCodexIgnoresPreviousParserCacheVersion(t *testing.T) {
+func TestScanCodexRepricesWhenCatalogFingerprintChanges(t *testing.T) {
 	root := t.TempDir()
 	session := filepath.Join(root, "session.jsonl")
-	data := `{"type":"turn_context","payload":{"model":"gpt-5.6-luna"}}
+	data := `{"type":"turn_context","payload":{"model":"gpt-6-astra"}}
 {"type":"event_msg","timestamp":"2026-07-10T10:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"total_tokens":999}}}}
 `
 	if err := os.WriteFile(session, []byte(data), 0o600); err != nil {
@@ -30,7 +30,7 @@ func TestScanCodexIgnoresPreviousParserCacheVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale := []model.LocalUsageEvent{{ProviderID: "codex", TotalTokens: 999}}
-	if err := db.SaveFileEvents("codex", session, fingerprint.Size, fingerprint.MtimeMs, stale, model.ScannerStats{Files: 1, Events: 1}); err != nil {
+	if err := db.SaveFileEvents("codex-v4", session, fingerprint.Size, fingerprint.MtimeMs, stale, model.ScannerStats{Files: 1, Events: 1}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -38,8 +38,11 @@ func TestScanCodexIgnoresPreviousParserCacheVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].TotalTokens != 110 || events[0].EffectiveTokens != 30 || events[0].Model != "gpt-5.6-luna" {
+	if len(events) != 1 || events[0].TotalTokens != 110 || events[0].EffectiveTokens != 30 || events[0].Model != "gpt-6-astra" {
 		t.Fatalf("events = %+v", events)
+	}
+	if events[0].CostUSD == nil || *events[0].CostUSD != 0.00078 || events[0].PricingState != "calculated" {
+		t.Fatalf("Astra pricing was not refreshed: %+v", events[0])
 	}
 }
 
