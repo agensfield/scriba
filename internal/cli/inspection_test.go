@@ -48,7 +48,7 @@ func TestInspectionPayloadSchemaVersionsAndJSONFields(t *testing.T) {
 		t.Fatalf("policy payload=%s err=%v", policyData, err)
 	}
 	outboxData, err := json.Marshal(outboxListPayload{SchemaVersion: outboxListSchemaVersion, Messages: []outboxMessagePayload{}})
-	if err != nil || !strings.Contains(string(outboxData), `"schemaVersion":"scriba.outbox-list.v1"`) || !strings.Contains(string(outboxData), `"messages":[]`) {
+	if err != nil || !strings.Contains(string(outboxData), `"schemaVersion":"scriba.outbox-list.v2"`) || !strings.Contains(string(outboxData), `"messages":[]`) {
 		t.Fatalf("outbox payload=%s err=%v", outboxData, err)
 	}
 }
@@ -138,14 +138,14 @@ func TestInspectionRedactionRemovesInternalIdentifiersAndPayloads(t *testing.T) 
 	}
 
 	outboxPayload := redactOutboxList(outboxListPayload{Messages: []outboxMessagePayload{{
-		ProfileRef: "profile-secret", AccountRef: "acct-secret", Target: "telegram:123", Payload: json.RawMessage(`{"creditId":"credit-secret"}`),
+		AccountRef: "acct-secret", Target: "telegram:123", Payload: json.RawMessage(`{"creditId":"credit-secret"}`),
 		LeaseToken: "lease-secret", ProviderMessageID: "message-secret", LastError: "/Users/arda/secret",
 	}}})
 	outboxJSON, err := json.Marshal(outboxPayload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"profile-secret", "acct-secret", "telegram:123", "credit-secret", "lease-secret", "message-secret", "/Users/arda/secret"} {
+	for _, secret := range []string{"acct-secret", "telegram:123", "credit-secret", "lease-secret", "message-secret", "/Users/arda/secret"} {
 		if strings.Contains(string(outboxJSON), secret) {
 			t.Fatalf("outbox redaction leaked %q: %s", secret, outboxJSON)
 		}

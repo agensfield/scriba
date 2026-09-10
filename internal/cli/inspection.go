@@ -15,7 +15,7 @@ import (
 
 const (
 	policyExplainSchemaVersion = "scriba.policy-explain.v1"
-	outboxListSchemaVersion    = "scriba.outbox-list.v1"
+	outboxListSchemaVersion    = "scriba.outbox-list.v2"
 )
 
 type policyExplainPayload struct {
@@ -49,7 +49,6 @@ type outboxMessagePayload struct {
 	ID                string          `json:"id"`
 	EventKind         string          `json:"eventKind"`
 	Source            string          `json:"source"`
-	ProfileRef        string          `json:"profileRef,omitempty"`
 	AccountRef        string          `json:"accountRef,omitempty"`
 	EventID           string          `json:"eventId"`
 	Target            string          `json:"target"`
@@ -197,7 +196,6 @@ func redactPolicyExplain(payload policyExplainPayload) policyExplainPayload {
 
 func redactOutboxList(payload outboxListPayload) outboxListPayload {
 	for i := range payload.Messages {
-		payload.Messages[i].ProfileRef = "[redacted]"
 		payload.Messages[i].AccountRef = "[redacted]"
 		payload.Messages[i].Target = "[redacted]"
 		payload.Messages[i].Payload = json.RawMessage(`"[redacted]"`)
