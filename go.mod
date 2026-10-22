@@ -1,6 +1,6 @@
 module github.com/agensfield/scriba
 
-go 1.26.8
+go 1.26.10
 
 require (
 	github.com/dustin/go-humanize v1.0.1
